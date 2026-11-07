@@ -166,7 +166,7 @@ Start every action with `const user = await requireUser()` from a `server-only` 
 1. With two test accounts (A and B) and a dedicated test record owned by A, capture the action POST (it carries a `Next-Action` header) that A sends to edit that record.
 2. Replay it with no cookies, then with B's cookies, targeting A's record.
 3. Pass: both return an error or make no change, and A's record is unchanged on re-read. Fail: either succeeds.
-4. Check that the action's response body holds no fields beyond what the UI renders. Stop if real user data appears.
+4. Check that the action's response body holds no fields beyond what the UI renders. If other people's real data appears, record a fail with the route and record count, never the values.
 
 ### Sources
 
@@ -215,7 +215,7 @@ Fetch through a `server-only` DAL that returns DTOs with only the fields the UI 
 1. Plant a unique canary value in a sensitive field of a second test account.
 2. Logged in as the first test account, load each authenticated page, and the same URL with header `RSC: 1`.
 3. Search the HTML and RSC payload for sensitive field names (`password`, `hash`, `token`, `secret`, `service_role`, `stripe_customer`) and for the canary.
-4. Pass: none present. Fail: any present. Stop if real user data appears.
+4. Pass: none present. Fail: any present. If other people's real data appears, record a fail with the route and record count, never the values.
 
 ### Sources
 

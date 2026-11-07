@@ -14,12 +14,12 @@ Tool: `asa` (install with `pipx install git+https://github.com/talalkashar/agent
 **Verify mode** (before launch and after auth, data, API or hosting changes)
 1. Scope gate: localhost, loopback, `*.localhost` and `*.test` are always allowed. Any other host only if the user confirms they own it or have written permission; then pass `--authorized`. Never assume it.
 2. Run `asa scan <url> --format json --out .asa/report.json` (add `--rate-limit-path <login endpoint>`; add `--allow-supabase` only for the user's own Supabase project).
-3. For each `manual` result, run `asa show <ID>` and do the proof steps: assisted checks with headless Playwright signed in as two test accounts (A must not read or change B's data through the page, the API or the Supabase REST endpoint); review checks by reading code, migrations and config. Use desktop computer use only as a fallback and with the user's go-ahead.
+3. For each `manual` result, run `asa show <ID>` and do the proof steps: assisted checks with headless Playwright signed in as two accounts the user owns (A must not read or change B's data through the page, the API or the Supabase REST endpoint); review checks by reading code, migrations and config. Use desktop computer use only as a fallback and with the user's go-ahead.
 4. Fix each `fail` with its build rule, re-run `asa scan <url> --check <ID>`, repeat until it passes or the fix needs the user. Tell the user to rotate any exposed secret.
 
 **Rules**
 - Keep the default request budget. Stop on a firewall bot challenge; do not get around it.
-- Test accounts only. If a test shows a real person's data, stop, record only that it was visible, and tell the user.
+- Runs on the real, live site and its real data. Sign in only as accounts the user owns, never as one of their users. If a test shows other people's data, record a fail with the route or table and the record count (never the values), tell the user, and keep going.
 - No destructive tests: nothing deleted, flooded or changed in another account.
 - A pass needs observed evidence (request, status, header). Anything not proven is suspected, not passed. Never put secrets, tokens or personal data in evidence.
 - Report: counts; failed checks by severity with the fix; manual/suspected checks with what is needed to prove them; passes with one line of evidence each. End with: "A pass means the defense was observed working on this target at this time. It is not a guarantee that the site has no other flaws." Never claim the site has zero flaws.

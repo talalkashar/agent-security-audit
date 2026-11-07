@@ -160,9 +160,10 @@ This tool is for testing sites you own or have written permission to test. It is
 - **Request budget.** A scan sends at most 300 requests by default (`--budget`), with a short delay between them. The rate-limit probe sends at most 60 (`--rate-limit-attempts`, default 30).
 - **Same origin.** Requests stay on the target's scheme, host and port. Redirects to other hosts are reported, not followed. The only exceptions are the www/apex twin of the same site over HTTPS, the Supabase project the site itself points to when you pass `--allow-supabase` (read-only, row counts only; on a local target it also needs `--authorized`, because that project is not local), and DNS lookups through a public resolver (turn off with `--no-dns`).
 - **Stops at a firewall challenge.** If the site's firewall answers with a bot challenge, the scan stops and says so. It does not try to get around it.
-- **Test accounts only.** Assisted checks use two test accounts you created for testing. Never use a real user's account or credentials.
-- **Stop on real user data.** If a test shows a real person's data, stop, record only that it was visible (not the data), and fix the access rule first.
-- **No destructive tests.** Proof tests read, or write only to test accounts' own rows. Nothing deletes data, floods a service or changes another user's account.
+- **Runs on your real, live site.** Scans and proof tests work against production and its real data. That is the point: find the leak before your users or an attacker do.
+- **Two accounts you control.** Login-required checks sign in as two accounts you own (your own logins, or ones you make for the check). The agent never signs in as one of your users or uses their credentials.
+- **Exposed real data is a fail, not a copy.** If a test shows other people's real data, the check fails with where it leaked and how many records came back. The records themselves never go into the report. The scan keeps going, and the fix leads the report.
+- **No destructive tests.** Proof tests read, or write only to your own accounts' rows. Nothing deletes data, floods a service or changes another user's account.
 
 ## Output formats
 

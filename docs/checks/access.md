@@ -70,7 +70,7 @@ Every policy on user-owned data compares a row column to the caller: `using ((se
 1. Create test accounts A and B. As B, create a row through the app in each table that holds user data.
 2. As A (A's access token plus the anon key), request B's row by id through PostgREST.
 3. As A, request the table with `Prefer: count=exact`.
-Pass: step 2 returns no rows and the step 3 count equals A's own rows. Fail: B's row or a larger count appears. Stop if any non-test user's data appears.
+Pass: step 2 returns no rows and the step 3 count equals A's own rows. Fail: B's row or a larger count appears. If other people's real data appears, record a fail with the route and record count, never the values.
 
 ### Sources
 
