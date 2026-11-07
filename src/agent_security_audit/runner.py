@@ -76,8 +76,9 @@ def manual_result(check):
 
 
 def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=None, insecure=False,
-        budget=300, delay=0.05, timeout=10.0, include_manual=True):
-    """Return (normalized_target, [Result]) for the selected checks."""
+        budget=300, delay=0.05, timeout=10.0, include_manual=True, progress=None):
+    """Return (normalized_target, [Result]) for the selected checks. progress, when given, is called as
+    progress(done, total, check_id, status) after each check."""
     target = normalize_target(target)
     check_authorized(target, authorized)
     registry = load_all()
@@ -95,11 +96,14 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
             client = Client(target, timeout=timeout, budget=budget - client.sent, delay=delay, insecure=insecure)
     ctx = Context(target, client, dict(options or {}), authorized=authorized)
     results = []
-    for check in select(ids, areas, stacks):
+    chosen = [c for c in select(ids, areas, stacks)
+              if include_manual or (c.mode == "auto" and c.id in registry)]
+    for done, check in enumerate(chosen, 1):
         fn = registry.get(check.id)
         if check.mode != "auto" or fn is None:
-            if include_manual:
-                results.append(manual_result(check))
+            results.append(manual_result(check))
+            if progress:
+                progress(done, len(chosen), check.id, "manual")
             continue
         try:
             result = fn(ctx)
@@ -116,4 +120,6 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
         if result.status in ("fail", "warn") and not result.fix:
             result.fix = check.build
         results.append(result)
+        if progress:
+            progress(done, len(chosen), check.id, result.status)
     return target, results

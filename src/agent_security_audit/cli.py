@@ -1,4 +1,4 @@
-"""Command line: asa list | show | rules | scan."""
+"""Command line: asa list | show | rules | lab | scan, and `asa <url>` as a shortcut for `asa scan <url>`."""
 
 from __future__ import annotations
 
@@ -6,11 +6,26 @@ import argparse
 import json
 import os
 import sys
+from urllib.parse import urlsplit
 
 from . import __version__, catalog, report, runner
-from .scope import ScopeError
+from .scope import ScopeError, check_authorized, normalize_target
 
 FAIL_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+COMMANDS = ("list", "show", "rules", "lab", "scan")
+FORMATS = ("md", "json", "sarif", "html")
+EXTENSIONS = {".md": "md", ".json": "json", ".sarif": "sarif", ".html": "html", ".htm": "html"}
+SCAN_EPILOG = """output:
+  --out FILE        write the full report to FILE; the format comes from --format, else from the
+                    extension (.md .json .sarif .html), else Markdown
+  no --out          a terminal gets a short summary (counts and what to fix first); a pipe or file
+                    gets the full Markdown report. --format always prints that full format.
+  progress          one updating line on stderr while a terminal is attached; --quiet turns it off
+
+ownership:
+  A non-local host needs --authorized. In a terminal, asa asks once instead and scans only on y/yes.
+
+`asa <url> ...` is the same as `asa scan <url> ...`."""
 
 
 def rules_markdown(checks):
@@ -85,15 +100,17 @@ def build_parser():
     lb.add_argument("--mode", choices=("vulnerable", "fixed"), default="vulnerable")
     lb.add_argument("--port", type=int, default=8642)
 
-    sc = sub.add_parser("scan", help="run the proof tests against a running site")
+    sc = sub.add_parser("scan", help="run the proof tests against a running site", epilog=SCAN_EPILOG,
+                        formatter_class=argparse.RawDescriptionHelpFormatter)
     sc.add_argument("target", help="URL of a site you own or are authorized to test")
     sc.add_argument("--authorized", action="store_true",
                     help="confirm you own this non-local site or have written permission to test it")
     sc.add_argument("--check", action="append", help="only these check ids (repeat or comma-separate)")
     sc.add_argument("--area", action="append")
     sc.add_argument("--stack", action="append")
-    sc.add_argument("--format", choices=("md", "json", "sarif"), default="md")
+    sc.add_argument("--format", choices=FORMATS, help="md, json, sarif or html (see output below)")
     sc.add_argument("--out", help="write the report here instead of stdout")
+    sc.add_argument("-q", "--quiet", action="store_true", help="no progress line on stderr")
     sc.add_argument("--auto-only", action="store_true", help="only the scanner checks; leave out code and logged-in checks")
     sc.add_argument("--fail-on", choices=("critical", "high", "medium", "low", "none"), default="high",
                     help="exit 1 when a failed check is at least this severe (default: high)")
@@ -115,7 +132,59 @@ def build_parser():
     return p
 
 
+def _is_tty(stream):
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
+def confirm_ownership(host):
+    """Ask once on a terminal. Anything but y or yes (an empty line, end of input, Ctrl-C) is a no."""
+    sys.stderr.write(f"Do you own {host} or have written permission to test it? [y/N] ")
+    sys.stderr.flush()
+    try:
+        answer = input()
+    except (EOFError, KeyboardInterrupt):
+        sys.stderr.write("\n")
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+def _authorize(target_arg, authorized):
+    """Return True when the scan may treat the target as authorized. Raises ScopeError when it may not."""
+    if authorized:
+        return True
+    target = normalize_target(target_arg)
+    try:
+        check_authorized(target, False)
+        return False
+    except ScopeError:
+        if not (_is_tty(sys.stdin) and _is_tty(sys.stderr)):
+            raise
+    host = urlsplit(target).hostname or target
+    if not confirm_ownership(host):
+        raise ScopeError(f"not scanning {host}: ownership or written permission was not confirmed.")
+    return True
+
+
+def _output_format(args):
+    if args.format:
+        return args.format
+    if args.out:
+        return EXTENSIONS.get(os.path.splitext(args.out)[1].lower(), "md")
+    return "summary" if _is_tty(sys.stdout) else "md"
+
+
+def _progress(done, total, check_id, status):
+    sys.stderr.write(f"\r\x1b[Kasa: [{done}/{total}] {check_id} {status}")
+    sys.stderr.flush()
+
+
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] not in COMMANDS and not argv[0].startswith("-"):
+        argv.insert(0, "scan")  # `asa <url>` is `asa scan <url>`
     try:
         return _main(argv)
     except BrokenPipeError:
@@ -151,15 +220,29 @@ def _main(argv=None):
             "rate_limit_attempts": args.rate_limit_attempts, "allow_supabase": args.allow_supabase,
             "no_dns": args.no_dns, "supabase_tables": _csv(args.supabase_table), "dns_resolver": args.dns_resolver,
         }
-        target, results = runner.run(
-            args.target, authorized=args.authorized, ids=_csv(args.check), areas=_csv(args.area),
-            stacks=_csv(args.stack), options=options, insecure=args.insecure, budget=args.budget,
-            timeout=args.timeout, include_manual=not args.auto_only)
+        authorized = _authorize(args.target, args.authorized)
+        show_progress = not args.quiet and _is_tty(sys.stderr)
+        try:
+            target, results = runner.run(
+                args.target, authorized=authorized, ids=_csv(args.check), areas=_csv(args.area),
+                stacks=_csv(args.stack), options=options, insecure=args.insecure, budget=args.budget,
+                timeout=args.timeout, include_manual=not args.auto_only,
+                progress=_progress if show_progress else None)
+        finally:
+            if show_progress:
+                sys.stderr.write("\r\x1b[K")
+                sys.stderr.flush()
     except (ScopeError, catalog.CatalogError, ValueError) as exc:
         print(f"asa: {exc}", file=sys.stderr)
         return 2
-    render = {"md": report.to_markdown, "json": report.to_json, "sarif": report.to_sarif}[args.format]
-    text = render(target, results)
+    fmt = _output_format(args)
+    if fmt == "summary":
+        hint = f"Full report with evidence: asa scan {target} --out asa-report.html"
+        text = report.summary_text(target, results, hint)
+    else:
+        render = {"md": report.to_markdown, "json": report.to_json, "sarif": report.to_sarif,
+                  "html": report.to_html}[fmt]
+        text = render(target, results)
     if args.out:
         try:
             os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)

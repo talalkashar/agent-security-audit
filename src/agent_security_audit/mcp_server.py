@@ -109,7 +109,9 @@ TOOLS = [
                                                          "in the site's JavaScript)"},
                 "no_dns": {"type": "boolean", "default": False,
                            "description": "skip DNS and email checks (they query a public resolver)"},
-                "format": {"type": "string", "enum": ["json", "md"], "default": "json"},
+                "format": {"type": "string", "enum": ["json", "md", "html"], "default": "json",
+                           "description": "the report format; a second text block always carries a short "
+                                          "summary with the failed checks to fix first"},
             },
             "required": ["target"],
             "additionalProperties": False,
@@ -192,8 +194,8 @@ def tool_run_scan(target, authorized=False, checks=None, areas=None, stacks=None
     }
     final, results = runner.run(target, authorized=bool(authorized), ids=checks or None, areas=areas or None,
                                 stacks=stacks or None, options=options, include_manual=not auto_only)
-    render = report.to_markdown if format == "md" else report.to_json
-    return render(final, results)
+    render = {"md": report.to_markdown, "html": report.to_html}.get(format, report.to_json)
+    return [render(final, results), report.summary_text(final, results)]
 
 
 HANDLERS = {
@@ -214,14 +216,15 @@ def call_tool(params):
         args = {k: v for k, v in args.items() if v is not None}
         # Checks must never write to stdout: it carries the protocol.
         with contextlib.redirect_stdout(sys.stderr):
-            text = HANDLERS[name](**args)
+            out = HANDLERS[name](**args)
     except (ToolError, ScopeError, catalog.CatalogError, ValueError) as exc:
         return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
     except Exception as exc:  # noqa: BLE001 - a tool failure is a tool result, not a protocol error
         log(f"{name} failed: {type(exc).__name__}: {exc}")
         return {"content": [{"type": "text", "text": f"{name} failed: {type(exc).__name__}: {exc}"}],
                 "isError": True}
-    return {"content": [{"type": "text", "text": text}], "isError": False}
+    texts = out if isinstance(out, list) else [out]
+    return {"content": [{"type": "text", "text": t} for t in texts], "isError": False}
 
 
 def handle(msg):

@@ -87,7 +87,10 @@ asa list --area auth                     # checks in one area
 asa show AUTH-01                         # one check in full: risk, build rule, proof test, sources
 asa rules --stack nextjs,supabase        # build rules for your stack, as Markdown
 asa scan http://localhost:3000           # prove the automated checks on your dev server
+asa https://your-site.com                # shortcut for `asa scan`; asks once whether you own the site
 ```
+
+In a terminal, a scan shows a progress line and ends with a short summary: the counts and the failed checks to fix first, most severe first, each with its fix. Add `--out asa-report.html` for the full report with evidence.
 
 ## Build mode
 
@@ -197,10 +200,16 @@ This tool is for testing sites you own or have written permission to test. It is
 ## Output formats
 
 ```sh
-asa scan <url>                                  # Markdown report for people (default)
+asa scan <url>                                  # terminal: short summary; pipe or file: Markdown report
+asa scan <url> --out asa-report.html            # one self-contained HTML page (light/dark, prints cleanly)
+asa scan <url> --format md                      # Markdown report for people
 asa scan <url> --format json --out asa.json     # JSON for tools and agents
 asa scan <url> --format sarif --out asa.sarif   # SARIF 2.1.0 for GitHub code scanning
 ```
+
+With `--out`, the format comes from `--format`, else from the file extension (`.md`, `.json`, `.sarif`, `.html`), else Markdown. The Markdown and HTML reports open with "Fix these first" (up to 10 failed checks, most severe first, each with its fix) and a coverage table by OSI layer, then every result with its evidence. JSON adds the same as `fix_first` and `osi_layers`. The progress line goes to stderr only when it is a terminal; `--quiet` turns it off.
+
+A non-local host needs `--authorized`. In an interactive terminal, `asa` asks once instead ("Do you own <host> or have written permission to test it? [y/N]") and scans only on `y` or `yes`. In scripts and CI there is no prompt: pass `--authorized`.
 
 `asa scan` exits 1 when a failed check is at least as severe as `--fail-on` (default `high`), 2 on a usage or scope error, and 0 otherwise. Use `--fail-on none` to always exit 0, and `--auto-only` to leave out the `manual` rows.
 
