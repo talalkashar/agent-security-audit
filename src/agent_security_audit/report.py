@@ -89,6 +89,24 @@ def _md_escape(text):
     return MD_SPECIAL.sub(r"\\\1", _clean(text))
 
 
+CODE_SPAN = re.compile(r"`([^`]+)`")
+
+
+def _md_inline(text, table=False):
+    """Like _md_escape, but a `backtick pair` becomes a Markdown code span. Text inside a span is literal in Markdown,
+    so it needs no escaping. In a table cell a pipe ends the cell even inside a span, so a span holding a pipe or a
+    backslash stays escaped plain text there."""
+    text = _clean(text)
+    out, pos = [], 0
+    for m in CODE_SPAN.finditer(text):
+        if table and ("|" in m.group(1) or "\\" in m.group(1)):
+            continue
+        out += [MD_SPECIAL.sub(r"\\\1", text[pos:m.start()]), m.group(0)]
+        pos = m.end()
+    out.append(MD_SPECIAL.sub(r"\\\1", text[pos:]))
+    return "".join(out)
+
+
 def _md_code(text):
     """A code span whose fence is longer than any backtick run in the text, so the text cannot close it early."""
     text = _clean(text)
@@ -113,7 +131,7 @@ def to_markdown(target, results):
         "",
     ]
     first = fix_first(results)
-    lines += [f"{i}. **{chk.severity}** {r.check_id} {_md_escape(chk.title)}. Fix: {_md_escape(fix)}"
+    lines += [f"{i}. **{chk.severity}** {r.check_id} {_md_escape(chk.title)}. Fix: {_md_inline(fix)}"
               for i, (r, chk, fix) in enumerate(first, 1)] or ["Nothing failed."]
     lines += ["", "## Coverage by OSI layer", "", "| Layer | Pass | Fail | Warn | Manual |", "|---|---|---|---|---|"]
     for n, row in layer_coverage(results).items():
@@ -121,16 +139,16 @@ def to_markdown(target, results):
     lines += ["", "## All results", "", "| Status | Severity | Check | Result |", "|---|---|---|---|"]
     for r in sort_results(results):
         chk = checks[r.check_id]
-        lines.append(f"| {r.status} | {chk.severity} | {r.check_id} {_md_escape(chk.title)} | {_md_escape(r.summary)} |")
+        lines.append(f"| {r.status} | {chk.severity} | {r.check_id} {_md_escape(chk.title)} | {_md_inline(r.summary, table=True)} |")
     details = [r for r in sort_results(results) if r.status in ("fail", "warn", "error")]
     if details:
         lines += ["", "## Details"]
         for r in details:
             chk = checks[r.check_id]
-            lines += ["", f"### {r.check_id} {chk.title} ({r.status})", "", _md_escape(r.summary)]
+            lines += ["", f"### {r.check_id} {chk.title} ({r.status})", "", _md_inline(r.summary)]
             if r.evidence:
                 lines += ["", "Evidence:", ""] + [f"- {_md_code(e)}" for e in r.evidence[:20]]
-            fix = _md_escape(r.fix) if r.fix else chk.build
+            fix = _md_inline(r.fix) if r.fix else chk.build
             lines += ["", f"Fix: {fix}"]
     lines += ["", DISCLAIMER]
     return "\n".join(lines) + "\n"
@@ -192,6 +210,7 @@ margin:.75rem 0;break-inside:avoid}
 .item.fail{border-left-color:var(--fail)}.item.warn{border-left-color:var(--warn)}
 pre{background:var(--card);border-radius:4px;padding:.5rem;margin:.25rem 0;white-space:pre-wrap;
 overflow-wrap:anywhere;font-size:.8rem}
+code{background:var(--card);border-radius:4px;padding:0 .25rem;font-size:.85em;overflow-wrap:anywhere}
 footer{margin-top:2rem;border-top:1px solid var(--line);padding-top:1rem}
 @media print{:root{--bg:#fff;--fg:#000;--muted:#444;--line:#bbb;--card:#f2f2f2}body{max-width:none;padding:0}
 h2{break-after:avoid}tr{break-inside:avoid}}
@@ -200,6 +219,12 @@ h2{break-after:avoid}tr{break-inside:avoid}}
 
 def _h(text, limit=MAX_TEXT):
     return html.escape(_clean(text, limit), quote=True)
+
+
+def _h_inline(text, limit=MAX_TEXT):
+    """Escaped HTML in which a `backtick pair` becomes <code>. The span body is escaped before it is wrapped, and it
+    cannot hold a backtick, so the markup it adds is always exactly <code> and </code>."""
+    return CODE_SPAN.sub(r"<code>\1</code>", _h(text, limit))
 
 
 def _status(status):
@@ -229,7 +254,7 @@ def to_html(target, results):
         out.append('<ol class="first">')
         for r, chk, fix in first:
             out.append(f"<li><b>{_h(chk.severity)}</b> {_h(r.check_id)} {_h(chk.title)}<br>"
-                       f'<span class="muted">{_h(r.summary)}</span><br>Fix: {_h(fix)}</li>')
+                       f'<span class="muted">{_h_inline(r.summary)}</span><br>Fix: {_h_inline(fix)}</li>')
         out.append("</ol>")
     else:
         out.append("<p>Nothing failed.</p>")
@@ -244,7 +269,7 @@ def to_html(target, results):
     for r in ordered:
         chk = checks[r.check_id]
         out.append(f"<tr><td>{_status(r.status)}</td><td>{_h(chk.severity)}</td><td>{chk.layer}</td>"
-                   f'<td>{_h(r.check_id)} {_h(chk.title)}</td><td class="cell">{_h(r.summary)}</td></tr>')
+                   f'<td>{_h(r.check_id)} {_h(chk.title)}</td><td class="cell">{_h_inline(r.summary)}</td></tr>')
     out.append("</tbody></table></div>")
     details = [r for r in ordered if r.status in ("fail", "warn", "error")]
     if details:
@@ -252,11 +277,11 @@ def to_html(target, results):
         for r in details:
             chk = checks[r.check_id]
             out += [f'<section class="item {_h(r.status)}">',
-                    f"<h3>{_h(r.check_id)} {_h(chk.title)} ({_status(r.status)})</h3>", f"<p>{_h(r.summary)}</p>"]
+                    f"<h3>{_h(r.check_id)} {_h(chk.title)} ({_status(r.status)})</h3>", f"<p>{_h_inline(r.summary)}</p>"]
             if r.evidence:
                 out.append("<p>Evidence:</p>")
                 out += [f"<pre>{_h(e)}</pre>" for e in r.evidence[:20]]
-            out += [f"<p>Fix: {_h(r.fix or chk.build)}</p>", "</section>"]
+            out += [f"<p>Fix: {_h_inline(r.fix or chk.build)}</p>", "</section>"]
     out += [f"<footer><p>{_h(DISCLAIMER)}</p></footer>", "</body>", "</html>"]
     return "\n".join(out) + "\n"
 
