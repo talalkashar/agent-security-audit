@@ -2,7 +2,7 @@
 
 # browser: Browser security headers, cookies and client code
 
-19 checks. Read one in the terminal with `asa show <ID>`.
+23 checks. Read one in the terminal with `asa show <ID>`.
 
 | ID | Severity | Layer | Mode | Title |
 |---|---|---|---|---|
@@ -25,6 +25,10 @@
 | [BROWSER-17](#browser-17-auth-cookies-after-login-are-scoped-to-the-host-not-the-parent-domain) | medium | L7 | assisted | Auth cookies after login are scoped to the host, not the parent domain |
 | [BROWSER-18](#browser-18-third-party-scripts-are-pinned-with-sri-or-inventoried) | high | L7 | review | Third-party scripts are pinned with SRI or inventoried |
 | [BROWSER-19](#browser-19-postmessage-listeners-check-the-senders-origin) | medium | L7 | review | postMessage listeners check the sender's origin |
+| [BROWSER-20](#browser-20-no-mixed-content-on-https-pages) | medium | L7 | auto | No mixed content on HTTPS pages |
+| [BROWSER-21](#browser-21-third-party-scripts-and-styles-pinned-with-subresource-integrity) | low | L7 | auto | Third-party scripts and styles pinned with Subresource Integrity |
+| [BROWSER-22](#browser-22-password-forms-served-and-submitted-over-https-with-post) | high | L7 | auto | Password forms served and submitted over HTTPS with POST |
+| [BROWSER-23](#browser-23-no-known-vulnerable-client-javascript-libraries) | medium | L7 | auto | No known-vulnerable client JavaScript libraries |
 
 ## BROWSER-01 HSTS sent with a long max-age and includeSubDomains
 
@@ -165,11 +169,11 @@ Every cookie the app sets carries `Secure` in production and an explicit `SameSi
 
 ### Proof test
 
-1. The tool fetches the home page, following same-origin redirects, and reads every `Set-Cookie`.
+1. The tool fetches the home page, following same-origin redirects, and every page the crawl reaches (up to `--max-pages`, default 25), and reads every `Set-Cookie`.
 2. On https, each cookie must have `Secure`.
 3. Cookies whose names look like sessions (session, sid, auth, token, jwt and similar, judged after any `__Host-` or `__Secure-` prefix) must have `HttpOnly`.
 4. Each cookie must have an explicit `SameSite` attribute.
-5. Pass: all rules hold. Fail: a Secure or HttpOnly rule is broken; the report names the cookie. A cookie with no `SameSite` is a warning, because browsers default it to Lax. No cookies on the home page is reported as not applicable; log in with a test account and repeat on the session cookie.
+5. Pass: all rules hold. Fail: a Secure or HttpOnly rule is broken; the report names the cookie. A cookie with no `SameSite` is a warning, because browsers default it to Lax. No cookies on any crawled page is reported as not applicable; log in with a test account and repeat on the session cookie.
 
 ### Sources
 
@@ -495,3 +499,100 @@ Every `message` listener checks `event.origin` by exact string equality against 
 
 - [GitHub Security Lab issue #118: postMessage missing origin check](https://github.com/github/securitylab/issues/118)
 - [jlajara: PostMessage vulnerabilities part II (CVE-2020-8127)](https://jlajara.gitlab.io/Dom_XSS_PostMessage_2)
+
+## BROWSER-20 No mixed content on HTTPS pages
+
+Severity: medium · OSI layer 7 (Application) · CWE-319 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+An HTTPS page that loads a script, stylesheet, frame or plugin over `http://` is only as safe as that plain-HTTP request: anyone on the network path can replace it and run code in the page. Current browsers block such active mixed content, which breaks the page instead, and upgrade or block mixed images and media. Either way the page is not delivered as written.
+
+### Build rule
+
+Reference every subresource with `https://` or a relative or protocol-relative URL. Do not hard-code `http://` asset hosts in templates, CMS content or environment variables. Add `upgrade-insecure-requests` to the Content-Security-Policy as a safety net for content that editors paste in, and fix the source URLs anyway.
+
+### Proof test
+
+1. The tool crawls the site (same origin only, up to `--max-pages`, default 25) and reads the `src`/`href`/`data` of scripts, stylesheets, frames, objects, images and media on each HTTPS page.
+2. Fail: a script, stylesheet, frame, object or embed uses `http://`. Warning: only images or media use `http://`.
+3. A page whose CSP has `upgrade-insecure-requests` is listed but not counted, because browsers upgrade its requests.
+4. Pass: no `http://` subresource on any crawled page. Not applicable on a plain-HTTP target. Pages behind login are not covered.
+
+### Sources
+
+- [MDN: Mixed content](https://developer.mozilla.org/en-US/docs/Web/Security/Mixed_content)
+- [W3C Mixed Content](https://www.w3.org/TR/mixed-content/)
+
+## BROWSER-21 Third-party scripts and styles pinned with Subresource Integrity
+
+Severity: low · OSI layer 7 (Application) · CWE-353, CWE-829 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+A script loaded from a CDN or another third party runs with the full power of the page. If that host or the package on it is compromised, the changed file is served to every visitor, and it can read form fields, tokens and session data. Subresource Integrity makes the browser refuse a file whose hash does not match.
+
+### Build rule
+
+Prefer self-hosting libraries through the bundler. When a fixed-version file must come from a CDN, add `integrity="sha384-..."` and `crossorigin="anonymous"` to the `<script>` or `<link rel="stylesheet">`, generated from the exact file. Vendor loaders that change on every release (Stripe.js, Google Tag Manager, reCAPTCHA, Google Fonts CSS) cannot use SRI; allow them by exact host in the CSP instead.
+
+### Proof test
+
+1. The tool crawls the site and collects every `<script src>` and `<link rel="stylesheet">` whose URL is on another origin.
+2. Each one must carry an `integrity` attribute. A short list of versionless vendor loaders that cannot use SRI is listed separately and not counted.
+3. Pass: every counted third-party script and stylesheet has `integrity`. Warning: one or more do not; the report names them. Not applicable when the crawled pages load no third-party scripts or styles.
+
+### Sources
+
+- [MDN: Subresource Integrity](https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity)
+- [W3C Subresource Integrity](https://www.w3.org/TR/SRI/)
+
+## BROWSER-22 Password forms served and submitted over HTTPS with POST
+
+Severity: high · OSI layer 7 (Application) · CWE-319, CWE-598 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+A password typed into a page served over plain HTTP, or sent by a form whose `action` is an `http://` URL, crosses the network in clear text and can be read or changed by anyone on the path, such as a shared Wi-Fi. A login form that uses GET puts the password in the URL, where it is kept in browser history, proxy and server logs and Referer headers.
+
+### Build rule
+
+Serve every page that has a password field over HTTPS only, and give each form a relative or `https://` `action` with `method="post"`. Never point a login form at another host over HTTP. Keep HSTS on (BROWSER-01) so the login page itself cannot be downgraded.
+
+### Proof test
+
+1. The tool crawls the site and records every form that contains `<input type="password">`. Forms are never submitted.
+2. Fail: the page is plain HTTP on a non-local host, the form's resolved `action` uses `http://` (except the same local development host), or the form method is not POST.
+3. Pass: every password form is on HTTPS (or a local development host, which browsers treat as secure) and posts to HTTPS. Not applicable when no crawled page has a password field; log-in pages that are not linked from public pages need a manual check.
+
+### Sources
+
+- [MDN: Insecure passwords](https://developer.mozilla.org/en-US/docs/Web/Security/Insecure_passwords)
+- [OWASP WSTG: Testing for Credentials Transported over an Encrypted Channel](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/01-Testing_for_Credentials_Transported_over_an_Encrypted_Channel)
+
+## BROWSER-23 No known-vulnerable client JavaScript libraries
+
+Severity: medium · OSI layer 7 (Application) · CWE-1395, CWE-1104 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+Old copies of popular browser libraries carry published, well-understood bugs: jQuery before 3.5.0 runs scripts hidden in HTML passed to its DOM methods, Bootstrap before 3.4.1 and 4.0 to 4.3.0 allow XSS through tooltip templates, lodash before 4.17.21 allows code injection through `template`, Moment.js before 2.29.4 can be made to hang, and AngularJS 1.x no longer gets fixes at all. Scanners find these versions in seconds.
+
+### Build rule
+
+Install libraries through the package manager and keep them current (`npm outdated`, Dependabot or Renovate). Upgrade jQuery to 3.5.0 or later, Bootstrap to 3.4.1 or 4.3.1 or later, lodash to 4.17.21 or later and Moment.js to 2.29.4 or later (or move to a maintained date library). Migrate AngularJS 1.x apps to a supported framework. Remove copies left in `public/` or `static/` folders.
+
+### Proof test
+
+1. The tool crawls the site, reads the version from script URLs (for example `jquery-3.4.1.min.js`, `/jquery@3.4.1/`, `/ajax/libs/jquery/3.4.1/`) and from the license banner of same-origin scripts.
+2. It compares against a short embedded list: jQuery < 3.5.0, Bootstrap < 3.4.1 or 4.0.0 to 4.3.0, lodash < 4.17.21, Moment.js < 2.29.4 (fail), AngularJS 1.x (warning, end of life).
+3. Pass: no listed library at a vulnerable version is recognised. Bundled code without a banner or version in its URL is not recognised; run `npm audit` on the repository as well.
+
+### Sources
+
+- [OWASP Top 10 2021 A06: Vulnerable and Outdated Components](https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/)
+- [NVD CVE-2020-11022 (jQuery)](https://nvd.nist.gov/vuln/detail/CVE-2020-11022)
+- [NVD CVE-2019-8331 (Bootstrap)](https://nvd.nist.gov/vuln/detail/CVE-2019-8331)
+- [NVD CVE-2021-23337 (lodash)](https://nvd.nist.gov/vuln/detail/CVE-2021-23337)
+- [NVD CVE-2022-31129 (Moment.js)](https://nvd.nist.gov/vuln/detail/CVE-2022-31129)
+- [AngularJS version support status](https://docs.angularjs.org/misc/version-support-status)

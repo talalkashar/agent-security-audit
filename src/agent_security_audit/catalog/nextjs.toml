@@ -10,7 +10,7 @@ mode = "auto"
 stacks = ["nextjs"]
 risk = """Next.js inlines every `NEXT_PUBLIC_*` value into browser JavaScript at build time, so a secret given that prefix, or read by a module a client component imports, is readable by anyone from `/_next/static/chunks/*.js`. A leaked Supabase service_role key bypasses all RLS; a leaked Stripe or cloud key spends the owner's money."""
 build = """Only public values may use `NEXT_PUBLIC_`: the Supabase URL, the Supabase publishable/anon key, analytics IDs, the Stripe publishable key. Never a service_role or `sb_secret_` key, `sk_live_`/`rk_live_`, webhook secrets, `CRON_SECRET` or `VERCEL_AUTOMATION_BYPASS_SECRET`. Read secrets only inside modules that start with `import 'server-only'`. Add a CI step that fails the build if `.next/static` matches a secret pattern. If a secret was ever shipped, rotate it; removing it from the bundle is not enough."""
-proof = """1. The tool fetches the home page and the same-origin scripts it references (up to 40, 2 MB each).
+proof = """1. The tool crawls the site (same origin, up to `--max-pages`, default 25) and fetches the inline scripts and same-origin scripts of every crawled page, plus the Next.js chunks those reference in the build manifest or RSC payload (up to 40 files, 2 MB each).
 2. It matches known secret formats: Supabase service_role/secret JWT or `sb_secret_` key, Stripe `sk_live_`/`rk_live_`, AWS `AKIA` access key IDs, PEM private-key headers, GitHub, OpenAI, Anthropic and Slack tokens.
 3. Pass: no match. Fail: any match; evidence shows the script path and a masked prefix only, never the full value.
 4. With repo access, also grep `.env*` and code for `NEXT_PUBLIC_.*(SECRET|SERVICE_ROLE|PRIVATE|TOKEN)`. Pages behind login are not covered by the automatic scan."""
@@ -29,7 +29,7 @@ mode = "auto"
 stacks = ["nextjs"]
 risk = """With `productionBrowserSourceMaps: true`, or an error-tracking upload step that leaves `.map` files deployed, the full original client source is served, including comments, internal endpoints and any inlined secrets. Next.js disables this by default to prevent leaking source."""
 build = """Keep `productionBrowserSourceMaps` unset or false in `next.config.*`. If error tracking needs maps, upload them to the vendor and delete them from the build output (Sentry `deleteSourcemapsAfterUpload`), or enable Vercel Protected Source Maps."""
-proof = """1. The tool fetches the same-origin scripts referenced by the home page (as in NEXT-01).
+proof = """1. The tool fetches the same-origin scripts found on the crawled pages (as in NEXT-01).
 2. For each script it checks for a `sourceMappingURL` reference and requests the `.map` file.
 3. Pass: no reference, and no `.map` file returns 200. Fail: a `.map` file is served with status 200."""
 sources = [

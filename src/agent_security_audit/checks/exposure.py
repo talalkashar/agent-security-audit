@@ -7,9 +7,10 @@ import json
 import re
 import secrets
 from datetime import UTC, datetime
-from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 
+from ..crawl import crawl, next_chunks
+from ..http import BudgetExceeded
 from ..model import failed, passed, skipped, warned
 from ..scope import same_origin
 from . import auto
@@ -89,50 +90,36 @@ def security_txt(ctx):
     return passed("INFRA-05", "security.txt lists a contact and a future expiry date.", ev + [f"Contact: {fields['contact']}"])
 
 
-class _ScriptFinder(HTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.srcs, self.inline, self._in_script = [], [], False
-
-    def handle_starttag(self, tag, attrs):
-        a = dict(attrs)
-        if tag == "script":
-            if a.get("src"):
-                self.srcs.append(a["src"])
-            else:
-                self._in_script = True
-        elif (tag == "link" and (a.get("rel") or "").lower() in ("modulepreload", "preload") and a.get("href")
-              and (a.get("as") or "script").lower() == "script" and a["href"].split("?")[0].endswith((".js", ".mjs"))):
-            self.srcs.append(a["href"])
-
-    def handle_endtag(self, tag):
-        if tag == "script":
-            self._in_script = False
-
-    def handle_data(self, data):
-        if self._in_script:
-            self.inline.append(data)
-
-
 def scripts(ctx):
-    """[(label, text)] for the home page's inline scripts and same-origin script files. Cached per run."""
+    """[(label, text)] for inline scripts and same-origin script files on every crawled page, plus Next.js chunks
+    those reference (build manifest, RSC payload). At most MAX_SCRIPTS files. Cached per run."""
     if "scripts" in ctx.cache:
         return ctx.cache["scripts"]
-    home = ctx.client.home()
-    finder = _ScriptFinder()
-    finder.feed(home.text)
-    out = [("home page inline scripts", "\n".join(finder.inline))] if finder.inline else []
-    seen = set()
-    for src in finder.srcs:
-        url = urljoin(home.url, src)
+    site = crawl(ctx)
+    home = site.pages[0].url if site.pages else None
+    out, by_page = [], {}
+    for page, text in site.inline:
+        by_page.setdefault(page, []).append(text)
+    for page, texts in by_page.items():
+        label = "home page inline scripts" if page == home else f"{urlsplit(page).path or '/'} inline scripts"
+        out.append((label, "\n".join(texts)))
+    queue = [r.url for r in site.resources if r.kind == "script"]
+    for _, text in out:
+        queue += [ctx.client.url(p) for p in next_chunks(text)]
+    seen, i = set(), 0
+    while i < len(queue) and len(seen) < MAX_SCRIPTS:
+        url = queue[i]
+        i += 1
         if url in seen or not same_origin(ctx.target, url):
             continue
         seen.add(url)
-        if len(seen) > MAX_SCRIPTS:
+        try:
+            resp = ctx.client.get(url, cache=True)
+        except BudgetExceeded:
             break
-        resp = ctx.client.get(url, cache=True)
         if resp.status == 200:
             out.append((urlsplit(url).path, resp.text))
+            queue += [ctx.client.url(p) for p in next_chunks(resp.text)]
     ctx.cache["scripts"] = out
     return out
 
@@ -180,8 +167,8 @@ def find_secrets(text):
 def client_secrets(ctx):
     found = scripts(ctx)
     if not found:
-        return skipped("NEXT-01", "No JavaScript found on the home page to scan. Run a code review of NEXT_PUBLIC_ "
-                       "variables instead.")
+        return skipped("NEXT-01", "No JavaScript found on the crawled pages to scan. Run a code review of "
+                       "NEXT_PUBLIC_ variables instead.")
     ev, seen = [], set()
     for label, text in found:
         for kind, masked in find_secrets(text):
@@ -191,7 +178,7 @@ def client_secrets(ctx):
     if ev:
         return failed("NEXT-01", "Secret keys are shipped to every visitor's browser. Rotate them now, then move them "
                       "to server-only code.", ev)
-    return passed("NEXT-01", f"No secret key formats found in {len(found)} script(s) from the home page.",
+    return passed("NEXT-01", f"No secret key formats found in {len(found)} script(s) from the crawled pages.",
                   [label for label, _ in found][:10])
 
 
@@ -202,7 +189,7 @@ SOURCEMAP = re.compile(r"[#@]\s*sourceMappingURL=([^\s'\"*]+)")
 def source_maps(ctx):
     found = [(label, text) for label, text in scripts(ctx) if label.startswith("/")]
     if not found:
-        return skipped("NEXT-02", "No same-origin script files found on the home page.")
+        return skipped("NEXT-02", "No same-origin script files found on the crawled pages.")
     exposed, ev, tried = [], [], 0
     for label, text in found:
         m = SOURCEMAP.search(text[-2000:])

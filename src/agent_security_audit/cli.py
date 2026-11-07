@@ -130,6 +130,9 @@ def build_parser():
     sc.add_argument("--no-ports", action="store_true",
                     help="skip the TCP connect checks on database and admin ports (INFRA-24, INFRA-25)")
     sc.add_argument("--insecure", action="store_true", help="accept self-signed TLS (local hosts only)")
+    sc.add_argument("--max-pages", type=int, default=25,
+                    help="most same-origin pages the crawl visits (default 25); it never uses more than half the budget")
+    sc.add_argument("--max-depth", type=int, default=3, help="most link hops from the home page the crawl follows")
     sc.add_argument("--budget", type=int, default=300, help="maximum requests to the target")
     sc.add_argument("--timeout", type=float, default=10.0)
     return p
@@ -192,7 +195,8 @@ def _main(argv=None):
             "rate_limit_path": args.rate_limit_path, "rate_limit_method": args.rate_limit_method,
             "rate_limit_body": args.rate_limit_body, "rate_limit_content_type": args.rate_limit_content_type,
             "rate_limit_attempts": args.rate_limit_attempts, "allow_supabase": args.allow_supabase,
-            "no_dns": args.no_dns, "no_ports": args.no_ports, "supabase_tables": _csv(args.supabase_table), "dns_resolver": args.dns_resolver,
+            "no_dns": args.no_dns, "no_ports": args.no_ports, "supabase_tables": _csv(args.supabase_table),
+            "dns_resolver": args.dns_resolver, "max_pages": args.max_pages, "max_depth": args.max_depth,
         }
         authorized = args.authorized
         show_progress = not args.quiet and _is_tty(sys.stderr)

@@ -28,6 +28,7 @@ class Context:
     options: dict = field(default_factory=dict)
     cache: dict = field(default_factory=dict)
     authorized: bool = False
+    owned: bool = False  # authorized, or a local dev host: active probes may run
 
     @property
     def https(self):
@@ -40,5 +41,5 @@ class Context:
 
 def load_all():
     """Import every check module so its @auto functions register."""
-    from . import browser, dns_email, exposure, network, ratelimit, supabase, transport  # noqa: F401
+    from . import browser, dns_email, exposure, network, ratelimit, supabase, transport, webapp  # noqa: F401
     return REGISTRY

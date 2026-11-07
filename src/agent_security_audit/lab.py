@@ -13,6 +13,7 @@ import secrets
 import threading
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
 MODES = ("vulnerable", "fixed")
 
@@ -43,6 +44,80 @@ def fixed_js():
 
 STACK = ("Error: lookup failed\n    at handler (/var/task/.next/server/app/api/route.js:12:9)\n"
          "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n")
+
+
+# --- crawl and web-app fixtures (BROWSER-20..23, API-19..24) -------------------------------------------------------
+# Pages reachable from the home page, robots.txt and sitemap.xml, so the scanner's crawl has a site to walk.
+# The third-party host and the login form's action use the reserved .invalid TLD: nothing here ever resolves, and
+# the scanner never requests another origin anyway. The jQuery files are version banners only, not the library.
+
+LAB_THIRD_PARTY = "https://cdn.asa-lab.invalid/widget.js"
+LAB_SRI = "sha384-" + "A" * 64  # fake hash, the file does not exist
+
+
+def crawl_home_extra(vuln):
+    script = (f'<script src="{LAB_THIRD_PARTY}"></script>' if vuln else
+              f'<script src="{LAB_THIRD_PARTY}" integrity="{LAB_SRI}" crossorigin="anonymous"></script>')
+    return (script + '<nav><a href="/about">About</a> <a href="/login">Log in</a> '
+            '<a href="/redirect?url=/about">Continue</a> <a href="/logout">Log out</a></nav>')
+
+
+def _page(title, body):
+    return f"<!doctype html><html><head><title>{title}</title></head><body>{body}</body></html>"
+
+
+def crawl_route(handler, path, query, vuln):
+    """Answer a crawl fixture GET, or return False when the path is not one."""
+    host = handler.headers.get("Host", "127.0.0.1")
+    if path == "/robots.txt":
+        handler._send(200, f"User-agent: *\nAllow: /\nSitemap: http://{host}/sitemap.xml\n", "text/plain")
+    elif path == "/sitemap.xml":
+        locs = "".join(f"<url><loc>http://{host}{p}</loc></url>" for p in ("/about", "/contact"))
+        handler._send(200, f'<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                      f"{locs}</urlset>", "application/xml")
+    elif path == "/about":
+        version = "3.4.1" if vuln else "3.7.1"
+        handler._send(200, _page("About", f'<script src="/static/vendor/jquery-{version}.min.js"></script>'
+                                 '<p>About the lab.</p><a href="/">Home</a>'))
+    elif path == "/contact":
+        handler._send(200, _page("Contact", '<p>Write to security@example.test.</p>'))
+    elif path.startswith("/static/vendor/jquery-") and path.endswith(".min.js"):
+        version = path.removeprefix("/static/vendor/jquery-").removesuffix(".min.js")
+        if version not in ("3.4.1", "3.7.1"):
+            return False
+        handler._send(200, f"/*! jQuery v{version} | (c) OpenJS Foundation and other contributors | "
+                      "jquery.org/license */\nwindow.labJquery=true;\n", "application/javascript")
+    elif path == "/login":
+        form = ('<form method="post" action="http://login.asa-lab.invalid/session">' if vuln else
+                '<form method="post" action="/api/login">')
+        handler._send(200, _page("Log in", form + '<input name="email" type="email">'
+                                 '<input name="password" type="password"><button>Log in</button></form>'))
+    elif path == "/redirect":
+        dest = (parse_qs(query).get("url") or ["/"])[0]
+        if not vuln and not (dest.startswith("/") and not dest.startswith(("//", "/\\"))):
+            dest = "/"
+        handler._send(302, "", extra=[("Location", dest)])
+    elif path == "/logout":
+        handler._send(200, _page("Logged out", "<p>Logged out.</p>"))
+    elif vuln and path == "/uploads/":
+        handler._send(200, "<html><head><title>Index of /uploads/</title></head><body><h1>Index of /uploads/</h1>"
+                      '<a href="report.pdf">report.pdf</a></body></html>')
+    elif vuln and path == "/actuator/env":
+        handler._send(200, json.dumps({"activeProfiles": ["lab"], "propertySources": [
+            {"name": "lab", "properties": {"LAB_SETTING": {"value": "not-a-secret"}}}]}), "application/json")
+    elif vuln and path == "/openapi.json":
+        handler._send(200, json.dumps({"openapi": "3.0.0", "info": {"title": "lab", "version": "1"},
+                                       "paths": {"/api/login": {}}}), "application/json")
+    else:
+        return False
+    return True
+
+
+GRAPHQL_SCHEMA = {"data": {"__schema": {"queryType": {"name": "Query"}, "mutationType": {"name": "Mutation"},
+                                        "types": [{"name": "Query"}, {"name": "Mutation"}, {"name": "String"}]}}}
+GRAPHQL_REFUSED = {"errors": [{"message": "GraphQL introspection is not allowed"}]}
+
+# --- end of crawl and web-app fixtures -----------------------------------------------------------------------------
 
 
 class LabHandler(BaseHTTPRequestHandler):
@@ -91,7 +166,8 @@ class LabHandler(BaseHTTPRequestHandler):
         cookie = ("session=lab123; Path=/" if self.mode == "vulnerable"
                   else "session=lab123; Path=/; Secure; HttpOnly; SameSite=Lax")
         html = ('<!doctype html><html><head><title>Lab</title>'
-                '<script src="/_next/static/chunks/app.js"></script></head><body>agent-security-audit lab</body></html>')
+                '<script src="/_next/static/chunks/app.js"></script></head><body>agent-security-audit lab'
+                + crawl_home_extra(self.mode == "vulnerable") + '</body></html>')
         self._send(200, html, extra=[("Set-Cookie", cookie)])
 
     # --- routes --------------------------------------------------------------------------------------------------
@@ -103,6 +179,8 @@ class LabHandler(BaseHTTPRequestHandler):
         vuln = self.mode == "vulnerable"
         if path == "/":
             return self._home()
+        if crawl_route(self, path, self.path.partition("?")[2], vuln):
+            return None
         if path == "/_next/static/chunks/app.js":
             return self._send(200, vulnerable_js() if vuln else fixed_js(), "application/javascript")
         if vuln and path == "/_next/static/chunks/app.js.map":
@@ -119,12 +197,20 @@ class LabHandler(BaseHTTPRequestHandler):
         # The fixed site behaves like a single-page app: unknown paths get the app shell, not the file.
         return self._send(200, "<!doctype html><html><body>Not found</body></html>")
 
+    def do_TRACE(self):
+        if self.mode != "vulnerable":
+            return self._send(405, "", extra=[("Allow", "GET, HEAD, POST")])
+        echo = f"{self.requestline}\r\n" + "".join(f"{k}: {v}\r\n" for k, v in self.headers.items())
+        return self._send(200, echo, "message/http")
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         if length:
             self.rfile.read(min(length, 65536))
         path = self.path.split("?")[0]
         vuln = self.mode == "vulnerable"
+        if path in ("/graphql", "/api/graphql"):
+            return self._send(200, json.dumps(GRAPHQL_SCHEMA if vuln else GRAPHQL_REFUSED), "application/json")
         if path == "/api/login":
             cls = type(self)
             with cls.lock:

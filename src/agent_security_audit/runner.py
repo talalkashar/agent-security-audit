@@ -101,7 +101,7 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
             target = final
             client = Client(target, timeout=timeout, budget=budget - client.sent, delay=delay, insecure=insecure)
     may_probe = owned(target, authorized)
-    ctx = Context(target, client, dict(options or {}), authorized=authorized)
+    ctx = Context(target, client, dict(options or {}), authorized=authorized, owned=may_probe)
     results = []
     chosen = [c for c in select(ids, areas, stacks)
               if include_manual or (c.mode == "auto" and c.id in registry)]

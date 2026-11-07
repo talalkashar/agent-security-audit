@@ -37,7 +37,7 @@ Only public values may use `NEXT_PUBLIC_`: the Supabase URL, the Supabase publis
 
 ### Proof test
 
-1. The tool fetches the home page and the same-origin scripts it references (up to 40, 2 MB each).
+1. The tool crawls the site (same origin, up to `--max-pages`, default 25) and fetches the inline scripts and same-origin scripts of every crawled page, plus the Next.js chunks those reference in the build manifest or RSC payload (up to 40 files, 2 MB each).
 2. It matches known secret formats: Supabase service_role/secret JWT or `sb_secret_` key, Stripe `sk_live_`/`rk_live_`, AWS `AKIA` access key IDs, PEM private-key headers, GitHub, OpenAI, Anthropic and Slack tokens.
 3. Pass: no match. Fail: any match; evidence shows the script path and a masked prefix only, never the full value.
 4. With repo access, also grep `.env*` and code for `NEXT_PUBLIC_.*(SECRET|SERVICE_ROLE|PRIVATE|TOKEN)`. Pages behind login are not covered by the automatic scan.
@@ -61,7 +61,7 @@ Keep `productionBrowserSourceMaps` unset or false in `next.config.*`. If error t
 
 ### Proof test
 
-1. The tool fetches the same-origin scripts referenced by the home page (as in NEXT-01).
+1. The tool fetches the same-origin scripts found on the crawled pages (as in NEXT-01).
 2. For each script it checks for a `sourceMappingURL` reference and requests the `.map` file.
 3. Pass: no reference, and no `.map` file returns 200. Fail: a `.map` file is served with status 200.
 

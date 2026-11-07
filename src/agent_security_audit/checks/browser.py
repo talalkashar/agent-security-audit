@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
+from ..crawl import crawl
 from ..model import failed, passed, skipped, warned
 from . import auto
 
@@ -199,17 +202,24 @@ def _looks_like_session(name):
 
 @auto("BROWSER-06")
 def cookies(ctx):
-    resp = ctx.client.home()
-    raw = resp.get_all("set-cookie")
+    home = ctx.client.home()
+    responses = [home] + [p for p in crawl(ctx).pages if p is not home]
+    raw, where = [], {}
+    for resp in responses:
+        for value in resp.get_all("set-cookie"):
+            if value not in where:
+                raw.append(value)
+                where[value] = urlsplit(resp.url).path or "/"
     if not raw:
-        return skipped("BROWSER-06", "The home page sets no cookies. Log in with a test account and re-check the "
-                       "session cookie (see the proof steps).")
+        return skipped("BROWSER-06", f"None of the {len(responses)} crawled page(s) set a cookie. Log in with a test "
+                       "account and re-check the session cookie (see the proof steps).")
     fails, warns, ev = [], [], []
     for value in raw:
         name, attrs = parse_set_cookie(value)
         flags = [k for k in ("secure", "httponly") if k in attrs]
         same = attrs.get("samesite", "")
-        ev.append(f"{name}: {', '.join(flags) or 'no flags'}" + (f", SameSite={same}" if same else ", no SameSite"))
+        ev.append(f"{name} (set on {where[value]}): {', '.join(flags) or 'no flags'}"
+                  + (f", SameSite={same}" if same else ", no SameSite"))
         session = _looks_like_session(name)
         if ctx.https and "secure" not in attrs:
             fails.append(f"{name} lacks Secure")
@@ -222,11 +232,12 @@ def cookies(ctx):
                 fails.append(f"{name} looks like a session cookie but lacks HttpOnly")
         if not same:
             warns.append(f"{name} has no SameSite (browsers default to Lax)")
+    fails, warns = list(dict.fromkeys(fails)), list(dict.fromkeys(warns))
     if fails:
         return failed("BROWSER-06", "Cookie flags are missing: " + "; ".join(fails) + ".", ev)
     if warns:
         return warned("BROWSER-06", "Cookies are mostly safe: " + "; ".join(warns) + ".", ev)
-    return passed("BROWSER-06", f"All {len(raw)} cookies set on the home page have safe flags.", ev)
+    return passed("BROWSER-06", f"All {len(raw)} cookie(s) set on {len(responses)} crawled page(s) have safe flags.", ev)
 
 
 @auto("BROWSER-07")
