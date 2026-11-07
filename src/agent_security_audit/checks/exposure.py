@@ -11,9 +11,10 @@ from urllib.parse import urljoin, urlsplit
 
 from ..crawl import crawl, next_chunks
 from ..http import BudgetExceeded
-from ..model import failed, passed, skipped, warned
+from ..model import Result, failed, passed, skipped, warned
 from ..scope import same_origin
-from . import auto
+from . import are, auto, count
+from .ratelimit import login_endpoint
 
 MAX_SCRIPTS = 40
 
@@ -60,16 +61,32 @@ def sensitive_files(ctx):
     if exposed:
         return failed("INFRA-04", f"Sensitive files are downloadable: {', '.join(exposed)}. Treat every secret in them "
                       "as leaked and rotate it.", ev)
-    return passed("INFRA-04", f"None of {len(SENSITIVE_FILES)} well-known sensitive files are served.", ev)
+    return passed("INFRA-04", f"None of the {len(SENSITIVE_FILES)} well-known sensitive files is served.", ev)
 
 
 @auto("INFRA-05")
 def security_txt(ctx):
     resp = ctx.client.get("/.well-known/security.txt")
     ev = [f"GET /.well-known/security.txt -> {resp.status}"]
+    # RFC 9116 section 3 lets the file redirect; same-origin hops are followed, other hosts are not visited.
+    for _ in range(3):
+        loc = resp.get("location") if resp.is_redirect else None
+        if not loc:
+            break
+        try:
+            nxt = urljoin(resp.url, loc)
+            off_site = not same_origin(ctx.target, nxt)
+        except ValueError:
+            break
+        if off_site:
+            return Result("INFRA-05", "manual", "/.well-known/security.txt redirects to another host, which this scan "
+                          "does not visit (RFC 9116 allows the redirect). Open it and check Contact and Expires.",
+                          ev + [f"location: {loc[:200]}"])
+        resp = ctx.client.get(nxt)
+        ev.append(f"redirected to {urlsplit(nxt).path or '/'} -> {resp.status}")
     text = resp.text if resp.status == 200 and _not_html(resp.get("content-type"), resp.body) else ""
     if not text:
-        return failed("INFRA-05", "No /.well-known/security.txt, so people who find a bug have no clear way to "
+        return warned("INFRA-05", "No /.well-known/security.txt, so people who find a bug have no clear way to "
                       "report it.", ev)
     fields = {}
     for line in text.splitlines():
@@ -78,7 +95,8 @@ def security_txt(ctx):
             fields.setdefault(k.strip().lower(), v.strip())
     missing = [f for f in ("contact", "expires") if f not in fields]
     if missing:
-        return warned("INFRA-05", f"security.txt is missing required field(s): {', '.join(missing)} (RFC 9116).", ev)
+        return warned("INFRA-05", f"security.txt is missing required {'field' if len(missing) == 1 else 'fields'}: "
+                      f"{', '.join(missing)} (RFC 9116).", ev)
     try:
         expires = datetime.fromisoformat(fields["expires"])
         if expires.tzinfo is None:
@@ -178,7 +196,7 @@ def client_secrets(ctx):
     if ev:
         return failed("NEXT-01", "Secret keys are shipped to every visitor's browser. Rotate them now, then move them "
                       "to server-only code.", ev)
-    return passed("NEXT-01", f"No secret key formats found in {len(found)} script(s) from the crawled pages.",
+    return passed("NEXT-01", f"No secret key formats found in {count(len(found), 'script')} from the crawled pages.",
                   [label for label, _ in found][:10])
 
 
@@ -207,9 +225,9 @@ def source_maps(ctx):
                 exposed.append(urlsplit(url).path)
                 ev.append(f"GET {urlsplit(url).path} -> 200 (source map)")
     if exposed:
-        return failed("NEXT-02", f"{len(exposed)} source map(s) are public, so anyone can read the original source "
+        return failed("NEXT-02", f"{count(len(exposed), 'source map')} {are(len(exposed))} public, so anyone can read the original source "
                       "code, comments and internal paths.", ev)
-    return passed("NEXT-02", f"No source maps served for {len(found)} script(s).")
+    return passed("NEXT-02", f"No source maps served for {count(len(found), 'script')}.")
 
 
 @auto("NEXT-03")
@@ -245,16 +263,24 @@ def error_leaks(ctx):
         ("GET", f"/asa-missing-{token}", None, {}),
         ("POST", f"/api/asa-missing-{token}", "{", {"Content-Type": "application/json"}),
     ]
-    extra = ctx.opt("rate_limit_path")
+    extra = login_endpoint(ctx)
     if extra:
-        probes.append(("POST", extra, "{", {"Content-Type": "application/json"}))
-    leaks, ev = [], []
+        probes.append(("POST", extra["path"], "{", {"Content-Type": "application/json"}))
+    leaks, handled, ev = [], [], []
     for method, path, body, headers in probes:
         resp = ctx.client.request(method, path, body=body, headers=headers)
         hit = find_leaks(resp.text)
         ev.append(f"{method} {path} -> {resp.status}" + (f": shows {', '.join(hit)}" if hit else ""))
         leaks += hit
+        # A not-found or wrong-method answer comes from the router; it never reaches code that can throw.
+        if resp.status >= 400 and resp.status not in (404, 405):
+            handled.append(path)
     if leaks:
         return failed("API-02", "Error responses reveal internals (" + ", ".join(sorted(set(leaks))) + "). "
                       "Return a generic message and log details on the server.", ev)
-    return passed("API-02", "Error responses show no stack traces, file paths or database errors.", ev)
+    if not handled:
+        return Result("API-02", "manual", "Only not-found answers came back, and they show no internals, but no "
+                      "request reached a handler's error path. Name an API route with --rate-limit-path, or check "
+                      "the error handler in code.", ev)
+    return passed("API-02", "Error responses show no stack traces, file paths or database errors, including a "
+                  "handler error on " + ", ".join(dict.fromkeys(handled)) + ".", ev)

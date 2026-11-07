@@ -48,10 +48,10 @@ Use Supabase Auth's built-in endpoints where possible and keep its limits on. Fo
 
 ### Proof test
 
-1. Run the CLI with --rate-limit-path set to the login endpoint of the user's own site, e.g. /api/auth/login. Without a path the check reports manual.
-2. The CLI sends up to N POST requests (default 30, max 60) with fake credentials that match no real account, and stops at the first 429.
-3. Pass: a 429 appears within N requests; the CLI notes whether Retry-After is present.
-4. Fail: every request returns 200/400/401 with no 429. With fewer than 10 attempts the result is a warning, since that is too few to show no limit exists.
+1. Run the CLI with --rate-limit-path set to the login endpoint of the user's own site, e.g. /api/auth/login. Without a path the CLI uses a same-origin POST login form found by the crawl (one password field; a page or action that names login, sign-in, session or auth, and never sign-up, register or reset), filling only the user and password fields with fake values. With neither the check reports manual.
+2. The CLI sends up to N requests (default 30, max 60) with fake credentials that match no real account, and stops at the first sign of throttling.
+3. Pass: a 429 with Retry-After appears within N requests; the report gives the attempt number.
+4. Warning: throttling of another kind, reported with the attempt number where it began: a 429 without Retry-After, a change to another error status (400, 403, 423, 503...), or limit words that the first answer did not have ("too many", "locked", "captcha"...). Also a warning: every answer stayed the same ("no limit observed up to N"), because many limits sit above 30 attempts. A detected form that refuses the first attempt with 400 or 403 (often a CSRF token) is reported as manual.
 5. Manual follow-up: with an owned test account, confirm the correct password is also refused or challenged during the lockout.
 
 ### Sources
@@ -76,10 +76,11 @@ Route every route handler and Server Action through one handleError() helper: lo
 ### Proof test
 
 1. The CLI requests a random path that does not exist on the user's own site.
-2. It sends a malformed JSON body to that same path.
-3. Pass: both responses are generic (4xx/5xx with a short message) and contain no stack frames, file paths (/var/task, node_modules, C:\), SQL or PGRST text, or framework internals.
-4. Fail: any of those markers appears in either response body.
-5. Manual follow-up: send malformed JSON, wrong types and an invalid UUID to each real API route and check the same markers.
+2. It sends a malformed JSON body to a random path under /api/, and to the login endpoint (--rate-limit-path, or the login form found by the crawl, as in API-01).
+3. Pass: no response contains stack frames, file paths (/var/task, node_modules, C:\), SQL or PGRST text, or framework internals, and at least one answer is an error other than 404/405, so a handler's error path actually ran.
+4. Fail: any of those markers appears in a response body.
+5. Manual: only not-found or wrong-method answers came back. They come from the router and do not prove what a handler shows when it fails.
+6. Manual follow-up: send malformed JSON, wrong types and an invalid UUID to each real API route and check the same markers.
 
 ### Sources
 
@@ -507,8 +508,8 @@ Only redirect to relative paths: accept a value that starts with a single `/` an
 ### Proof test
 
 1. The tool crawls the site and collects query parameters on same-origin links whose names look like redirect targets (next, url, continue, goto, redirect..., return..., dest..., callback_url).
-2. For up to 8 of them it sends one GET with the value `https://asa-redirect-probe.invalid/` (a reserved name that never resolves) and does not follow the redirect.
-3. Fail: the `Location` header points to `asa-redirect-probe.invalid`. Pass: every probed parameter redirects on-site or not at all. Not applicable when no such parameter is linked; then test the login and logout redirects by hand the same way. Redirects done in JavaScript or meta refresh are not covered.
+2. For up to 8 of them it sends a GET per probe form of the same reserved host, `asa-redirect-probe.invalid` (it never resolves): `https://asa-redirect-probe.invalid/`, `//asa-redirect-probe.invalid/`, `/\asa-redirect-probe.invalid/`, `https:asa-redirect-probe.invalid/` and the double-encoded `%2F%2Fasa-redirect-probe.invalid%2F`. It stops at the first hit and never follows a redirect.
+3. Fail: the `Location` header, a `Refresh` header or a `<meta http-equiv="refresh">` tag sends the browser to `asa-redirect-probe.invalid`, read the way browsers read URLs (a backslash counts as a slash). Pass: every probe form stays on-site or does not redirect. Not applicable when no such parameter is linked; then test the login and logout redirects by hand the same way. Redirects done in JavaScript are not covered.
 
 ### Sources
 
@@ -602,7 +603,7 @@ Disable introspection in production (for example `introspection: false` in Apoll
 
 1. The tool sends one POST to `/graphql` and `/api/graphql` with the standard, read-only introspection query `{ __schema { queryType { name } mutationType { name } types { name } } }`. It runs no resolvers and changes nothing.
 2. Warning: the response contains `data.__schema`. Only the number of types and whether mutations exist are reported.
-3. Pass: a GraphQL error is returned instead. Not applicable when neither path is a GraphQL endpoint.
+3. Pass: the answer is provably GraphQL and refuses: a GraphQL media type (`application/graphql-response+json`), or an error that names introspection, `__schema`, `__type`, "Cannot query field" or a `GRAPHQL_*` code. A generic JSON `{"errors": [...]}` proves nothing: it is manual when the status is not 404/405, and not applicable (no GraphQL endpoint) when it is.
 
 ### Sources
 

@@ -6,7 +6,7 @@ import ssl
 from datetime import UTC, datetime
 from urllib.parse import urljoin, urlsplit
 
-from ..model import errored, failed, passed, skipped, warned
+from ..model import Result, errored, failed, passed, skipped, warned
 from ..scope import is_local_host
 from . import auto
 
@@ -34,8 +34,14 @@ def https_redirect(ctx):
     plain = f"http://{host}/"
     try:
         resp = ctx.client.same_host("GET", plain)
-    except (ConnectionRefusedError, TimeoutError):
-        return passed("INFRA-01", "Port 80 does not answer, so nothing is served without TLS.", [f"{plain}: no answer"])
+    except ConnectionRefusedError:
+        return passed("INFRA-01", "Port 80 refuses connections, so nothing is served without TLS.",
+                      [f"{plain}: connection refused"])
+    except TimeoutError:
+        # A silent drop looks the same as a network problem between this machine and the site, so it proves nothing.
+        return Result("INFRA-01", "manual", "Port 80 did not answer in time: a firewall drop or a network problem on "
+                      "the way. Open http:// in a browser and confirm it redirects to HTTPS or does not load.",
+                      [f"{plain}: timed out"])
     loc = resp.get("location") or ""
     ev = [f"GET {plain} -> {resp.status} {('location: ' + loc) if loc else ''}".strip()]
     if resp.is_redirect:

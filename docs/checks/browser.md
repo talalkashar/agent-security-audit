@@ -44,10 +44,10 @@ Send `Strict-Transport-Security: max-age=63072000; includeSubDomains` on every H
 
 ### Proof test
 
-1. The tool fetches the home page over HTTPS, following same-origin redirects.
-2. It reads the `Strict-Transport-Security` response header.
-3. Pass: header present with `max-age` of at least 31536000 and `includeSubDomains`.
-4. Fail: header missing, `max-age` below one year, or no `includeSubDomains`.
+1. The tool fetches the home page over HTTPS, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page.
+2. It reads the `Strict-Transport-Security` response header on each.
+3. Pass: header present with `max-age` of at least 31536000 and `includeSubDomains` on every page.
+4. Fail: header missing or `max-age` below one year. Warning: no `includeSubDomains` (a weaker setting, not a proven flaw: it matters when subdomains or parent-domain cookies exist).
 5. Manual extra: repeat for `https://www.<domain>/`; if preload is intended, check status at hstspreload.org.
 
 ### Sources
@@ -71,7 +71,7 @@ For dynamic App Router pages, build the policy in `proxy.ts` (`middleware.ts` be
 
 ### Proof test
 
-1. The tool fetches the home page, following same-origin redirects, and reads `Content-Security-Policy` (the enforcing header, not `-Report-Only`).
+1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result. On each it reads the enforcing `Content-Security-Policy` header (not `-Report-Only`) and any `<meta http-equiv="Content-Security-Policy">` policy, without the directives browsers ignore in a meta tag (`frame-ancestors`, `report-uri`, `sandbox`).
 2. It takes `script-src`, or `default-src` when `script-src` is absent. Several enforcing policies all apply, so a script must be allowed by every one of them, and the strictest policy decides.
 3. Pass: an enforcing policy is set and its script directive has no `'unsafe-inline'`, or has it only alongside a `'nonce-...'` or `'sha256-'`/`'sha384-'`/`'sha512-'` source, and allows no source that matches every host (`*`, a bare scheme such as `https:`, `http:` or `data:`, `https://*`, or `*.com`) unless `'strict-dynamic'` is set with a nonce or hash.
 4. Fail: no enforcing CSP, no script directive in any policy, `'unsafe-inline'` with no nonce or hash, or a source that matches every host.
@@ -97,8 +97,8 @@ Send `X-Content-Type-Options: nosniff` on all responses (`next.config` `headers(
 
 ### Proof test
 
-1. The tool fetches the home page, following same-origin redirects.
-2. Pass: `X-Content-Type-Options` equals `nosniff`.
+1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result.
+2. Pass: `X-Content-Type-Options` equals `nosniff` on every page.
 3. Fail: header missing or any other value.
 4. Manual extra: `curl -sI` an API route and a static asset and confirm the same header.
 
@@ -121,9 +121,9 @@ Send CSP `frame-ancestors 'none'` (or `'self'` if the app frames itself) on all 
 
 ### Proof test
 
-1. The tool fetches the home page, following same-origin redirects.
-2. Pass: CSP contains `frame-ancestors` with `'none'`, `'self'` or an explicit origin list, or `X-Frame-Options` is `DENY` or `SAMEORIGIN`.
-3. Fail: neither is present, or every `frame-ancestors` allows any site (`*` or a bare scheme). When several policies set `frame-ancestors`, the most restrictive one applies.
+1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result.
+2. Pass on every page: the CSP header contains `frame-ancestors` with `'none'`, `'self'` or an explicit origin list, or `X-Frame-Options` is `DENY` or `SAMEORIGIN`.
+3. Fail: neither is present, or every `frame-ancestors` allows any site (`*` or a bare scheme). When several policies set `frame-ancestors`, the most restrictive one applies. `frame-ancestors` in a `<meta>` tag does not count, because browsers ignore it there.
 4. Manual extra: repeat on login, settings and destructive-action pages; optionally frame one from a localhost page and confirm the browser refuses to render it.
 
 ### Sources
@@ -146,9 +146,9 @@ Send `Referrer-Policy: strict-origin-when-cross-origin` site-wide (OWASP cheat s
 
 ### Proof test
 
-1. The tool fetches the home page, following same-origin redirects.
-2. Pass: `Referrer-Policy` is `strict-origin-when-cross-origin`, `strict-origin`, `same-origin` or `no-referrer`.
-3. Fail: header missing, or `unsafe-url`, `no-referrer-when-downgrade`, or `origin-when-cross-origin`.
+1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result.
+2. Pass on every page: `Referrer-Policy` is `strict-origin-when-cross-origin`, `strict-origin`, `same-origin` or `no-referrer`.
+3. Fail: `unsafe-url` or `no-referrer-when-downgrade`. Warning: header missing (modern browsers default to `strict-origin-when-cross-origin`), `origin` or `origin-when-cross-origin`.
 
 ### Sources
 
@@ -171,7 +171,7 @@ Every cookie the app sets carries `Secure` in production and an explicit `SameSi
 
 1. The tool fetches the home page, following same-origin redirects, and every page the crawl reaches (up to `--max-pages`, default 25), and reads every `Set-Cookie`.
 2. On https, each cookie must have `Secure`.
-3. Cookies whose names look like sessions (session, sid, auth, token, jwt and similar, judged after any `__Host-` or `__Secure-` prefix) must have `HttpOnly`.
+3. Cookies whose names look like sessions must have `HttpOnly`. A name counts when one of its words (split on punctuation and camelCase, after any `__Host-` or `__Secure-` prefix) is session, sess, sid, sessionid, auth, token, jwt, login, remember or refresh, so `author` or `consider` do not count. Double-submit CSRF cookies (`csrftoken`, `XSRF-TOKEN`, `_csrf`, `csrf_token`) are exempt: JavaScript must read them by design.
 4. Each cookie must have an explicit `SameSite` attribute.
 5. Pass: all rules hold. Fail: a Secure or HttpOnly rule is broken; the report names the cookie. A cookie with no `SameSite` is a warning, because browsers default it to Lax. No cookies on any crawled page is reported as not applicable; log in with a test account and repeat on the session cookie.
 
@@ -194,10 +194,11 @@ Prefer no CORS: a Next.js front end and its route handlers are same-origin. If c
 
 ### Proof test
 
-1. The tool sends one GET to the home page with `Origin: https://asa-probe.invalid` (reserved TLD, never a real host).
-2. Fail: the response echoes that origin in `Access-Control-Allow-Origin` together with `Access-Control-Allow-Credentials: true`.
-3. Pass: otherwise.
-4. Manual extra: repeat against each API route and an OPTIONS preflight, also with `Origin: null` and `Origin: https://<yourdomain>.asa-probe.invalid`. Read-only requests only.
+1. The tool sends one GET to the home page per test origin: `https://asa-origin-probe.invalid` (reserved TLD, never a real host), `null`, `https://<yourhost>.asa-origin-probe.invalid` (an allowlist that checks "starts with"), `https://asa-origin-probe-<yourhost>` (one that checks "ends with") and `https://asa-origin-probe.<yourhost>` (a subdomain). The origins are header values only; nothing is sent to them.
+2. Fail: the response echoes any of the first four in `Access-Control-Allow-Origin` together with `Access-Control-Allow-Credentials: true`.
+3. Warning: one of them is echoed without credentials, or the subdomain origin is echoed with credentials (safe only if every subdomain is trusted).
+4. Pass: otherwise.
+5. Manual extra: repeat against each API route and an OPTIONS preflight. Read-only requests only.
 
 ### Sources
 
@@ -218,9 +219,9 @@ Send `Cross-Origin-Opener-Policy: same-origin` (`same-origin-allow-popups` if th
 
 ### Proof test
 
-1. The tool fetches the home page, following same-origin redirects.
-2. Pass: `Permissions-Policy` is present and `Cross-Origin-Opener-Policy` is `same-origin` or `same-origin-allow-popups`.
-3. Fail: either header missing or COOP is `unsafe-none`.
+1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result.
+2. Pass on every page: `Permissions-Policy` is present and `Cross-Origin-Opener-Policy` is `same-origin` or `same-origin-allow-popups`.
+3. Warning: either header missing or COOP is `unsafe-none`.
 4. Manual extra: if the app uses popups, run the OAuth or payment popup flow once on staging and confirm it still completes.
 
 ### Sources
@@ -584,7 +585,7 @@ Install libraries through the package manager and keep them current (`npm outdat
 
 ### Proof test
 
-1. The tool crawls the site, reads the version from script URLs (for example `jquery-3.4.1.min.js`, `/jquery@3.4.1/`, `/ajax/libs/jquery/3.4.1/`) and from the license banner of same-origin scripts.
+1. The tool crawls the site, reads the version from script URLs (for example `jquery-3.4.1.min.js`, `/jquery@3.4.1/`, `/ajax/libs/jquery/3.4.1/`) and from the license banner of same-origin scripts. A banner counts only at the start of the library's own header comment (`/*! jQuery v3.4.1`), so a plugin's "Requires jQuery v1.7.2 or later" line is not read as jQuery.
 2. It compares against a short embedded list: jQuery < 3.5.0, Bootstrap < 3.4.1 or 4.0.0 to 4.3.0, lodash < 4.17.21, Moment.js < 2.29.4 (fail), AngularJS 1.x (warning, end of life).
 3. Pass: no listed library at a vulnerable version is recognised. Bundled code without a banner or version in its URL is not recognised; run `npm audit` on the repository as well.
 

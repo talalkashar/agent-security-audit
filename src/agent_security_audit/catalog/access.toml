@@ -13,9 +13,9 @@ risk = """The anon (publishable) key is public by design, and Supabase's Data AP
 build = """Every `create table` in an exposed schema is followed in the same migration by `alter table ... enable row level security;` and an explicit policy per needed operation. Keep internal tables in a non-exposed schema (e.g. `private`), or revoke default privileges from `anon, authenticated` so exposure is opt-in. Run `supabase db lint` or the Security Advisor in CI and fail on ERROR (lint 0013 `rls_disabled_in_public`). The anon key in the bundle is expected; a service_role key is NEXT-01."""
 proof = """1. The tool finds the Supabase project URL and anon key in the site's public JavaScript.
 2. It takes the table names from `--supabase-table` (best: copy them from the repo's migrations), else from `.from('<table>')` calls in the site's JavaScript. Listing tables from the API root (`GET /rest/v1/`) is only a fallback: Supabase stopped serving it to the anon key in 2026 (new projects from 11 March, all projects from 8 April), so it usually answers 401 and the check reports manual.
-3. For each table it requests 1 row with the anon key only (no user token, `limit=1`, read-only).
-4. It reports table names only, never row contents.
-Pass: every table returns 401/403 or zero rows. Fail: any table returns a row."""
+3. For each table it sends one HEAD request with the anon key only (no user token, `limit=1`, `Prefer: count=exact`). A HEAD answer has no body, so no row is downloaded; the `Content-Range` header says how many rows the key can see.
+4. It reports table names and row counts only, never row contents.
+Pass: every table answers 401 or 403. Fail: any table shows one or more rows. Warning: a table shows zero rows (RLS filtering, or the table is empty). Manual: a table answers 404 (not a table in the exposed schema: a typo or a storage bucket) or anything else that does not prove a refusal."""
 sources = [
   { title = "Supabase: Row Level Security", url = "https://supabase.com/docs/guides/database/postgres/row-level-security" },
   { title = "Supabase: Securing your API", url = "https://supabase.com/docs/guides/api/securing-your-api" },

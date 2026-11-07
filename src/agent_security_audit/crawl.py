@@ -85,6 +85,17 @@ class Site:
         return text + ("; " + "; ".join(self.notes) if self.notes else "")
 
 
+def _join(base, value):
+    """urljoin without a fragment, or None for a URL that does not parse (a bad port or IPv6 literal on a hostile
+    page)."""
+    try:
+        url = urldefrag(urljoin(base, value))[0]
+        urlsplit(url).port  # noqa: B018 - raises ValueError for a bad port
+        return url
+    except ValueError:
+        return None
+
+
 class _PageParser(HTMLParser):
     def __init__(self, url):
         super().__init__(convert_charrefs=True)
@@ -96,8 +107,8 @@ class _PageParser(HTMLParser):
         value = (value or "").strip()
         if not value:
             return None
-        url = urldefrag(urljoin(self.base, value))[0]
-        return url if urlsplit(url).scheme in ("http", "https") else None
+        url = _join(self.base, value)
+        return url if url and urlsplit(url).scheme in ("http", "https") else None
 
     def _res(self, tag, kind, value, integrity=""):
         url = self._abs(value)
@@ -107,7 +118,7 @@ class _PageParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         a = {k.lower(): (v or "") for k, v in attrs}
         if tag == "base" and a.get("href") and not self._based:
-            self.base, self._based = urljoin(self.page, a["href"].strip()), True
+            self.base, self._based = _join(self.page, a["href"].strip()) or self.page, True
         elif tag in ("a", "area"):
             url = self._abs(a.get("href"))
             if url:
@@ -189,8 +200,8 @@ class _Crawler:
         return self.cap is None or getattr(self.client, "sent", 0) - self.start < self.cap
 
     def note_link(self, url):
-        url = urldefrag(url)[0]
-        if not same_origin(self.ctx.target, url):
+        url = _join(url, "") if url else None
+        if url is None or not same_origin(self.ctx.target, url):
             return None
         parts = urlsplit(url)
         if SKIP_LINK.search(parts.path + "?" + parts.query):
@@ -263,8 +274,8 @@ class _Crawler:
                 key, value = key.strip().lower(), value.split("#", 1)[0].strip()
                 if not sep or not value:
                     continue
-                if key == "sitemap":
-                    sitemaps.append(urljoin(target + "/", value))
+                if key == "sitemap" and _join(target + "/", value):
+                    sitemaps.append(_join(target + "/", value))
                 elif key == "disallow" and value.startswith("/") and self.honor_robots:
                     self.disallow.append(value.split("*", 1)[0].split("$", 1)[0] or "/")
                 elif key in ("allow", "disallow") and value.startswith("/") and not any(c in value for c in "*$"):
@@ -302,7 +313,9 @@ class _Crawler:
                     break
                 continue
             if resp.is_redirect and resp.get("location"):
-                self.enqueue(urljoin(resp.url, resp.get("location")), depth)
+                nxt = _join(resp.url, resp.get("location"))
+                if nxt:
+                    self.enqueue(nxt, depth)
             elif resp.status == 200 and is_html(resp):
                 self.add_page(resp, depth)
         if self.queue and len(self.site.pages) >= self.max_pages:

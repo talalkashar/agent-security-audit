@@ -11,8 +11,8 @@
 | [INFRA-03](#infra-03-legacy-tls-10-and-11-refused) | medium | L6 | auto | Legacy TLS 1.0 and 1.1 refused |
 | [INFRA-04](#infra-04-sensitive-files-not-served-env-git-backups-ds_store) | critical | L7 | auto | Sensitive files not served (.env, .git, backups, .DS_Store) |
 | [INFRA-05](#infra-05-securitytxt-published) | low | L7 | auto | security.txt published |
-| [INFRA-06](#infra-06-spf-record-restricts-senders) | high | L7 | auto | SPF record restricts senders |
-| [INFRA-07](#infra-07-dmarc-policy-enforced) | high | L7 | auto | DMARC policy enforced |
+| [INFRA-06](#infra-06-spf-record-restricts-senders) | medium | L7 | auto | SPF record restricts senders |
+| [INFRA-07](#infra-07-dmarc-policy-enforced) | medium | L7 | auto | DMARC policy enforced |
 | [INFRA-08](#infra-08-no-secrets-in-git-history-or-working-tree) | critical | L7 | review | No secrets in git history or working tree |
 | [INFRA-09](#infra-09-dkim-signing-passes-for-every-sending-service) | high | L7 | assisted | DKIM signing passes for every sending service |
 | [INFRA-10](#infra-10-no-dangling-dns-records-subdomain-takeover) | high | L7 | review | No dangling DNS records (subdomain takeover) |
@@ -51,7 +51,9 @@ Serve every hostname through Vercel or another host that forces HTTPS. Keep apex
 
 1. Request http://<host>/ for the apex, www and every known subdomain, without following redirects.
 2. Pass: 301 or 308 with a Location starting https:// on the same host.
-3. Fail: a 200 (content served over HTTP) or a redirect to another http:// URL.
+3. Pass also: port 80 refuses the connection (nothing is served without TLS).
+4. Fail: a 200 (content served over HTTP) or a redirect to another http:// URL. Warning: a temporary redirect (302/307) or a redirect to HTTPS on another host.
+5. Manual: port 80 does not answer at all. A silent drop cannot be told apart from a network problem on the way, so open http:// in a browser and confirm it does not load or redirects.
 
 ### Sources
 
@@ -59,7 +61,7 @@ Serve every hostname through Vercel or another host that forces HTTPS. Keep apex
 
 ## INFRA-02 TLS certificate valid and not near expiry
 
-Severity: high · OSI layer 6 (Presentation) · CWE-298, CWE-295 · Mode: auto (proof test built in) · Stacks: any
+Severity: high · OSI layer 6 (Presentation) · CWE-324 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -143,9 +145,9 @@ Add public/.well-known/security.txt with `Contact: mailto:security@<domain>` (a 
 
 ### Proof test
 
-1. GET https://<host>/.well-known/security.txt.
-2. Pass: 200, text/plain, a Contact: line, and an Expires: date in the future.
-3. Fail: missing, not text/plain (for example an SPA HTML page), no Contact, or Expires in the past.
+1. GET https://<host>/.well-known/security.txt. Redirects on the same site are followed (RFC 9116 allows them, up to 3 hops); a redirect to another host is reported as manual, because the scan does not leave the target.
+2. Pass: 200, not HTML, a Contact: line, and an Expires: date in the future.
+3. Warning: missing, HTML instead of text (for example an SPA page), no Contact or Expires, or Expires in the past. It is a disclosure-process gap, not a flaw in the site.
 
 ### Sources
 
@@ -153,7 +155,7 @@ Add public/.well-known/security.txt with `Contact: mailto:security@<domain>` (a 
 
 ## INFRA-06 SPF record restricts senders
 
-Severity: high · OSI layer 7 (Application) · CWE-290 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-290 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -178,7 +180,7 @@ Publish exactly one `v=spf1` TXT record at the apex listing only senders in use 
 
 ## INFRA-07 DMARC policy enforced
 
-Severity: high · OSI layer 7 (Application) · CWE-290 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-290 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 

@@ -12,6 +12,7 @@ import socket
 from urllib.parse import urlsplit
 
 LOCAL_SUFFIXES = (".localhost", ".test")
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 class ScopeError(ValueError):
@@ -40,10 +41,14 @@ def normalize_target(url: str) -> str:
         raise ScopeError(f"no host in {url!r}")
     if parts.username or parts.password:
         raise ScopeError("credentials in the URL are not allowed; pass test accounts separately")
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ScopeError(f"bad port in {url!r}") from exc
     host = parts.hostname
     netloc = f"[{host}]" if ":" in host else host
-    if parts.port:
-        netloc += f":{parts.port}"
+    if port and port != DEFAULT_PORTS[parts.scheme]:
+        netloc += f":{port}"
     return f"{parts.scheme}://{netloc}"
 
 
@@ -91,6 +96,17 @@ def check_authorized(target: str, authorized: bool) -> None:
         )
 
 
+def origin(url: str):
+    """(scheme, host, port) with the scheme's default port filled in, so https://h and https://h:443 are equal.
+    None for a URL that does not parse (a bad port or IPv6 literal from a hostile page or Location header)."""
+    try:
+        parts = urlsplit(url)
+        scheme = parts.scheme.lower()
+        return scheme, parts.hostname, parts.port or DEFAULT_PORTS.get(scheme)
+    except ValueError:
+        return None
+
+
 def same_origin(target: str, url: str) -> bool:
-    a, b = urlsplit(target), urlsplit(url)
-    return (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port)
+    a = origin(target)
+    return a is not None and a == origin(url)

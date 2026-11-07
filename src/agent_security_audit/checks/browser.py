@@ -1,16 +1,28 @@
-"""Browser-side defenses proven from response headers and cookies (OSI layer 7)."""
+"""Browser-side defenses proven from response headers and cookies (OSI layer 7).
+
+Header checks read every HTML page of the shared crawl (home first) and report the worst page, because a header set
+only on the home page leaves the rest of the site open."""
 
 from __future__ import annotations
 
+import html
+import ipaddress
+import re
 from urllib.parse import urlsplit
 
-from ..crawl import crawl
+from ..crawl import crawl, is_html
 from ..model import failed, passed, skipped, warned
-from . import auto
+from . import auto, count
 
 ONE_YEAR = 31536000
 PROBE_ORIGIN = "https://asa-origin-probe.invalid"
-SESSION_HINTS = ("session", "sess", "auth", "token", "jwt", "sid", "login", "remember")
+# Whole words in a cookie name (split on punctuation and camelCase) that mark a session or auth cookie. Whole words, so
+# "author" or "consider" do not count.
+SESSION_WORDS = {"session", "sess", "sessid", "sessionid", "sid", "auth", "token", "jwt", "login", "remember",
+                 "refresh", "jsessionid", "phpsessid"}
+# Double-submit CSRF cookies (Django csrftoken, Laravel/Angular XSRF-TOKEN, csurf _csrf) must be readable by
+# JavaScript, so a missing HttpOnly on them is by design.
+CSRF_WORDS = {"csrf", "xsrf", "csrftoken", "xsrftoken"}
 SAFE_REFERRER = {"no-referrer", "same-origin", "strict-origin", "strict-origin-when-cross-origin"}
 KNOWN_REFERRER = SAFE_REFERRER | {"no-referrer-when-downgrade", "origin", "origin-when-cross-origin", "unsafe-url"}
 NONCE_OR_HASH = ("'nonce-", "'sha256-", "'sha384-", "'sha512-")
@@ -19,6 +31,55 @@ NONCE_OR_HASH = ("'nonce-", "'sha256-", "'sha384-", "'sha512-")
 def _hdr(resp, name):
     value = resp.get(name)
     return f"{name}: {value}" if value is not None else f"{name}: (not set)"
+
+
+META_TAG = re.compile(r"(?is)<meta\b[^>]*>")
+META_ATTR = re.compile(r"""(?is)([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
+# Browsers ignore these directives when the policy comes from a <meta> tag (CSP3, section 3.3).
+META_IGNORED = ("frame-ancestors", "report-uri", "sandbox")
+
+
+def meta_csp(resp):
+    """Policies delivered in <meta http-equiv="Content-Security-Policy" content="..."> on an HTML page."""
+    if not is_html(resp):
+        return []
+    out = []
+    for tag in META_TAG.findall(resp.text[:65536]):
+        attrs = {m.group(1).lower(): html.unescape(m.group(2) or m.group(3) or m.group(4) or "")
+                 for m in META_ATTR.finditer(tag[5:])}
+        if attrs.get("http-equiv", "").strip().lower() == "content-security-policy" and attrs.get("content", "").strip():
+            out.append(attrs["content"].strip())
+    return out
+
+
+def _csp_ev(resp):
+    return [_hdr(resp, "content-security-policy")] + [f'<meta http-equiv="Content-Security-Policy">: {v}'
+                                                      for v in meta_csp(resp)]
+
+
+RANK = {"fail": 0, "warn": 1, "pass": 2}
+
+
+def _page_path(resp):
+    parts = urlsplit(resp.url)
+    return (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+
+
+def per_page(ctx, judge):
+    """Run judge(resp) -> Result on every crawled HTML page (or the home page when the crawl found none) and return
+    the worst result, naming the page it came from and how many pages share it."""
+    pages = list(crawl(ctx).pages) or [ctx.client.home()]
+    judged = [(page, judge(page)) for page in pages]
+    page, worst = min(judged, key=lambda pr: RANK.get(pr[1].status, 3))
+    same = [_page_path(p) for p, r in judged if (r.status, r.summary) == (worst.status, worst.summary)]
+    worst.evidence = [f"page: {_page_path(page)}"] + worst.evidence
+    if len(pages) > 1:
+        if worst.status == "pass":
+            worst.summary = worst.summary.rstrip(".") + f" (all {len(pages)} crawled pages)."
+        else:
+            listed = ", ".join(same[:5]) + (", ..." if len(same) > 5 else "")
+            worst.summary += f" Seen on {len(same)} of {count(len(pages), 'crawled page')}: {listed}."
+    return worst
 
 
 def parse_csp(value):
@@ -32,9 +93,14 @@ def parse_csp(value):
 
 
 def _merged_csp(resp):
-    """One dict per enforced CSP. Several headers (or one header with comma-separated policies) all apply: a load
-    must pass every policy, so the strictest policy decides each question."""
-    return [parse_csp(p) for v in resp.get_all("content-security-policy") for p in v.split(",") if p.strip()]
+    """One dict per enforced CSP. Several headers (or one header with comma-separated policies) and <meta> policies
+    all apply: a load must pass every policy, so the strictest policy decides each question."""
+    policies = [parse_csp(p) for v in resp.get_all("content-security-policy") for p in v.split(",") if p.strip()]
+    for value in meta_csp(resp):
+        policy = {k: v for k, v in parse_csp(value).items() if k not in META_IGNORED}
+        if policy:
+            policies.append(policy)
+    return policies
 
 
 def _any_host(source):
@@ -70,7 +136,10 @@ def _script_problems(policy):
 def hsts(ctx):
     if not ctx.https:
         return skipped("BROWSER-01", "Target is plain HTTP; HSTS only applies to HTTPS sites. Scan the https:// URL.")
-    resp = ctx.client.home()
+    return per_page(ctx, _hsts)
+
+
+def _hsts(resp):
     value = resp.get("strict-transport-security")
     ev = [_hdr(resp, "strict-transport-security")]
     if not value:
@@ -92,22 +161,25 @@ def hsts(ctx):
     if max_age < ONE_YEAR:
         return failed("BROWSER-01", f"HSTS max-age is {max_age}s; use at least {ONE_YEAR} (one year).", ev)
     if not subdomains:
-        return failed("BROWSER-01", "HSTS has no includeSubDomains, so subdomains (and cookies scoped to the parent "
+        return warned("BROWSER-01", "HSTS has no includeSubDomains, so subdomains (and cookies scoped to the parent "
                       "domain) can still be reached over HTTP.", ev)
     return passed("BROWSER-01", f"HSTS is on with max-age {max_age} and includeSubDomains.", ev)
 
 
 @auto("BROWSER-02")
 def csp(ctx):
-    resp = ctx.client.home()
+    return per_page(ctx, _csp)
+
+
+def _csp(resp):
     policies = _merged_csp(resp)
-    ev = [_hdr(resp, "content-security-policy")]
+    ev = _csp_ev(resp)
     if not policies:
         ro = resp.get("content-security-policy-report-only")
         if ro:
             return warned("BROWSER-02", "CSP is report-only, so it blocks nothing yet.",
                           ev + [f"content-security-policy-report-only: {ro}"])
-        return failed("BROWSER-02", "No Content-Security-Policy header; injected scripts would run.", ev)
+        return failed("BROWSER-02", "No Content-Security-Policy (header or meta tag); injected scripts would run.", ev)
     scripted = [p for p in policies if "script-src" in p or "default-src" in p]
     if not scripted:
         return failed("BROWSER-02", "CSP does not stop injected scripts: no script-src or default-src directive, so "
@@ -136,7 +208,10 @@ def csp(ctx):
 
 @auto("BROWSER-03")
 def nosniff(ctx):
-    resp = ctx.client.home()
+    return per_page(ctx, _nosniff)
+
+
+def _nosniff(resp):
     value = (resp.get("x-content-type-options") or "").strip().lower()
     ev = [_hdr(resp, "x-content-type-options")]
     if value == "nosniff":
@@ -146,7 +221,11 @@ def nosniff(ctx):
 
 @auto("BROWSER-04")
 def framing(ctx):
-    resp = ctx.client.home()
+    return per_page(ctx, _framing)
+
+
+def _framing(resp):
+    # _merged_csp drops frame-ancestors from <meta> policies, as browsers do.
     ev = [_hdr(resp, "content-security-policy"), _hdr(resp, "x-frame-options")]
     ancestors = [p["frame-ancestors"] for p in _merged_csp(resp) if "frame-ancestors" in p]
     if ancestors:
@@ -164,7 +243,10 @@ def framing(ctx):
 
 @auto("BROWSER-05")
 def referrer(ctx):
-    resp = ctx.client.home()
+    return per_page(ctx, _referrer)
+
+
+def _referrer(resp):
     value = resp.get("referrer-policy")
     ev = [_hdr(resp, "referrer-policy")]
     if not value:
@@ -194,10 +276,20 @@ def parse_set_cookie(value):
     return name, attrs
 
 
+def _words(name):
+    return re.findall(r"[a-z0-9]+", re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower())
+
+
+def is_csrf_cookie(name):
+    return any(w in CSRF_WORDS for w in _words(name))
+
+
 def _looks_like_session(name):
     # __Host- and __Secure- are hardening prefixes, not a sign of a session; judge the name after them.
     low = name.lower().removeprefix("__host-").removeprefix("__secure-")
-    return low.startswith("sb-") or any(h in low for h in SESSION_HINTS)
+    if is_csrf_cookie(name):
+        return False
+    return low.startswith("sb-") or any(w in SESSION_WORDS for w in _words(name))
 
 
 @auto("BROWSER-06")
@@ -211,7 +303,7 @@ def cookies(ctx):
                 raw.append(value)
                 where[value] = urlsplit(resp.url).path or "/"
     if not raw:
-        return skipped("BROWSER-06", f"None of the {len(responses)} crawled page(s) set a cookie. Log in with a test "
+        return skipped("BROWSER-06", f"None of the {count(len(responses), 'crawled page')} set a cookie. Log in with a test "
                        "account and re-check the session cookie (see the proof steps).")
     fails, warns, ev = [], [], []
     for value in raw:
@@ -219,7 +311,8 @@ def cookies(ctx):
         flags = [k for k in ("secure", "httponly") if k in attrs]
         same = attrs.get("samesite", "")
         ev.append(f"{name} (set on {where[value]}): {', '.join(flags) or 'no flags'}"
-                  + (f", SameSite={same}" if same else ", no SameSite"))
+                  + (f", SameSite={same}" if same else ", no SameSite")
+                  + (" (CSRF cookie, readable by JavaScript by design)" if is_csrf_cookie(name) else ""))
         session = _looks_like_session(name)
         if ctx.https and "secure" not in attrs:
             fails.append(f"{name} lacks Secure")
@@ -237,32 +330,59 @@ def cookies(ctx):
         return failed("BROWSER-06", "Cookie flags are missing: " + "; ".join(fails) + ".", ev)
     if warns:
         return warned("BROWSER-06", "Cookies are mostly safe: " + "; ".join(warns) + ".", ev)
-    return passed("BROWSER-06", f"All {len(raw)} cookie(s) set on {len(responses)} crawled page(s) have safe flags.", ev)
+    return passed("BROWSER-06", f"{'The' if len(raw) == 1 else 'All'} {count(len(raw), 'cookie')} set on "
+                  f"{count(len(responses), 'crawled page')} {'has' if len(raw) == 1 else 'have'} safe flags.", ev)
+
+
+def cors_origins(target):
+    """[(kind, Origin)] to send. Every name is under the reserved .invalid TLD or is only a header value: the Origin
+    header is never contacted. The suffix and prefix forms catch allowlists that test "ends with" or "starts with" the
+    site's name; the subdomain form shows whether every subdomain is trusted."""
+    parts = urlsplit(target)
+    host = parts.hostname or ""
+    out = [("any site", PROBE_ORIGIN), ("null", "null")]
+    if ":" not in host:  # not an IPv6 literal
+        out += [("suffix", f"https://{host}.asa-origin-probe.invalid"), ("prefix", f"https://asa-origin-probe-{host}")]
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            out.append(("subdomain", f"{parts.scheme}://asa-origin-probe.{parts.netloc}"))
+    return out
 
 
 @auto("BROWSER-07")
 def cors(ctx):
     findings, ev = [], []
-    for origin in (PROBE_ORIGIN, "null"):
+    for kind, origin in cors_origins(ctx.target):
         resp = ctx.client.get("/", headers={"Origin": origin})
         acao = resp.get("access-control-allow-origin")
         acac = (resp.get("access-control-allow-credentials") or "").strip().lower() == "true"
-        ev.append(f"Origin: {origin} -> access-control-allow-origin: {acao or '(not set)'}, "
+        ev.append(f"Origin: {origin} ({kind}) -> access-control-allow-origin: {acao or '(not set)'}, "
                   f"allow-credentials: {'true' if acac else 'no'}")
-        if acao and acao.strip() == origin:
-            findings.append((acac, origin))
-    if any(cred for cred, _ in findings):
-        bad = ", ".join(o for c, o in findings if c)
+        if acao and acao.strip().lower() == origin.lower():
+            findings.append((kind, origin, acac))
+    untrusted = [(o, c) for k, o, c in findings if k != "subdomain"]
+    subdomain = [o for k, o, c in findings if k == "subdomain" and c]
+    if any(c for _, c in untrusted):
+        bad = ", ".join(o for o, c in untrusted if c)
         return failed("BROWSER-07", f"The site echoes untrusted origins ({bad}) with credentials allowed, so other sites "
                       "can read logged-in responses.", ev)
-    if findings:
-        return warned("BROWSER-07", "The site echoes any Origin without credentials; fine for public data only.", ev)
+    if untrusted:
+        return warned("BROWSER-07", "The site echoes untrusted origins without credentials; fine for public data only.",
+                      ev)
+    if subdomain:
+        return warned("BROWSER-07", "The site lets any subdomain read logged-in responses (credentials allowed). That is "
+                      "safe only if every subdomain is trusted: one with an XSS bug or a dangling DNS record can read "
+                      "your users' data. Allow exact origins instead.", ev)
     return passed("BROWSER-07", "Untrusted origins are not allowed to read responses.", ev)
 
 
 @auto("BROWSER-08")
 def isolation(ctx):
-    resp = ctx.client.home()
+    return per_page(ctx, _isolation)
+
+
+def _isolation(resp):
     pp = resp.get("permissions-policy")
     coop = (resp.get("cross-origin-opener-policy") or "").strip().lower()
     ev = [_hdr(resp, "permissions-policy"), _hdr(resp, "cross-origin-opener-policy")]

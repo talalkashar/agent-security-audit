@@ -56,12 +56,17 @@ def txt_records(ctx, name):
     resp = ctx.client.external("GET", url, headers={"Accept": "application/dns-json"})
     if resp.status != 200:
         raise OSError(f"DNS resolver answered {resp.status}")
-    data = json.loads(resp.text)
+    try:
+        data = json.loads(resp.text)
+    except ValueError as exc:
+        raise OSError("DNS resolver answered with something that is not JSON") from exc
+    if not isinstance(data, dict):
+        raise OSError("DNS resolver answered with unexpected JSON")
     records = []
     for ans in data.get("Answer", []) or []:
-        if ans.get("type") != 16:
+        if not isinstance(ans, dict) or ans.get("type") != 16:
             continue
-        raw = ans.get("data", "")
+        raw = str(ans.get("data", ""))
         parts = QUOTED.findall(raw)
         records.append("".join(parts) if parts else raw)
     return records

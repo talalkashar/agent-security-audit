@@ -137,7 +137,7 @@ class HeaderChecksTest(unittest.TestCase):
                  ((("Strict-Transport-Security", "max-age=300"),), "fail"),
                  ((("Strict-Transport-Security", "max-age=600; includeSubDomains"),), "fail"),
                  ((("Strict-Transport-Security", "max-age=0; includeSubDomains"),), "fail"),
-                 ((("Strict-Transport-Security", "max-age=31536000"),), "fail"),
+                 ((("Strict-Transport-Security", "max-age=31536000"),), "warn"),
                  ((("Strict-Transport-Security", 'max-age="63072000"; includesubdomains; preload'),), "pass"),
                  ((("Strict-Transport-Security", "max-age=abc"),), "fail"),
                  ((("Strict-Transport-Security", "includeSubDomains"),), "fail"),
@@ -282,7 +282,7 @@ class SecurityTxtTest(unittest.TestCase):
                 ctx = ctx_for(lambda m, u, h, b, body=body: resp(200, [("Content-Type", "text/plain")], body))
                 self.assertEqual(exposure.security_txt(ctx).status, want)
         html = ctx_for(lambda m, u, h, b: resp(200, [("Content-Type", "text/html")], "<html>Contact: x</html>"))
-        self.assertEqual(exposure.security_txt(html).status, "fail")
+        self.assertEqual(exposure.security_txt(html).status, "warn")
 
 
 class SecretDetectionTest(unittest.TestCase):
@@ -391,8 +391,12 @@ class ErrorLeakTest(unittest.TestCase):
         self.assertEqual(exposure.find_leaks('{"error":"Not found"}'), [])
 
     def test_check_passes_on_generic_errors(self):
-        ctx = ctx_for(lambda m, u, h, b: resp(404, [("Content-Type", "text/html")], NORMAL_HTML))
+        ctx = ctx_for(lambda m, u, h, b: resp(404 if m == "GET" else 400, [("Content-Type", "text/html")], NORMAL_HTML))
         self.assertEqual(exposure.error_leaks(ctx).status, "pass")
+
+    def test_not_found_pages_alone_prove_nothing(self):
+        ctx = ctx_for(lambda m, u, h, b: resp(404, [("Content-Type", "text/html")], NORMAL_HTML))
+        self.assertEqual(exposure.error_leaks(ctx).status, "manual")
 
     def test_check_fails_on_stack(self):
         stack = "Error: x\n    at fn (/var/task/.next/server/app.js:1:2)\n"
@@ -418,9 +422,11 @@ class RateLimitTest(unittest.TestCase):
     def test_429_without_retry_after_warns(self):
         self.assertEqual(ratelimit.login_rate_limit(self.ctx([401, 429], retry_after="")).status, "warn")
 
-    def test_no_429_fails(self):
+    def test_no_limit_observed_warns(self):
         ctx = self.ctx([401], rate_limit_attempts=10)
-        self.assertEqual(ratelimit.login_rate_limit(ctx).status, "fail")
+        r = ratelimit.login_rate_limit(ctx)
+        self.assertEqual(r.status, "warn")
+        self.assertIn("No limit observed up to 10", r.summary)
         self.assertEqual(len(ctx.client.calls), 10)
 
     def test_too_few_attempts_warns(self):
@@ -436,7 +442,7 @@ class RateLimitTest(unittest.TestCase):
     def test_no_path_is_manual(self):
         ctx = ctx_for(lambda m, u, h, b: resp(401))
         self.assertEqual(ratelimit.login_rate_limit(ctx).status, "manual")
-        self.assertEqual(ctx.client.calls, [])
+        self.assertEqual([c for c in ctx.client.calls if c[0] != "GET"], [])
 
     def test_404_first_is_error(self):
         ctx = self.ctx([404])
@@ -529,8 +535,12 @@ class SupabaseTest(unittest.TestCase):
                 return resp(200, [("Content-Type", "application/json")], json.dumps({"paths": paths}))
             table = u.split("/rest/v1/")[1].split("?")[0]
             status = table_status.get(table, 401)
-            body = json.dumps([{"id": 1, "secret": self.ROW_SECRET}] if rows else []) if status == 200 else "{}"
-            return resp(status, [("Content-Type", "application/json")], body)
+            # Row-free probe: HEAD with an exact count; the count comes back in Content-Range, no row in a body.
+            assert m == "HEAD" and h.get("Prefer") == "count=exact", (m, h)
+            headers = [("Content-Type", "application/json")]
+            if status == 200:
+                headers.append(("Content-Range", "0-0/3" if rows else "*/0"))
+            return resp(status, headers, "")
         ctx = ctx_for(route, target, allow_supabase=allow, supabase_tables=tables)
         ctx.authorized = authorized
         ctx.cache["scripts"] = [("/app.js", f'const u="{self.PROJECT}";const k="{key}";{js}')]
