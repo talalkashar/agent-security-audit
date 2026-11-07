@@ -1,0 +1,16 @@
+{
+  "name": "agent-security-audit",
+  "description": "Security checks a coding agent builds into a website, then proves on the running site.",
+  "owner": {
+    "name": "Talal Kashar",
+    "url": "https://github.com/talalkashar"
+  },
+  "plugins": [
+    {
+      "name": "agent-security-audit",
+      "source": "./",
+      "description": "Build rules while coding, proof tests with evidence before launch. Skill plus the asa-mcp server.",
+      "category": "security"
+    }
+  ]
+}

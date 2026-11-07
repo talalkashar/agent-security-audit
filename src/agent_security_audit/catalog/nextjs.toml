@@ -1,0 +1,302 @@
+# nextjs: Next.js App Router and Vercel platform specifics (client bundle, middleware, Server Actions, caching, image optimizer, previews, cron).
+
+[[check]]
+id = "NEXT-01"
+title = "No secret keys in client JavaScript"
+severity = "critical"
+layer = 7
+cwe = ["CWE-798", "CWE-200"]
+mode = "auto"
+stacks = ["nextjs"]
+risk = """Next.js inlines every `NEXT_PUBLIC_*` value into browser JavaScript at build time, so a secret given that prefix, or read by a module a client component imports, is readable by anyone from `/_next/static/chunks/*.js`. A leaked Supabase service_role key bypasses all RLS; a leaked Stripe or cloud key spends the owner's money."""
+build = """Only public values may use `NEXT_PUBLIC_`: the Supabase URL, the Supabase publishable/anon key, analytics IDs, the Stripe publishable key. Never a service_role or `sb_secret_` key, `sk_live_`/`rk_live_`, webhook secrets, `CRON_SECRET` or `VERCEL_AUTOMATION_BYPASS_SECRET`. Read secrets only inside modules that start with `import 'server-only'`. Add a CI step that fails the build if `.next/static` matches a secret pattern. If a secret was ever shipped, rotate it; removing it from the bundle is not enough."""
+proof = """1. The tool fetches the home page and the same-origin scripts it references (up to 40, 2 MB each).
+2. It matches known secret formats: Supabase service_role/secret JWT or `sb_secret_` key, Stripe `sk_live_`/`rk_live_`, AWS `AKIA` access key IDs, PEM private-key headers, GitHub, OpenAI, Anthropic and Slack tokens.
+3. Pass: no match. Fail: any match; evidence shows the script path and a masked prefix only, never the full value.
+4. With repo access, also grep `.env*` and code for `NEXT_PUBLIC_.*(SECRET|SERVICE_ROLE|PRIVATE|TOKEN)`. Pages behind login are not covered by the automatic scan."""
+sources = [
+  { title = "Next.js Data Security guide", url = "https://nextjs.org/docs/app/guides/data-security" },
+  { title = "Sprocket Security: Hunting secrets in JavaScript at scale (Vite analog)", url = "https://www.sprocketsecurity.com/blog/hunting-secrets-in-javascript-at-scale-how-a-vite-misconfiguration-lead-to-full-ci-cd-compromise" },
+]
+
+[[check]]
+id = "NEXT-02"
+title = "No production source maps"
+severity = "medium"
+layer = 7
+cwe = ["CWE-540"]
+mode = "auto"
+stacks = ["nextjs"]
+risk = """With `productionBrowserSourceMaps: true`, or an error-tracking upload step that leaves `.map` files deployed, the full original client source is served, including comments, internal endpoints and any inlined secrets. Next.js disables this by default to prevent leaking source."""
+build = """Keep `productionBrowserSourceMaps` unset or false in `next.config.*`. If error tracking needs maps, upload them to the vendor and delete them from the build output (Sentry `deleteSourcemapsAfterUpload`), or enable Vercel Protected Source Maps."""
+proof = """1. The tool fetches the same-origin scripts referenced by the home page (as in NEXT-01).
+2. For each script it checks for a `sourceMappingURL` reference and requests the `.map` file.
+3. Pass: no reference, and no `.map` file returns 200. Fail: a `.map` file is served with status 200."""
+sources = [
+  { title = "Next.js productionBrowserSourceMaps", url = "https://nextjs.org/docs/app/api-reference/config/next-config-js/productionBrowserSourceMaps" },
+  { title = "Vercel Deployment Protection (Protected Source Maps)", url = "https://vercel.com/docs/deployment-protection" },
+]
+
+[[check]]
+id = "NEXT-03"
+title = "Framework not advertised (X-Powered-By)"
+severity = "low"
+layer = 7
+cwe = ["CWE-200"]
+mode = "auto"
+stacks = ["nextjs"]
+risk = """Next.js sends `X-Powered-By: Next.js` by default. It does not reveal the version, but it tells scanners to try the long list of Next.js advisories (NEXT-04) against the site."""
+build = """Set `poweredByHeader: false` in `next.config.*`. Do not add other headers that name the framework or its version."""
+proof = """1. The tool requests the home page and reads the response headers.
+2. Pass: no `X-Powered-By` header, or one that does not name Next.js. Fail: `X-Powered-By` names Next.js."""
+sources = [
+  { title = "GitHub Security Advisories for vercel/next.js", url = "https://github.com/vercel/next.js/security/advisories" },
+]
+
+[[check]]
+id = "NEXT-04"
+title = "Next.js, React and sharp on a patched release"
+severity = "critical"
+layer = 7
+cwe = ["CWE-1395"]
+mode = "review"
+stacks = ["nextjs"]
+risk = """Next.js shipped critical unauthenticated RCEs (CVE-2025-55182 in React Server Components, CVE-2026-96889 SVG image optimizer, GHSA-673q-mjm6-r5xr `use cache`, CVE-2026-94545 next/og) and repeated middleware bypasses through 2026, such as CVE-2025-29927. An app pinned to an old minor version carries all of them, whatever its own code does."""
+build = """Pin `next` at or above the newest fixed release per line: 16.4.5 on 16.x, 15.5.29 on 15.x (as of 2026-11-07). Older lines carry unpatched 2026 advisories; upgrade off 12.x-14.x. Key fixed-version floors from the GHSA list:
+- Middleware auth bypass CVE-2025-29927: 12.3.5, 13.5.9, 14.2.25, 15.2.3.
+- RSC RCE CVE-2025-55182: 15.0.5-15.5.7 (per minor), 16.0.7.
+- Middleware bypasses CVE-2026-44573/44574/44575/45109: 15.5.18, 16.2.6; CVE-2026-64642: 16.2.11.
+- SSRF in Server Actions/rewrites CVE-2026-64649/64645: 15.5.21, 16.2.11.
+- Image optimizer AVIF RCE GHSA-2xp9-vwfh-vxw4 and Windows-host RCE CVE-2026-75604 (GHSA-p293-qw3h-jr36): 15.5.24, 16.3.3; next/og RCE CVE-2026-94545: 16.3.6.
+- SVG image RCE CVE-2026-96889: 15.5.28, 16.4.1, and resolved `sharp` >= 0.35.5; `use cache` RCE GHSA-673q-mjm6-r5xr: 16.4.1.
+- HttpOnly cookie in `x-middleware-set-cookie` CVE-2026-119346 and `use cache` cross-user leaks: 15.5.29, 16.4.5.
+Keep `react`/`react-dom` on the matching patched line. Enable Dependabot or Renovate for `next`. Run `npm audit --omit=dev` before launch and fail on high or critical."""
+proof = """1. In the repo, run `npm ls next react react-dom sharp` to read the resolved versions from the lockfile.
+2. Compare them with the advisory list (`gh api repos/vercel/next.js/security-advisories` or the GHSA page) and run `npm audit --omit=dev`.
+3. Pass: no open high or critical advisory affects the resolved versions, and `sharp` is >= 0.35.5. Fail: any high or critical advisory applies.
+HTTP alone cannot prove this: `X-Powered-By` (NEXT-03) shows the framework, not the version."""
+sources = [
+  { title = "GitHub Security Advisories for vercel/next.js", url = "https://github.com/vercel/next.js/security/advisories" },
+  { title = "GHSA-f82v-jwr5-mffw / CVE-2025-29927 middleware authorization bypass", url = "https://github.com/vercel/next.js/security/advisories/GHSA-f82v-jwr5-mffw" },
+  { title = "GHSA-9qr9-h5gf-34mp / CVE-2025-55182 RCE in React Server Components", url = "https://github.com/vercel/next.js/security/advisories/GHSA-9qr9-h5gf-34mp" },
+  { title = "GHSA-2464-fhr4-w9xw / CVE-2026-96889 RCE in Image Optimization with SVG", url = "https://github.com/vercel/next.js/security/advisories/GHSA-2464-fhr4-w9xw" },
+]
+
+[[check]]
+id = "NEXT-05"
+title = "Authorization enforced beyond middleware or proxy.ts"
+severity = "critical"
+layer = 7
+cwe = ["CWE-863", "CWE-288"]
+mode = "assisted"
+stacks = ["nextjs"]
+risk = """Many apps gate `/dashboard` or `/admin` only in `middleware.ts` (renamed `proxy.ts` in Next 16). Seven advisories from 2024 to 2026 let requests skip middleware, starting with CVE-2025-29927, and each became a full auth bypass for those apps. Middleware also never covers Server Actions called directly."""
+build = """Treat middleware or `proxy.ts` as an early redirect only. Enforce session and role again in a `server-only` Data Access Layer called from every protected page, layout data fetch, route handler and Server Action. With Supabase, call `supabase.auth.getUser()` (verified) on the server, not `getSession()`, and back every table with RLS (ACCESS-01). Stay patched (NEXT-04)."""
+proof = """1. List the protected routes: pages, `/api/*` and route handlers.
+2. With no cookies, send a plain GET to each, then the same GET with the request variants a real client navigation sends: header `RSC: 1`, the `?_rsc=` query, and a prefetch request.
+3. Pass: every variant returns a redirect to login, 401/403, or a body with no protected data. Fail: any variant returns protected content.
+4. In the repo, grep for an auth check outside `middleware.ts`/`proxy.ts` in each protected page, route handler and Server Action. Fail if the only check is in middleware."""
+sources = [
+  { title = "GHSA-f82v-jwr5-mffw / CVE-2025-29927 middleware authorization bypass", url = "https://github.com/vercel/next.js/security/advisories/GHSA-f82v-jwr5-mffw" },
+  { title = "Next.js Data Security guide", url = "https://nextjs.org/docs/app/guides/data-security" },
+]
+
+[[check]]
+id = "NEXT-06"
+title = "Every Server Action checks the caller and resource ownership"
+severity = "high"
+layer = 7
+cwe = ["CWE-862", "CWE-639"]
+mode = "assisted"
+stacks = ["nextjs"]
+risk = """Any exported `'use server'` function the client bundle references is a public POST endpoint that accepts arbitrary arguments. Developers assume the page's auth check protects it or trust a `userId` argument from the client, letting one user edit another's data; actions that return full DB rows leak extra fields."""
+build = """Start every action with `const user = await requireUser()` from a `server-only` DAL. Validate arguments with a schema (zod). Derive the user id from the session, never from arguments, and check that the user owns the target resource. Return a minimal result (`{ ok: true }` or a DTO), not the DB row."""
+proof = """1. With two test accounts (A and B) and a dedicated test record owned by A, capture the action POST (it carries a `Next-Action` header) that A sends to edit that record.
+2. Replay it with no cookies, then with B's cookies, targeting A's record.
+3. Pass: both return an error or make no change, and A's record is unchanged on re-read. Fail: either succeeds.
+4. Check that the action's response body holds no fields beyond what the UI renders. Stop if real user data appears."""
+sources = [
+  { title = "Next.js Data Security guide", url = "https://nextjs.org/docs/app/guides/data-security" },
+  { title = "GHSA-w37m-7fhw-fmv9 / CVE-2025-55183 Server Actions source code exposure", url = "https://github.com/vercel/next.js/security/advisories/GHSA-w37m-7fhw-fmv9" },
+]
+
+[[check]]
+id = "NEXT-07"
+title = "Server Action origin check not weakened"
+severity = "medium"
+layer = 7
+cwe = ["CWE-352", "CWE-346"]
+mode = "assisted"
+stacks = ["nextjs"]
+risk = """Next.js blocks cross-site Server Action calls by comparing `Origin` with `Host`/`X-Forwarded-Host`. The check fails open when `experimental.serverActions.allowedOrigins` holds wildcards or `'null'`, when a custom server lets the host header be influenced (CVE-2024-34351, CVE-2026-64649), or on versions before 16.1.7 where `Origin: null` counted as missing (CVE-2026-27978)."""
+build = """Leave `serverActions.allowedOrigins` unset unless a known proxy needs it; then list exact hosts, no `*` and no `'null'`. Set session cookies `SameSite=Lax` or `Strict` (BROWSER-06). When self-hosting, pin `Host`/`X-Forwarded-Host` at the proxy. Route handlers that change state with cookie auth need their own CSRF token or origin check."""
+proof = """1. In the repo, grep `next.config.*` for `allowedOrigins`. Fail if it contains `*` or `null`.
+2. With a test account, capture one harmless action POST (for example, a test-only display-name update).
+3. Replay it with `Origin: https://example.invalid`, then with `Origin: null`.
+4. Pass: both are rejected (non-2xx or an action error) and nothing changes. Fail: either succeeds."""
+sources = [
+  { title = "GHSA-mq59-m269-xvcx / CVE-2026-27978 Origin null bypasses Server Actions CSRF check", url = "https://github.com/vercel/next.js/security/advisories/GHSA-mq59-m269-xvcx" },
+  { title = "GHSA-89xv-2m56-2m9x / CVE-2026-64649 SSRF in Server Actions on custom servers", url = "https://github.com/vercel/next.js/security/advisories/GHSA-89xv-2m56-2m9x" },
+  { title = "GHSA-fr5h-rqp8-mj6g / CVE-2024-34351 SSRF in Server Actions via Host header", url = "https://github.com/vercel/next.js/security/advisories/GHSA-fr5h-rqp8-mj6g" },
+]
+
+[[check]]
+id = "NEXT-08"
+title = "RSC payload and client props carry only needed fields"
+severity = "high"
+layer = 7
+cwe = ["CWE-213", "CWE-200"]
+mode = "assisted"
+stacks = ["nextjs"]
+risk = """A Server Component that passes a whole DB row or user object to a `'use client'` component serializes every field into the RSC payload and HTML, including fields the UI never shows (email, phone, password hash, tokens, other users' data). The leak is invisible on screen."""
+build = """Fetch through a `server-only` DAL that returns DTOs with only the fields the UI needs, and type client component props narrowly. Enable `experimental.taint: true`; call `experimental_taintObjectReference` on raw user/session records and `experimental_taintUniqueValue` on tokens and keys. Never hard-code secrets in Server Action files."""
+proof = """1. Plant a unique canary value in a sensitive field of a second test account.
+2. Logged in as the first test account, load each authenticated page, and the same URL with header `RSC: 1`.
+3. Search the HTML and RSC payload for sensitive field names (`password`, `hash`, `token`, `secret`, `service_role`, `stripe_customer`) and for the canary.
+4. Pass: none present. Fail: any present. Stop if real user data appears."""
+sources = [
+  { title = "Next.js Data Security guide", url = "https://nextjs.org/docs/app/guides/data-security" },
+]
+
+[[check]]
+id = "NEXT-09"
+title = "Per-user data never stored in a shared cache"
+severity = "high"
+layer = 7
+cwe = ["CWE-524", "CWE-359"]
+mode = "assisted"
+stacks = ["nextjs", "vercel"]
+risk = """User-specific data cached under a key that omits the user (`unstable_cache` or `'use cache'` reading the user from a closure, a personalized page left static or ISR, `Cache-Control: public, s-maxage` on an authenticated route) is served from the data cache or CDN to other users. Next.js itself shipped several cross-user cache bugs in 2026, fixed in 16.4.5."""
+build = """Do not put per-user data in a shared cache; use `'use cache: private'` or no cache. If you must cache it, pass the user id as an argument so it enters the key. Authenticated pages must be dynamic (they call `cookies()` or `connection()`); no `revalidate` or `generateStaticParams` on pages that render session data. Authenticated route handlers return `Cache-Control: private, no-store`. Stay patched (NEXT-04)."""
+proof = """1. With test accounts A and B, plant a canary in each.
+2. Fetch each authenticated page and API as A, as B and unauthenticated, each with a unique cache-busting query. Pass: each sees only its own canary.
+3. Repeat without the cache-buster and read `Cache-Control`, `Age` and `x-vercel-cache`. Pass: authenticated responses are `private` or `no-store` and never a shared-cache `HIT`.
+4. Fail: B or an anonymous request sees A's canary, or a personalized response is a shared-cache `HIT`."""
+sources = [
+  { title = "Next.js unstable_cache reference", url = "https://nextjs.org/docs/app/api-reference/functions/unstable_cache" },
+  { title = "GitHub Security Advisories for vercel/next.js", url = "https://github.com/vercel/next.js/security/advisories" },
+]
+
+[[check]]
+id = "NEXT-10"
+title = "Caches vary on RSC request headers"
+severity = "medium"
+layer = 7
+cwe = ["CWE-349", "CWE-524"]
+mode = "assisted"
+stacks = ["nextjs"]
+risk = """The same URL returns HTML or an RSC payload depending on request headers. A cache that does not vary on them (ISR when self-hosted, or a second CDN in front of Vercel) can serve the RSC body or wrong content to every visitor. This recurred in advisories from 2024 to 2026 (CVE-2024-46982, CVE-2025-49005, CVE-2026-44576)."""
+build = """Stay patched (NEXT-04). With a CDN in front of Next.js, forward and vary on `RSC`, `Next-Router-State-Tree`, `Next-Router-Prefetch` and `Next-Router-Segment-Prefetch`, or bypass the CDN cache for those requests. Prefer Vercel's own edge cache over stacking a second CDN."""
+proof = """1. Use only a cache-busted URL (`?asa=<random>`) so the real cache is never touched.
+2. Request it once with header `RSC: 1`, then once plain.
+3. Pass: the plain response is `text/html` and `Vary` includes `RSC`. Fail: the plain request returns `text/x-component` or the cached RSC body."""
+sources = [
+  { title = "GitHub Security Advisories for vercel/next.js", url = "https://github.com/vercel/next.js/security/advisories" },
+]
+
+[[check]]
+id = "NEXT-11"
+title = "Image optimizer limited to exact remote sources"
+severity = "high"
+layer = 7
+cwe = ["CWE-918", "CWE-400"]
+mode = "assisted"
+stacks = ["nextjs"]
+risk = """`/_next/image` fetches and transforms remote URLs on the server. Wildcard `remotePatterns`, omitted `pathname`/`search`, `dangerouslyAllowLocalIP: true` or `dangerouslyAllowSVG: true` without a CSP turn it into an SSRF, XSS or cost-amplification proxy. The image pipeline also had critical RCEs (GHSA-2464-fhr4-w9xw SVG, GHSA-2xp9-vwfh-vxw4 AVIF) and an SSRF through allow-listed hosts (GHSA-cjq9-62q9-8jv4)."""
+build = """In `images.remotePatterns`, list exact `protocol`, `hostname`, `pathname` prefix and `search` for each source, only for hosts whose DNS you control. Never use `**` or `dangerouslyAllowLocalIP`. Keep `dangerouslyAllowSVG` false; if it must be on, also set `contentDispositionType: 'attachment'` and `contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;"`. Set `images.qualities` (required in Next 16). Stay patched (NEXT-04)."""
+proof = """1. In the repo, read `images` in `next.config.*`. Fail on `**`, a missing `pathname`, `dangerouslyAllowLocalIP: true`, or `dangerouslyAllowSVG: true` without the attachment and CSP settings.
+2. Request `/_next/image?url=<URL-encoded https://example.com/x.png>&w=64&q=75`, a host not on the allow list. Pass: 400. Fail: 200 image.
+3. If an allowed host serves SVG, request one. Pass: rejected, or served as an attachment with a restrictive CSP.
+Do not test internal IPs against production."""
+sources = [
+  { title = "Next.js Image component reference", url = "https://nextjs.org/docs/app/api-reference/components/image" },
+  { title = "GHSA-cjq9-62q9-8jv4 / CVE-2026-94483 SSRF in Image Optimization", url = "https://github.com/vercel/next.js/security/advisories/GHSA-cjq9-62q9-8jv4" },
+  { title = "GHSA-2464-fhr4-w9xw / CVE-2026-96889 RCE in Image Optimization with SVG", url = "https://github.com/vercel/next.js/security/advisories/GHSA-2464-fhr4-w9xw" },
+]
+
+[[check]]
+id = "NEXT-12"
+title = "Redirect parameters stay on the site's origin"
+severity = "medium"
+layer = 7
+cwe = ["CWE-601"]
+mode = "review"
+stacks = ["nextjs"]
+risk = """`redirect(searchParams.next)`, `NextResponse.redirect(new URL(returnTo, req.url))` and auth callbacks that forward `?next=` send users from a trusted domain to a phishing page, and in OAuth flows can leak codes. The Next.js Draft Mode guide warns about exactly this."""
+build = """For every `next`, `returnTo`, `redirect_to` and `callbackUrl` value, including the Supabase `/auth/callback` route: accept only paths that start with a single `/` (not `//` or `/\\`), parse with `new URL(value, origin)` and assert `url.origin === origin`; otherwise redirect to `/`."""
+proof = """1. In the repo, find every `redirect()`, `permanentRedirect()`, `NextResponse.redirect()` and `router.push()` that takes a value from the request (search params, form data, cookies), including draft-mode and auth routes.
+2. Pass: each one goes through a single helper that accepts only relative paths starting with one `/` (not `//` or `/\\`) or an allow-listed origin. Fail: any call uses the raw value.
+3. The runtime test (sending off-site values to each redirect parameter) is owned by BROWSER-15."""
+sources = [
+  { title = "Next.js Draft Mode guide", url = "https://nextjs.org/docs/app/guides/draft-mode" },
+]
+
+[[check]]
+id = "NEXT-13"
+title = "Draft Mode endpoint requires a strong secret"
+severity = "medium"
+layer = 7
+cwe = ["CWE-306"]
+mode = "assisted"
+stacks = ["nextjs"]
+risk = """A route that calls `draftMode().enable()` without a strong secret lets anyone read unpublished CMS content. A hard-coded or committed secret is effectively public, and CVE-2026-94544 showed draft content can also leak into cached public pages."""
+build = """Read the draft secret from a server env var (never `NEXT_PUBLIC_`), at least 32 random bytes, compared with `crypto.timingSafeEqual`. Require the slug to exist in the CMS and redirect to the CMS slug, not to a request parameter. Stay patched (NEXT-04)."""
+proof = """1. GET the draft route with no secret, then with a wrong secret.
+2. Pass: 401 and no `Set-Cookie: __prerender_bypass`. Fail: the cookie is set.
+3. In the repo, confirm the secret is not in code or git history (`git log -p -S <name>`)."""
+sources = [
+  { title = "Next.js Draft Mode guide", url = "https://nextjs.org/docs/app/guides/draft-mode" },
+]
+
+[[check]]
+id = "NEXT-14"
+title = "Vercel previews protected and isolated from production secrets"
+severity = "high"
+layer = 7
+cwe = ["CWE-284", "CWE-200"]
+mode = "review"
+stacks = ["vercel"]
+risk = """Every branch gets a `*.vercel.app` URL that is public unless Deployment Protection is on. Previews often run unfinished auth, debug routes or seed users; if Preview reuses production secrets or the production Supabase project, a preview leak becomes a production compromise. Bypass secrets put in query strings get logged by third parties and also skip bot protection and some firewall mitigations."""
+build = """Set Deployment Protection to Standard (or All Deployments for internal apps), as the team default. Store secrets as the Secret type with different values, and a separate Supabase project or branch, for Production vs Preview/Development, and turn on Require Separate Values. Send the protection bypass as a header, not the query parameter. Never expose `VERCEL_AUTOMATION_BYPASS_SECRET` as `NEXT_PUBLIC_`. Revoke unused bypass secrets and shareable links."""
+proof = """1. Get a recent preview URL, a branch URL and the production generated deployment URL (`vercel ls` or the GitHub deployment status).
+2. Request each with no cookies. Pass: 401 or a redirect to Vercel login or password. Fail: 200 app content.
+3. In the dashboard or `vercel env ls` (never print values), confirm secrets such as the Supabase service key have different Production and Preview values. Fail: the same value or the same Supabase project."""
+sources = [
+  { title = "Vercel Deployment Protection", url = "https://vercel.com/docs/deployment-protection" },
+  { title = "Vercel Protection Bypass for Automation", url = "https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/protection-bypass-automation" },
+  { title = "Vercel Config and Secret environment variables", url = "https://vercel.com/docs/environment-variables/sensitive-environment-variables" },
+]
+
+[[check]]
+id = "NEXT-15"
+title = "Vercel cron endpoints require CRON_SECRET"
+severity = "medium"
+layer = 7
+cwe = ["CWE-306"]
+mode = "assisted"
+stacks = ["vercel"]
+risk = """Cron paths in `vercel.json` are ordinary public routes. Without a `CRON_SECRET` check anyone can trigger billing syncs, emails, cleanup jobs or expensive AI calls. A check that compares the header with the string `Bearer ${process.env.CRON_SECRET}` passes on `Bearer undefined` when the variable is unset."""
+build = """Set `CRON_SECRET` (at least 16 random characters, Secret type, Production). In every cron route, reject unless the secret is set and the `Authorization` header matches, compared in constant time. Add `export const dynamic = 'force-dynamic'`. Make jobs idempotent and lock them, since Vercel may deliver twice. Vercel now calls Cron Jobs a legacy feature: for new jobs prefer Vercel Schedules with a private function target, so the route is not public at all; keep the `CRON_SECRET` check on any legacy `vercel.json` cron."""
+proof = """1. For each `crons[].path` in `vercel.json`, send a GET with no `Authorization`, with `Bearer wrong` and with `Bearer undefined`.
+2. Pass: 401 for all, and no side effect. Fail: any 2xx.
+Run on staging or against a no-op job if the job has side effects."""
+sources = [
+  { title = "Vercel Managing Cron Jobs", url = "https://vercel.com/docs/cron-jobs/manage-cron-jobs" },
+  { title = "Vercel: Migrating from Cron Jobs to Schedules", url = "https://vercel.com/docs/schedules/migrate-from-cron-jobs" },
+]
+
+[[check]]
+id = "NEXT-16"
+title = "No internal x-middleware headers in responses"
+severity = "medium"
+layer = 7
+cwe = ["CWE-1004", "CWE-200"]
+mode = "assisted"
+stacks = ["nextjs"]
+risk = """On affected versions, Edge-runtime responses that set cookies through `NextResponse` also emit `x-middleware-set-cookie`, copying HttpOnly session cookies into a header same-origin JavaScript can read (CVE-2026-119346, fixed 15.5.29 and 16.4.5). Older versions leaked `x-middleware-subrequest-id` to external hosts (CVE-2025-30218)."""
+build = """Upgrade (NEXT-04). Set session cookies through the Supabase SSR helpers on the Node runtime where possible. Cookie flags themselves belong to BROWSER-06."""
+proof = """1. Log in with a test account and capture the response headers of every auth or cookie-setting route and page.
+2. Pass: no `x-middleware-*` headers. Fail: any present, in particular one containing the session cookie value."""
+sources = [
+  { title = "GHSA-f3mh-rxg3-f5g2 / CVE-2026-119346 HttpOnly cookie exposed through x-middleware-set-cookie", url = "https://github.com/vercel/next.js/security/advisories/GHSA-f3mh-rxg3-f5g2" },
+]

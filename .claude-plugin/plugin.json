@@ -1,0 +1,13 @@
+{
+  "name": "agent-security-audit",
+  "version": "0.1.0",
+  "description": "Security checks a coding agent builds into a website, then proves on the running site with evidence. Build rules and proof tests for Next.js, Supabase and Vercel, mapped to OSI layers 1-7.",
+  "author": {
+    "name": "Talal Kashar",
+    "url": "https://github.com/talalkashar"
+  },
+  "homepage": "https://github.com/talalkashar/agent-security-audit",
+  "repository": "https://github.com/talalkashar/agent-security-audit",
+  "license": "MIT",
+  "keywords": ["security", "audit", "owasp", "nextjs", "supabase", "vercel", "pentest"]
+}

@@ -1,0 +1,376 @@
+# browser: response headers, cookies, CORS and client-side code that keep the page from being turned against its own users.
+
+[[check]]
+id = "BROWSER-01"
+title = "HSTS sent with a long max-age and includeSubDomains"
+severity = "medium"
+layer = 7
+cwe = ["CWE-319", "CWE-523"]
+mode = "auto"
+stacks = ["any"]
+risk = """Without HSTS, a user typing the bare domain on hostile Wi-Fi makes a first HTTP request that an active attacker can downgrade (SSL stripping) to read session cookies or inject script. Vercel's default on custom domains omits includeSubDomains, so sibling subdomains and parent-domain cookies stay exposed."""
+build = """Send `Strict-Transport-Security: max-age=63072000; includeSubDomains` on every HTTPS response from the apex and www, set in `next.config` `headers()` for `/(.*)` or in `vercel.json`, after confirming every subdomain serves HTTPS. Add `preload` only as a deliberate owner decision: hstspreload.org says inclusion cannot easily be undone and asks tools not to add it by default. HTTP to HTTPS redirects are INFRA-01."""
+proof = """1. The tool fetches the home page over HTTPS, following same-origin redirects.
+2. It reads the `Strict-Transport-Security` response header.
+3. Pass: header present with `max-age` of at least 31536000 and `includeSubDomains`.
+4. Fail: header missing, `max-age` below one year, or no `includeSubDomains`.
+5. Manual extra: repeat for `https://www.<domain>/`; if preload is intended, check status at hstspreload.org."""
+sources = [
+  { title = "RFC 6797: HTTP Strict Transport Security", url = "https://datatracker.ietf.org/doc/html/rfc6797" },
+  { title = "Vercel docs: Encryption and TLS (default HSTS)", url = "https://vercel.com/docs/security/encryption" },
+  { title = "HSTS preload list submission requirements", url = "https://hstspreload.org/" },
+  { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "BROWSER-02"
+title = "Content-Security-Policy without unsafe-inline scripts"
+severity = "high"
+layer = 7
+cwe = ["CWE-693", "CWE-79"]
+mode = "auto"
+stacks = ["any", "nextjs"]
+risk = """Without an enforcing CSP, any injection bug (BROWSER-09 to BROWSER-11) runs script in the site's origin. `'unsafe-inline'` without a nonce or hash gives no XSS protection, host allowlists are usually bypassable, and a Report-Only policy blocks nothing. Google's study of about 1.68M hosts found 94.72% of distinct CSPs trivially bypassable."""
+build = """For dynamic App Router pages, build the policy in `proxy.ts` (`middleware.ts` before Next.js 16) with a fresh nonce per request (`Buffer.from(crypto.randomUUID()).toString('base64')`) and set it on both the request headers and the response. Baseline from the Next.js docs: `default-src 'self'; script-src 'self' 'nonce-<N>' 'strict-dynamic'; style-src 'self' 'nonce-<N>'; img-src 'self' blob: data:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests`. Add `connect-src` for the Supabase project URL (https and wss) and analytics hosts. Allow `'unsafe-eval'` only when `NODE_ENV === 'development'`. Pass `nonce` to every `<Script>`. Fully static sites use `experimental.sri` with a `script-src` that has no `'unsafe-inline'` (the Next.js SRI example). The static `next.config` policy in the Next.js guide's "Without Nonces" section includes `'unsafe-inline'` and does not pass this check. Roll out as Report-Only first, then enforce."""
+proof = """1. The tool fetches the home page, following same-origin redirects, and reads `Content-Security-Policy` (the enforcing header, not `-Report-Only`).
+2. It takes `script-src`, or `default-src` when `script-src` is absent. Several enforcing policies all apply, so a script must be allowed by every one of them, and the strictest policy decides.
+3. Pass: an enforcing policy is set and its script directive has no `'unsafe-inline'`, or has it only alongside a `'nonce-...'` or `'sha256-'`/`'sha384-'`/`'sha512-'` source, and allows no source that matches every host (`*`, a bare scheme such as `https:`, `http:` or `data:`, `https://*`, or `*.com`) unless `'strict-dynamic'` is set with a nonce or hash.
+4. Fail: no enforcing CSP, no script directive in any policy, `'unsafe-inline'` with no nonce or hash, or a source that matches every host.
+5. Manual extra: confirm `object-src 'none'`, `base-uri`, no `'unsafe-eval'` in production, and zero CSP violations in the browser console on key pages."""
+sources = [
+  { title = "Next.js docs: How to set a Content Security Policy", url = "https://nextjs.org/docs/app/guides/content-security-policy" },
+  { title = "Weichselbaum et al., CSP Is Dead, Long Live CSP (CCS 2016)", url = "https://research.google/pubs/csp-is-dead-long-live-csp-on-the-insecurity-of-whitelists-and-the-future-of-content-security-policy/" },
+  { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "BROWSER-03"
+title = "X-Content-Type-Options set to nosniff"
+severity = "medium"
+layer = 7
+cwe = ["CWE-430"]
+mode = "auto"
+stacks = ["any"]
+risk = """Without `nosniff`, browsers may guess a response's type and run an uploaded file or JSON body as HTML or script. On the app's own origin that becomes same-origin XSS or hosted phishing content."""
+build = """Send `X-Content-Type-Options: nosniff` on all responses (`next.config` `headers()` for `/(.*)` or `vercel.json`). Every response also carries a correct `Content-Type`; HTML includes `charset=utf-8`. Upload handling is BROWSER-13."""
+proof = """1. The tool fetches the home page, following same-origin redirects.
+2. Pass: `X-Content-Type-Options` equals `nosniff`.
+3. Fail: header missing or any other value.
+4. Manual extra: `curl -sI` an API route and a static asset and confirm the same header."""
+sources = [
+  { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
+  { title = "OWASP Secure Headers Project", url = "https://owasp.org/www-project-secure-headers/" },
+]
+
+[[check]]
+id = "BROWSER-04"
+title = "Clickjacking protection with frame-ancestors or X-Frame-Options"
+severity = "medium"
+layer = 7
+cwe = ["CWE-1021"]
+mode = "auto"
+stacks = ["any"]
+risk = """If pages can be framed by another origin, an attacker page can overlay them and trick a logged-in user into clicking buttons such as delete account or approve access. The February 2009 Twitter "Don't Click" worm used clickjacking to make users re-post the malicious link."""
+build = """Send CSP `frame-ancestors 'none'` (or `'self'` if the app frames itself) on all HTML responses, plus `X-Frame-Options: DENY` (or `SAMEORIGIN`) for older browsers. If a widget must be embeddable, list exact origins in `frame-ancestors` for that route only. `frame-ancestors` is ignored in a `<meta>` CSP; it must be an HTTP header."""
+proof = """1. The tool fetches the home page, following same-origin redirects.
+2. Pass: CSP contains `frame-ancestors` with `'none'`, `'self'` or an explicit origin list, or `X-Frame-Options` is `DENY` or `SAMEORIGIN`.
+3. Fail: neither is present, or every `frame-ancestors` allows any site (`*` or a bare scheme). When several policies set `frame-ancestors`, the most restrictive one applies.
+4. Manual extra: repeat on login, settings and destructive-action pages; optionally frame one from a localhost page and confirm the browser refuses to render it."""
+sources = [
+  { title = "OWASP: Clickjacking", url = "https://wiki.owasp.org/index.php/Clickjacking" },
+  { title = "The Register: Twitter clickjack attack (2009)", url = "https://www.theregister.com/2009/02/13/twitter_clickjack_attack/" },
+  { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "BROWSER-05"
+title = "Referrer-Policy limits what leaks to other sites"
+severity = "medium"
+layer = 7
+cwe = ["CWE-200", "CWE-598"]
+mode = "auto"
+stacks = ["any"]
+risk = """Without a strict Referrer-Policy, the full URL of a page, including reset, invite or auth codes in the query string, is sent in the `Referer` header to every third-party resource and outbound link. The token-flow test is BROWSER-16."""
+build = """Send `Referrer-Policy: strict-origin-when-cross-origin` site-wide (OWASP cheat sheet value) and `no-referrer` on auth callback, reset and invite routes."""
+proof = """1. The tool fetches the home page, following same-origin redirects.
+2. Pass: `Referrer-Policy` is `strict-origin-when-cross-origin`, `strict-origin`, `same-origin` or `no-referrer`.
+3. Fail: header missing, or `unsafe-url`, `no-referrer-when-downgrade`, or `origin-when-cross-origin`."""
+sources = [
+  { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
+  { title = "OWASP Secure Headers Project recommended headers", url = "https://raw.githubusercontent.com/OWASP/www-project-secure-headers/master/ci/headers_add.json" },
+]
+
+[[check]]
+id = "BROWSER-06"
+title = "Cookies set with Secure, HttpOnly and SameSite"
+severity = "medium"
+layer = 7
+cwe = ["CWE-614", "CWE-1004", "CWE-1275"]
+mode = "auto"
+stacks = ["any"]
+risk = """A cookie without `Secure` can travel over plain HTTP; a session cookie without `HttpOnly` can be read by any injected script; a cookie without `SameSite` is sent on cross-site requests, which feeds CSRF. Post-login auth cookies are BROWSER-17."""
+build = """Every cookie the app sets carries `Secure` in production and an explicit `SameSite=Lax` (or `Strict`). App-owned session and CSRF cookies also carry `HttpOnly`, use the `__Host-` prefix with `Path=/`, and have no `Domain`. Use `SameSite=None` only for a documented cross-site need, and always with `Secure`."""
+proof = """1. The tool fetches the home page, following same-origin redirects, and reads every `Set-Cookie`.
+2. On https, each cookie must have `Secure`.
+3. Cookies whose names look like sessions (session, sid, auth, token, jwt and similar, judged after any `__Host-` or `__Secure-` prefix) must have `HttpOnly`.
+4. Each cookie must have an explicit `SameSite` attribute.
+5. Pass: all rules hold. Fail: a Secure or HttpOnly rule is broken; the report names the cookie. A cookie with no `SameSite` is a warning, because browsers default it to Lax. No cookies on the home page is reported as not applicable; log in with a test account and repeat on the session cookie."""
+sources = [
+  { title = "MDN: Set-Cookie", url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie" },
+  { title = "OWASP CSRF Prevention Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "BROWSER-07"
+title = "CORS does not reflect arbitrary origins with credentials"
+severity = "high"
+layer = 7
+cwe = ["CWE-942", "CWE-346"]
+mode = "auto"
+stacks = ["any", "nextjs", "node"]
+risk = """Route handlers often echo `request.headers.get('origin')` into `Access-Control-Allow-Origin` with `Access-Control-Allow-Credentials: true`, which lets any website make logged-in requests and read the answer. PortSwigger Research documented a bitcoin exchange whose look-alike-domain origin check let an attacker read wallet backups, and a site leaking users' API keys the same way."""
+build = """Prefer no CORS: a Next.js front end and its route handlers are same-origin. If cross-origin access is required, compare the Origin against an exact allowlist of full origins (scheme, host, port) from config, set `Vary: Origin`, never reflect arbitrary values, never allow `null`, never use regex or `endsWith` matching, and never combine `Access-Control-Allow-Credentials: true` with `*` or reflection. Public read-only endpoints may use `*` without credentials. Supabase's REST API uses `*` by design with bearer JWT and RLS; do not copy that to cookie-authenticated routes."""
+proof = """1. The tool sends one GET to the home page with `Origin: https://asa-probe.invalid` (reserved TLD, never a real host).
+2. Fail: the response echoes that origin in `Access-Control-Allow-Origin` together with `Access-Control-Allow-Credentials: true`.
+3. Pass: otherwise.
+4. Manual extra: repeat against each API route and an OPTIONS preflight, also with `Origin: null` and `Origin: https://<yourdomain>.asa-probe.invalid`. Read-only requests only."""
+sources = [
+  { title = "PortSwigger Research: Exploiting CORS misconfigurations for Bitcoins and bounties", url = "https://portswigger.net/research/exploiting-cors-misconfigurations-for-bitcoins-and-bounties" },
+  { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "BROWSER-08"
+title = "Permissions-Policy and Cross-Origin-Opener-Policy set"
+severity = "low"
+layer = 7
+cwe = ["CWE-693", "CWE-1021"]
+mode = "auto"
+stacks = ["any"]
+risk = """Without `Cross-Origin-Opener-Policy`, windows the site opens or is opened by keep a `window` reference, enabling XS-Leaks and reverse tabnabbing. Without `Permissions-Policy`, an injected script or third-party iframe can prompt for camera, microphone, location or payment under the site's name."""
+build = """Send `Cross-Origin-Opener-Policy: same-origin` (`same-origin-allow-popups` if the app uses OAuth or payment popups) and `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()`, allowing only features the app uses (e.g. `camera=(self)`). Send `Cross-Origin-Resource-Policy: same-site` on API and user-file responses. Send `X-XSS-Protection: 0` or omit it; do not send `Expect-CT`. Do not set `Cross-Origin-Embedder-Policy: require-corp` by default. Hiding `X-Powered-By` is NEXT-03."""
+proof = """1. The tool fetches the home page, following same-origin redirects.
+2. Pass: `Permissions-Policy` is present and `Cross-Origin-Opener-Policy` is `same-origin` or `same-origin-allow-popups`.
+3. Fail: either header missing or COOP is `unsafe-none`.
+4. Manual extra: if the app uses popups, run the OAuth or payment popup flow once on staging and confirm it still completes."""
+sources = [
+  { title = "MDN: Cross-Origin-Opener-Policy", url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cross-Origin-Opener-Policy" },
+  { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
+  { title = "OWASP Secure Headers Project recommended headers", url = "https://raw.githubusercontent.com/OWASP/www-project-secure-headers/master/ci/headers_add.json" },
+]
+
+[[check]]
+id = "BROWSER-09"
+title = "No unsanitized HTML through dangerouslySetInnerHTML or innerHTML"
+severity = "high"
+layer = 7
+cwe = ["CWE-79"]
+mode = "review"
+stacks = ["any", "nextjs"]
+risk = """React escapes text by default, so in Next.js apps XSS almost always enters through `dangerouslySetInnerHTML`, `innerHTML`, `insertAdjacentHTML` or `document.write` fed with user, CMS, LLM or database content. Script in the page can read JS-readable tokens (Supabase session cookies by default) and act as the user, which also defeats every CSRF defense. GHSA-m7qm-r2r5-f77q was a high-severity XSS in react-marked-markdown."""
+build = """Do not use `dangerouslySetInnerHTML` for anything not authored by the developer at build time. If rich HTML is required, sanitize with DOMPurify (`isomorphic-dompurify` on the server) using an allowlist profile, at render time, next to the sink; do not trust "sanitized on write" data other writers can reach. Never pass user input to `innerHTML`, `eval`, `new Function` or `setTimeout(string)`. JSON in `<script>` tags (JSON-LD) must escape `<` (`JSON.stringify(x).replace(/</g, '\\u003c')`). Strict CSP (BROWSER-02) is the second layer."""
+proof = """1. Grep the repo for `dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|document.write|new Function`.
+2. For each hit, confirm the value is a constant or the direct output of a sanitizer.
+3. Optional, own test account: save an inert canary such as `<b data-asa-canary="1">asa</b>` into each rich-text field and query the rendered DOM for `[data-asa-canary]`.
+4. Pass: every sink is constant or sanitized, and the canary renders as text or with the `data-` attribute stripped.
+5. Fail: any sink takes unsanitized dynamic data, or the canary element appears with its attributes intact."""
+sources = [
+  { title = "GHSA-m7qm-r2r5-f77q: react-marked-markdown XSS", url = "https://github.com/advisories/GHSA-m7qm-r2r5-f77q" },
+  { title = "OWASP CSRF Prevention Cheat Sheet (XSS defeats CSRF defenses)", url = "https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "BROWSER-10"
+title = "User-supplied links and navigations allow only safe URL schemes"
+severity = "high"
+layer = 7
+cwe = ["CWE-79", "CWE-83"]
+mode = "assisted"
+stacks = ["any", "nextjs"]
+risk = """Profile website fields, CMS links and `?returnTo=` values often reach `href`, `router.push`, `window.location` or `window.open`. A `javascript:` URL runs as code in the site's origin when clicked or navigated. React 19 blocks it in React-rendered attributes, but `window.location`, `location.assign`, `window.open` and non-React DOM code are not covered."""
+build = """Parse every user-supplied URL with `new URL(value, base)` and allow only `https:` (and `http:`, `mailto:`, `tel:` when needed) by exact `protocol` match; reject anything else at write time and again at render time. Never use `startsWith('http')` checks. Enable the lint rule `react/jsx-no-script-url`. Apply the same check before `window.location` or `window.open`. Stay on React 19 or later."""
+proof = """1. Repo: grep for `href={`, `router.push(`, `location.href =`, `location.assign(`, `window.open(` with non-literal arguments; confirm a scheme allowlist guards each.
+2. Own test account: try to save a link field with a `javascript:` scheme and with a `data:text/html` scheme.
+3. Pass: the server rejects with 4xx or stores a neutralized value, and the rendered anchor's `href` does not use that scheme.
+4. Fail: the value round-trips into an anchor or navigation sink. Never click the stored link."""
+sources = [
+  { title = "React 16.9 release notes (javascript: URL deprecation)", url = "https://legacy.reactjs.org/blog/2019/08/08/react-v16.9.0.html" },
+  { title = "Lint rule docs: jsx-no-script-url", url = "https://oxc.rs/docs/guide/usage/linter/rules/react/jsx-no-script-url.md" },
+  { title = "GHSA-m7qm-r2r5-f77q: XSS via href attributes", url = "https://github.com/advisories/GHSA-m7qm-r2r5-f77q" },
+]
+
+[[check]]
+id = "BROWSER-11"
+title = "Markdown renderers do not pass raw HTML unsanitized"
+severity = "high"
+layer = 7
+cwe = ["CWE-79"]
+mode = "review"
+stacks = ["any", "nextjs"]
+risk = """Comments, bios, AI chat output and docs are often rendered with react-markdown, marked or markdown-it. react-markdown escapes HTML by default, but adding `rehype-raw`, or marked/markdown-it with `html: true` piped into `dangerouslySetInnerHTML`, passes raw HTML and link schemes through. LLM output counts as user input because prompt injection can make the model emit markup."""
+build = """Use react-markdown without `rehype-raw` for untrusted content. If raw HTML is required, put `rehype-sanitize` after `rehype-raw` in the plugin list. For marked or markdown-it, keep `html: false` and run output through DOMPurify before any HTML sink. Keep react-markdown's default `urlTransform`; never replace it with an identity function."""
+proof = """1. Read every markdown component's configuration.
+2. Fail if `rehype-raw` appears without a later `rehype-sanitize`, if `urlTransform` is overridden to pass values through, or if marked/markdown-it output reaches `dangerouslySetInnerHTML` unsanitized.
+3. Optional, own test account: post the BROWSER-09 canary plus a markdown link with a `javascript:` scheme; pass if the canary shows as text or stripped and the link has no `javascript:` href."""
+sources = [
+  { title = "rehype-raw README (XSS warning)", url = "https://github.com/rehypejs/rehype-raw" },
+  { title = "GHSA-m7qm-r2r5-f77q: react-marked-markdown XSS", url = "https://github.com/advisories/GHSA-m7qm-r2r5-f77q" },
+]
+
+[[check]]
+id = "BROWSER-12"
+title = "CSP nonce is fresh per response and never cached"
+severity = "medium"
+layer = 7
+cwe = ["CWE-330", "CWE-693"]
+mode = "assisted"
+stacks = ["nextjs", "vercel"]
+risk = """A nonce only works if an attacker cannot predict it. If nonce-bearing HTML is cached by the CDN, ISR or `Cache-Control: public`, every visitor gets the same nonce, which makes it no better than `'unsafe-inline'`. A header nonce that differs from the HTML nonce blocks the site's own scripts and tempts developers to loosen the policy."""
+build = """Any route whose CSP contains `'nonce-` must be dynamically rendered (`await connection()`) and served with `Cache-Control: private, no-store`, or use Vercel's self-fetch pattern that injects a new nonce into cached HTML. Nonce CSP is incompatible with Partial Prerendering. Keep CDN-cached marketing pages on a static hash policy instead."""
+proof = """1. Request the same nonce-protected URL twice with `curl -si`.
+2. Extract the `'nonce-...'` value from the CSP header and from `<script nonce=...>` in the body of each response.
+3. Pass: nonces differ between the two responses and header matches body within each.
+4. Fail: the same nonce twice, a header/body mismatch, or `x-vercel-cache: HIT` on a response with a nonce CSP."""
+sources = [
+  { title = "Vercel KB: CSP nonces with CDN cache", url = "https://vercel.com/kb/guide/csp-nonces-with-cdn-cache" },
+  { title = "Next.js docs: How to set a Content Security Policy", url = "https://nextjs.org/docs/app/guides/content-security-policy" },
+]
+
+[[check]]
+id = "BROWSER-13"
+title = "User-uploaded files are never served as active content"
+severity = "medium"
+layer = 7
+cwe = ["CWE-430", "CWE-79", "CWE-434"]
+mode = "assisted"
+stacks = ["any", "nextjs", "supabase"]
+risk = """Uploaded files served with the uploader's content type, or proxied through the app origin, can run as HTML or SVG script in the site's origin or host phishing pages under its name. CVE-2025-55173 let Next.js image optimization serve attacker-controlled content and filenames from external image sources (fixed in 14.2.31 and 15.4.5)."""
+build = """Route handlers that return files set `Content-Type` from a server-side allowlist (never the client-supplied type), send `X-Content-Type-Options: nosniff` (BROWSER-03), and send `Content-Disposition: attachment` for anything that is not an image. Restrict Supabase Storage bucket `allowed_mime_types` and reject HTML and SVG uploads unless sanitized. Keep `images.remotePatterns` narrow and Next.js patched."""
+proof = """1. With a test account, upload a harmless `.html` text file and a harmless `.svg` through every upload feature.
+2. Fetch each stored file with `curl -sI` at the URL the app serves it from.
+3. Pass: the upload is rejected, or it is served with `Content-Disposition: attachment` or a non-active type, plus `nosniff`.
+4. Fail: the file is returned inline as `text/html` or `image/svg+xml` from the app origin.
+5. Check the `next` version in the lockfile is at or above the patched line for CVE-2025-55173."""
+sources = [
+  { title = "GitLab advisory CVE-2025-55173: Next.js image optimization content injection", url = "https://advisories.gitlab.com/pkg/npm/next/CVE-2025-55173/" },
+  { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "BROWSER-14"
+title = "Cookie-authenticated route handlers reject cross-site requests"
+severity = "high"
+layer = 7
+cwe = ["CWE-352"]
+mode = "assisted"
+stacks = ["nextjs", "supabase"]
+risk = """Next.js Server Actions compare Origin to Host, but custom `route.ts` POST, PUT and DELETE handlers and GET handlers with side effects get no built-in CSRF protection. `SameSite=Lax` leaves state-changing GETs and same-site subdomains exposed. CVE-2026-27978 let `Origin: null` from sandboxed iframes skip the Server Actions check in Next.js 16.0.1 to before 16.1.7."""
+build = """Keep Next.js patched. Never change state in GET handlers or during render. In `proxy.ts` or a shared helper, reject non-safe methods when `Sec-Fetch-Site` is `cross-site`, with a fallback that requires `Origin` to equal the site origin; treat a missing or `null` Origin on a cookie-authenticated mutation as reject. Require `Content-Type: application/json` for JSON APIs. Never add `'null'` or wildcards to `serverActions.allowedOrigins`. Use `SameSite=Lax` or `Strict` as defense in depth only. Webhooks skip origin checks but must verify signatures."""
+proof = """1. With a test account's session cookie, pick a harmless mutation (set own display name to its current value).
+2. Send it with `Origin: https://asa-probe.invalid` and `Sec-Fetch-Site: cross-site`; again with `Origin: null`; again with no Origin.
+3. Control: send it with the correct Origin and confirm it succeeds.
+4. Pass: all three probes get 4xx and the value is unchanged. Fail: any probe gets 2xx and the change applies.
+5. Confirm `next` in the lockfile is at or above 16.1.7 (or the patched line for its major)."""
+sources = [
+  { title = "OSV GHSA-mq59-m269-xvcx / CVE-2026-27978: Next.js null Origin bypasses Server Actions CSRF check", url = "https://osv.dev/vulnerability/GHSA-mq59-m269-xvcx" },
+  { title = "Next.js docs: How to think about data security", url = "https://nextjs.org/docs/app/guides/data-security" },
+  { title = "OWASP CSRF Prevention Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "BROWSER-15"
+title = "Login, logout and callback redirects stay on the site's origin"
+severity = "medium"
+layer = 7
+cwe = ["CWE-601"]
+mode = "assisted"
+stacks = ["any", "nextjs", "supabase"]
+risk = """`?next=`, `?redirect_to=` and `?returnTo=` values fed to `redirect()`, `NextResponse.redirect()` or Supabase `redirectTo` send users from a trusted domain to a phishing page; in OAuth or magic-link flows they can carry the auth code off-site. Next.js itself shipped open redirects (CVE-2020-15242, CVE-2021-37699), and Okta documented chaining them with OAuth `redirect_uri` to steal tokens."""
+build = """Accept only relative destinations: parse with `new URL(next, origin)`, require `url.origin === origin`, then redirect to `url.pathname + url.search`; otherwise fall back to `/`. Never rely on `startsWith('/')`. Keep a fixed allowlist for any absolute destinations. In Supabase Auth settings, set the Site URL and an exact Redirect URLs allowlist (no broad `**` wildcards in production). Exchange the code server-side in `/auth/callback`, then redirect with the same origin check."""
+proof = """1. List every redirect parameter on login, logout, callback and any `/go` route.
+2. For each, request with the value `https://asa-probe.invalid/`, then `//asa-probe.invalid`, then `/\\asa-probe.invalid`, using `curl -s -o /dev/null -w '%{redirect_url}'`.
+3. Pass: every Location stays on the site's origin. Fail: any Location points to `asa-probe.invalid`.
+4. For callbacks that need a valid code, repeat with a test account."""
+sources = [
+  { title = "GHSA-x56p-c8cg-q435 / CVE-2020-15242: Next.js open redirect", url = "https://github.com/advisories/GHSA-x56p-c8cg-q435" },
+  { title = "GHSA-vxf5-wxwp-m7g9 / CVE-2021-37699: Next.js open redirect", url = "https://github.com/advisories/GHSA-vxf5-wxwp-m7g9" },
+  { title = "Okta Security: Stealing OAuth tokens with open redirects (archived)", url = "https://web.archive.org/web/20250428090710/https://sec.okta.com/articles/2021/02/stealing-oauth-tokens-open-redirects/" },
+]
+
+[[check]]
+id = "BROWSER-16"
+title = "Reset, invite and auth-code URLs do not leak through Referer"
+severity = "medium"
+layer = 7
+cwe = ["CWE-598", "CWE-200"]
+mode = "assisted"
+stacks = ["any", "supabase"]
+risk = """Password reset, magic-link, invite and Supabase PKCE `?code=` URLs carry one-time secrets. If the landing page loads third-party resources or the user clicks out before the token is used, the full URL can reach analytics, fonts or chat vendors in the `Referer` header. HackerOne report 272379 (Aspen, 2017) was a reset token leaked this way."""
+build = """Send `Referrer-Policy: no-referrer` on auth callback, reset and invite routes (site-wide policy is BROWSER-05). Consume tokens server-side on first hit: the route handler exchanges the code, then redirects to a clean URL. Load no third-party scripts on token-bearing pages."""
+proof = """1. With a test account, request a reset link (or magic link).
+2. Open it in a headless browser with network capture.
+3. Pass: no third-party request carries the token in `Referer` or its query string, and the final address bar shows no token.
+4. Fail: the token appears in any third-party request or stays in the URL after landing."""
+sources = [
+  { title = "HackerOne 272379: Password reset token leak via Referer (mirror)", url = "https://vulners.com/hackerone/H1:272379" },
+  { title = "thoughtbot: Is your site leaking password reset links?", url = "https://robots.thoughtbot.com/is-your-site-leaking-password-reset-links" },
+  { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "BROWSER-17"
+title = "Auth cookies after login are scoped to the host, not the parent domain"
+severity = "medium"
+layer = 7
+cwe = ["CWE-1004", "CWE-614", "CWE-1275"]
+mode = "assisted"
+stacks = ["any", "supabase"]
+risk = """Session cookies set with `Domain=example.com` go to every subdomain, so one compromised or taken-over subdomain can read or overwrite them. `@supabase/ssr` keeps access and refresh tokens readable by JavaScript by design, so any XSS can steal a long-lived refresh token; this raises the stakes of BROWSER-02 and BROWSER-09 rather than being a bug on its own."""
+build = """App-owned session and CSRF cookies: `__Host-` prefix, `Secure; HttpOnly; SameSite=Lax; Path=/`, no `Domain`. Keep Supabase cookie defaults unless all auth is server-side; then document the XSS trade-off and enforce a strict CSP. Never set `Domain` on auth cookies unless subdomain SSO requires it. Never store tokens in `localStorage` as well as cookies. Home-page cookie flags are BROWSER-06."""
+proof = """1. Log in with a test account in headless Playwright (or `curl -sI` the login callback) and capture every `Set-Cookie`.
+2. Pass: each auth cookie has `Secure`, `SameSite=Lax` or `Strict`, `Path=/`, and no `Domain` (or a documented reason); app-owned session cookies have `HttpOnly`.
+3. Report Supabase `sb-*-auth-token` cookies without HttpOnly as informational, linked to the BROWSER-02 result.
+4. Fail: missing `Secure`, `SameSite=None` without need, or `Domain=` on a session cookie."""
+sources = [
+  { title = "Supabase docs: Server-side auth advanced guide", url = "https://supabase.com/docs/guides/auth/server-side/advanced-guide.md" },
+  { title = "MDN: Set-Cookie", url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie" },
+]
+
+[[check]]
+id = "BROWSER-18"
+title = "Third-party scripts are pinned with SRI or inventoried"
+severity = "high"
+layer = 7
+cwe = ["CWE-829", "CWE-353"]
+mode = "review"
+stacks = ["any", "nextjs"]
+risk = """Every `<script src>` from a CDN or vendor runs with full access to the page, JS-readable cookies and form inputs. In June 2024, after the polyfill.io domain changed owners, `cdn.polyfill.io` served malicious redirects into more than 100,000 sites."""
+build = """Bundle dependencies from npm instead of runtime CDNs where possible. For pinned, versioned CDN files add `integrity="sha384-..."` and `crossOrigin="anonymous"` (works on `next/script` and `<link>`). For evergreen vendor tags (analytics, chat, scheduling, Stripe.js) where SRI is impossible, keep a written inventory, load them only on pages that need them, keep them off auth, reset and payment-entry pages unless the vendor requires it, and constrain them with CSP `script-src` and `connect-src`. Consider `experimental.sri` for first-party chunks."""
+proof = """1. Fetch each HTML route and list `<script src>` and stylesheet `<link>` tags whose host is not the site's own.
+2. Pass: each is versioned with an `integrity` attribute or on the documented vendor inventory, and none come from retired domains such as `polyfill.io`.
+3. Optional: a headless page load with request logging catches scripts injected at runtime by tag managers.
+4. Fail: unpinned CDN scripts without integrity, or third-party scripts on auth pages not in the inventory."""
+sources = [
+  { title = "BleepingComputer: Polyfill.io JavaScript supply chain attack impacts over 100K sites", url = "https://www.bleepingcomputer.com/news/security/polyfillio-javascript-supply-chain-attack-impacts-over-100k-sites/" },
+  { title = "Sonatype: polyfill.io supply chain attack", url = "https://sonatype.com/blog/polyfill.io-supply-chain-attack-hits-100000-websites-all-you-need-to-know" },
+  { title = "Next.js docs: How to set a Content Security Policy (SRI)", url = "https://nextjs.org/docs/app/guides/content-security-policy" },
+]
+
+[[check]]
+id = "BROWSER-19"
+title = "postMessage listeners check the sender's origin"
+severity = "medium"
+layer = 7
+cwe = ["CWE-346", "CWE-79"]
+mode = "review"
+stacks = ["any"]
+risk = """`window.addEventListener('message', ...)` accepts messages from any window unless `event.origin` is checked. Apps that embed widgets or are embedded often route message data into navigation, HTML or auth state, and `postMessage(data, '*')` leaks data to whatever page is in the target frame. CVE-2020-8127 (reveal.js) and HackerOne 920285 were DOM XSS through unchecked message handlers."""
+build = """Every `message` listener checks `event.origin` by exact string equality against an allowlist (no `indexOf`, `includes` or `startsWith`), checks `event.source` when the sender frame is known, validates the message shape with a schema (e.g. zod), and never passes message fields to HTML or URL sinks. Always call `postMessage(data, 'https://exact-origin')`, never `'*'` for anything sensitive. Remove listeners on unmount."""
+proof = """1. Grep the repo for `addEventListener('message'`, `addEventListener("message"`, `onmessage` and `postMessage(`.
+2. Pass: each listener has an exact-origin check before it reads `event.data`, and no sensitive `postMessage` uses `'*'`.
+3. Fail: any listener uses `event.data` without an exact-origin check, or sensitive data is posted to `'*'`.
+4. Optional: from a localhost page that frames or opens the site, post a benign message of the expected shape and confirm the site ignores it."""
+sources = [
+  { title = "GitHub Security Lab issue #118: postMessage missing origin check", url = "https://github.com/github/securitylab/issues/118" },
+  { title = "jlajara: PostMessage vulnerabilities part II (CVE-2020-8127)", url = "https://jlajara.gitlab.io/Dom_XSS_PostMessage_2" },
+]
