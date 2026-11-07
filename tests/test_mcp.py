@@ -101,7 +101,7 @@ class McpServerTest(unittest.TestCase):
                     "rate_limit_body", "rate_limit_attempts", "allow_supabase", "supabase_tables", "no_dns",
                     "format"):
             self.assertIn(key, scan["properties"])
-        self.assertEqual(scan["properties"]["format"]["enum"], ["json", "md"])
+        self.assertEqual(scan["properties"]["format"]["enum"], ["json", "md", "html"])
 
     def test_list_checks(self):
         res = self.srv.call("list_checks", {"area": "browser"})
@@ -156,6 +156,24 @@ class McpServerTest(unittest.TestCase):
         results = {r["check_id"]: r for r in data["results"]}
         self.assertEqual(results["BROWSER-03"]["status"], "fail")
         self.assertTrue(results["BROWSER-03"]["summary"])
+
+    def test_scan_returns_fix_first_summary(self):
+        server, url = lab.serve("vulnerable")
+        try:
+            res = self.srv.call("run_scan", {"target": url, "no_dns": True, "checks": ["BROWSER-03"]})
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertFalse(res["isError"])
+        json.loads(res["content"][0]["text"])  # the report itself stays plain JSON
+        summary = res["content"][1]["text"]
+        self.assertIn("Fix these first:", summary)
+        self.assertIn("BROWSER-03", summary)
+
+    def test_scan_html(self):
+        text = self._scan("vulnerable", checks=["BROWSER-03"], format="html")
+        self.assertTrue(text.startswith("<!doctype html>"))
+        self.assertIn("BROWSER-03", text)
 
     def test_scan_markdown(self):
         text = self._scan("vulnerable", checks=["BROWSER-03"], format="md")
