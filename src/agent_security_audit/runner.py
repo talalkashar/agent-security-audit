@@ -69,8 +69,10 @@ def check_ids_need_network(ids, areas, stacks):
 
 
 def manual_result(check):
-    what = "Needs test accounts or a browser" if check.mode == "assisted" else "Needs a code review"
-    return Result(check.id, "manual", f"{what}: follow the proof steps for {check.id}.", [check.proof])
+    how = ("check the code first, then a logged-in test if the code does not settle it"
+           if check.mode == "assisted" else "check the code and config")
+    return Result(check.id, "manual", f"Not visible from outside: {how}. Proof steps: {check.id}.",
+                  [check.proof])
 
 
 def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=None, insecure=False,

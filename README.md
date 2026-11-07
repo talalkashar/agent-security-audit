@@ -25,7 +25,7 @@ Not every layer can be tested from outside the site. This table shows what the t
 | 1 Physical | Hosting attestations, encrypted and locked developer devices | Review |
 
 - **auto**: `asa scan` runs the proof test and reports pass or fail with evidence.
-- **assisted**: the agent runs the proof test itself, with a headless browser and two test accounts you own.
+- **assisted**: the agent checks the code first. If the code does not settle it, it runs a logged-in test itself in a headless browser, with two accounts it signs up on your site. Nothing for you to set up.
 - **review**: the proof is in the code, the hosting dashboard or a policy, so the agent or a person reads it.
 
 **What a pass means.** A pass means the defense was observed working on that target at that time. It does not mean the site has no flaws. The honest claim for a site that passes is: every listed check was built in and proven. Anything the catalog does not list was not tested.
@@ -74,7 +74,7 @@ Use it before launch and after any change to auth, data access or hosting.
 
 1. Start the site (`npm run dev`, a preview deployment, or production you own).
 2. Run `asa scan <url>`. Automated checks report `pass`, `fail` or `warn` with evidence. Assisted and review checks come back as `manual` with their proof steps.
-3. The agent works through each `manual` check: assisted ones with a headless browser (Playwright) signed in as two test accounts, review ones by reading the code and configuration.
+3. The agent works through each `manual` check without asking you for anything: it reads the code and config, and where the code does not settle it, signs up two accounts on your site and runs a logged-in test in a headless browser.
 4. Every `fail` gets fixed using the build rule, then the scan runs again until it passes. A check that cannot be proven stays reported as unproven.
 
 ## Install as an agent skill
@@ -161,7 +161,7 @@ This tool is for testing sites you own or have written permission to test. It is
 - **Same origin.** Requests stay on the target's scheme, host and port. Redirects to other hosts are reported, not followed. The only exceptions are the www/apex twin of the same site over HTTPS, the Supabase project the site itself points to when you pass `--allow-supabase` (read-only, row counts only; on a local target it also needs `--authorized`, because that project is not local), and DNS lookups through a public resolver (turn off with `--no-dns`).
 - **Stops at a firewall challenge.** If the site's firewall answers with a bot challenge, the scan stops and says so. It does not try to get around it.
 - **Runs on your real, live site.** Scans and proof tests work against production and its real data. That is the point: find the leak before your users or an attacker do.
-- **Two accounts you control.** Login-required checks sign in as two accounts you own (your own logins, or ones you make for the check). The agent never signs in as one of your users or uses their credentials.
+- **No setup.** Logged-in tests use two accounts the agent signs up on your site itself, and it lists them at the end so you can delete them. It never signs in as one of your users or uses their credentials.
 - **Exposed real data is a fail, not a copy.** If a test shows other people's real data, the check fails with where it leaked and how many records came back. The records themselves never go into the report. The scan keeps going, and the fix leads the report.
 - **No destructive tests.** Proof tests read, or write only to your own accounts' rows. Nothing deletes data, floods a service or changes another user's account.
 
@@ -245,7 +245,7 @@ Checks by OSI layer:
 | `pass` | The defense was observed working. Evidence lists what was seen. | Keep it. Re-scan after related changes. |
 | `fail` | The flaw was observed. | Fix it with the build rule shown under Fix, then scan again. |
 | `warn` | A weaker setting that is not a proven flaw. | Fix it when you can. |
-| `manual` | Needs test accounts, a browser or a code review. The proof steps are in the result. | Run the proof steps (the skill does this), and record pass or fail with evidence. |
+| `manual` | Not visible from outside the site. The proof steps are in the result. | The agent checks the code, or runs a logged-in test, and records pass or fail with evidence. |
 | `skip` | Does not apply to this target, for example TLS checks on plain HTTP. | Scan the deployed HTTPS site to cover it. |
 | `error` | The check could not run (network error, timeout, budget used up). | Fix the cause and scan again. It is not a pass. |
 

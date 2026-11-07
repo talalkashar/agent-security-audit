@@ -76,8 +76,8 @@ def to_markdown(target, results):
         "",
         f"Generated {_now()} by agent-security-audit {__version__}.",
         "",
-        (f"**{c['fail']} failed · {c['warn']} warnings · {c['error']} could not run · {c['manual']} need a person "
-        f"or test accounts · {c['pass']} passed · {c['skip']} not applicable**"),
+        (f"**{c['fail']} failed · {c['warn']} warnings · {c['error']} could not run · {c['manual']} to check in code "
+        f"· {c['pass']} passed · {c['skip']} not applicable**"),
         "",
         "| Status | Severity | Check | Result |",
         "|---|---|---|---|",

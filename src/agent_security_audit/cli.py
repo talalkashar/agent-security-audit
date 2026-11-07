@@ -94,7 +94,7 @@ def build_parser():
     sc.add_argument("--stack", action="append")
     sc.add_argument("--format", choices=("md", "json", "sarif"), default="md")
     sc.add_argument("--out", help="write the report here instead of stdout")
-    sc.add_argument("--auto-only", action="store_true", help="leave out checks that need a person")
+    sc.add_argument("--auto-only", action="store_true", help="only the scanner checks; leave out code and logged-in checks")
     sc.add_argument("--fail-on", choices=("critical", "high", "medium", "low", "none"), default="high",
                     help="exit 1 when a failed check is at least this severe (default: high)")
     sc.add_argument("--rate-limit-path", help="endpoint to prove rate limiting on, e.g. /api/auth/login")

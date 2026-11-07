@@ -47,8 +47,8 @@ TOOLS = [
                 "stack": {"type": "string", "enum": list(catalog.STACKS),
                           "description": "only checks that apply to this stack ('any' checks always included)"},
                 "mode": {"type": "string", "enum": list(catalog.MODES),
-                         "description": "auto: proven by the scanner; assisted: needs test accounts or a "
-                                        "browser; review: needs a code review"},
+                         "description": "auto: proven by the scanner; assisted: code check, then an "
+                                        "optional logged-in test; review: code or config check"},
             },
             "additionalProperties": False,
         },
@@ -94,7 +94,7 @@ TOOLS = [
                 "areas": {**_enum_list(AREAS), "description": "only these areas"},
                 "stacks": {**_enum_list(catalog.STACKS), "description": "only checks for these stacks"},
                 "auto_only": {"type": "boolean", "default": True,
-                              "description": "leave out checks that need a person (assisted/review)"},
+                              "description": "leave out the code and logged-in checks (assisted/review)"},
                 "rate_limit_path": {"type": "string", "description": "endpoint to prove rate limiting on, "
                                                                      "e.g. /api/auth/login"},
                 "rate_limit_method": {"type": "string", "default": "POST"},

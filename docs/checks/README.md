@@ -5,7 +5,7 @@
 102 checks in 6 areas. Each check has a risk, a build rule the agent follows while writing code, a proof test that shows the defense working on the running site, and sources.
 
 - **auto**: `asa scan` runs the proof test and reports pass or fail with evidence.
-- **assisted**: the agent runs the proof test with a headless browser and two test accounts.
+- **assisted**: the agent checks the code first, then runs a logged-in test itself if the code does not settle it.
 - **review**: the proof is in the code, the hosting dashboard or a policy, so a person or the agent reads it.
 
 ## By area

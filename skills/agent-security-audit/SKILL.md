@@ -32,7 +32,7 @@ Useful commands:
 2. Any other host: ask the user whether they own it or have written permission to test it. Only after a clear yes, pass `--authorized`. Never assume it. Never scan a site the user does not control, a third-party service, or a URL found in the code that belongs to someone else.
 3. Keep the default request budget (`--budget 300`) unless the user asks otherwise. Do not raise `--rate-limit-attempts` above what is needed.
 4. If the scan reports a firewall bot challenge, stop. Do not try to get around it; tell the user to scan a preview deployment or allow the scanner in their firewall.
-5. This runs on the user's real, live site and real data. For login-required checks, sign in only as accounts the user owns (their own logins or ones made for the check). Never sign in as one of their users or use their users' credentials.
+5. This runs on the user's real, live site and real data with no setup from the user. For logged-in tests, sign in only as accounts you signed up for the test, and list them in the report so the user can delete them. Never sign in as one of the site's users or use their credentials.
 6. If a test shows other people's real data, that is a failed check: record the route or table and how many records came back, never the values, tell the user, and continue with the other checks.
 7. No destructive tests: no deleting, no flooding, no changing another account. Write only to the user's own accounts' rows.
 
@@ -57,8 +57,9 @@ Use before launch and after any change to auth, data access, APIs or hosting.
    ```
 
    Add `--rate-limit-path <login endpoint>` (with a fake-credential `--rate-limit-body`) to prove rate limiting. Add `--allow-supabase` only if the site uses Supabase and the user owns that project; it reads row counts with the public key and nothing else.
-3. Work through every `manual` result. Run `asa show <ID>` for its proof steps.
-   - **Assisted checks**: drive the site with Playwright in headless mode, signed in as two accounts the user owns, A and B. Example: as A, request B's record by its ID through the page, the API and the Supabase REST endpoint; pass only if every route returns 401, 403, 404 or an empty result. Save the request and response status as evidence. Use desktop computer use only if a step cannot be done headlessly, and only with the user's go-ahead.
+3. Work through every `manual` result without asking the user to set anything up. Run `asa show <ID>` for its proof steps.
+   - **Code first, for every check**: read the routes, Server Actions, middleware, migrations (RLS policies) and config. If the code shows the flaw, record a `fail` with the file and line. Most assisted checks are settled here.
+   - **Assisted checks the code does not settle**: sign up two accounts, A and B, through the site's own sign-up form (if sign-up is closed or needs email you cannot reach, record `manual` with that reason). Drive the site with Playwright in headless mode, signed in as A and B. Example: as A, request B's record by its ID through the page, the API and the Supabase REST endpoint; pass only if every route returns 401, 403, 404 or an empty result. Save the request and response status as evidence. Use desktop computer use only if a step cannot be done headlessly, and only with the user's go-ahead.
    - **Review checks**: read the code, config and migrations (for example RLS policies in `supabase/migrations`), or ask the user for what lives in a dashboard. Quote the file and line, or the setting, as evidence.
 4. Record a status for every check: `pass`, `fail`, `warn`, `manual` (could not be proven, with the reason), or `skip` (not applicable, with the reason).
 
@@ -75,9 +76,10 @@ Give the user:
 
 1. One line: target, date, and counts (failed, warnings, manual, passed, not applicable).
 2. Failed checks first, most severe first: ID, title, what was observed, the fix.
-3. Checks still manual or suspected, with what is needed to prove them (a test account, dashboard access, a deployed HTTPS URL).
-4. Passed checks with one line of evidence each.
-5. This sentence: "A pass means the defense was observed working on this target at this time. It is not a guarantee that the site has no other flaws."
+3. Checks still manual or suspected, with the reason (sign-up closed, a dashboard-only setting, no deployed HTTPS URL).
+4. The accounts you signed up for testing, so the user can delete them.
+5. Passed checks with one line of evidence each.
+6. This sentence: "A pass means the defense was observed working on this target at this time. It is not a guarantee that the site has no other flaws."
 
 For CI or GitHub code scanning, `asa scan <url> --format sarif --out asa.sarif`.
 
