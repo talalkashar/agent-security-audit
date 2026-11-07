@@ -1,0 +1,14 @@
+name: ci
+on: [issues]
+permissions:
+  contents: read
+jobs:
+  greet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: someone/setup-thing@0123456789abcdef0123456789abcdef01234567
+      - env:
+          TITLE: ${{ github.event.issue.title }}
+        run: |
+          echo "New issue: $TITLE"

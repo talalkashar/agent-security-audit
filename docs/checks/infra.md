@@ -202,7 +202,7 @@ Publish `_dmarc.<domain>` with `p=none; rua=mailto:...`, review reports for 2-4 
 
 ## INFRA-08 No secrets in git history or working tree
 
-Severity: critical · OSI layer 7 (Application) · CWE-798, CWE-540 · Mode: review · Stacks: any
+Severity: critical · OSI layer 7 (Application) · CWE-798, CWE-540 · Mode: review (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -325,7 +325,7 @@ Publish `_mta-sts.<domain>` TXT (`v=STSv1; id=<n>`) and serve https://mta-sts.<d
 
 ## INFRA-13 Dependencies locked, audited and install scripts restricted
 
-Severity: critical · OSI layer 7 (Application) · CWE-1395, CWE-506, CWE-829 · Mode: review · Stacks: node, nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-1395, CWE-506, CWE-829 · Mode: review (code audit built in: `asa code`) · Stacks: node, nextjs
 
 ### Risk
 
@@ -375,7 +375,7 @@ Do not add a dependency without checking the exact name on npmjs.com: publisher,
 
 ## INFRA-15 GitHub Actions pinned, least-privilege and injection-safe
 
-Severity: high · OSI layer 7 (Application) · CWE-829, CWE-94, CWE-250 · Mode: review · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-829, CWE-94, CWE-250 · Mode: review (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 

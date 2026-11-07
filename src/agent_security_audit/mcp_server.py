@@ -10,7 +10,7 @@ import contextlib
 import json
 import sys
 
-from . import __version__, catalog, report, runner
+from . import __version__, catalog, code_audit, report, runner
 from .cli import rules_markdown, show_markdown
 from .scope import ScopeError
 
@@ -23,7 +23,9 @@ INSTRUCTIONS = (
     "once the site runs, call run_scan on it. Each control comes back pass (with evidence), fail (with the fix), "
     "or manual/skip (check in code, does not apply, or an active probe that was not run). Any URL gets the "
     "passive checks. Active probes run on local hosts, and on other hosts only with authorized=true, set only when "
-    "the user owns the site or has written permission. The claim is that every listed check was built in and proven, not that the site has no flaws."
+    "the user owns the site or has written permission. CODE mode: call run_code_audit on the project folder; it "
+    "reads the source statically (never runs it) and settles code checks with file:line evidence. The claim is "
+    "that every listed check was built in and proven, not that the site has no flaws."
 )
 
 AREAS = sorted({c.area for c in catalog.load()})
@@ -121,6 +123,30 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "run_code_audit",
+        "title": "Audit the source code",
+        "description": "CODE mode: read a project's source statically and settle the checks code can answer "
+                       "(committed secrets, public env vars, Supabase RLS and policies in migrations, route handlers "
+                       "and Server Actions without auth, getSession() on the server, raw HTML, eval, shell and SQL "
+                       "built from strings, next.config and header settings, GitHub Actions, vulnerable "
+                       "dependencies). Results carry file:line evidence with secrets masked. Nothing in the project "
+                       "is executed and only files under path are read. The only network call is the OSV "
+                       "dependency lookup (api.osv.dev), sent package names and versions only; set no_osv to skip it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "project folder, e.g. /home/me/my-site"},
+                "checks": {**_str_list, "description": "only these check ids"},
+                "areas": {**_enum_list(AREAS), "description": "only these areas"},
+                "no_osv": {"type": "boolean", "default": False,
+                           "description": "skip the OSV vulnerability lookup (no network at all)"},
+                "format": {"type": "string", "enum": ["json", "md", "sarif"], "default": "json"},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
 ]
 TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
 _JSON_TYPES = {"string": str, "boolean": bool, "integer": int, "array": list, "object": dict}
@@ -204,11 +230,18 @@ def tool_run_scan(target, authorized=False, checks=None, areas=None, stacks=None
     return [render(final, results), report.summary_text(final, results)]
 
 
+def tool_run_code_audit(path, checks=None, areas=None, no_osv=False, format="json"):
+    root, results = code_audit.run(path, osv=not no_osv, ids=checks or None, areas=areas or None)
+    render = {"md": report.to_markdown, "sarif": report.to_sarif}.get(format, report.to_json)
+    return render(root, results)
+
+
 HANDLERS = {
     "list_checks": tool_list_checks,
     "get_check": tool_get_check,
     "build_rules": tool_build_rules,
     "run_scan": tool_run_scan,
+    "run_code_audit": tool_run_code_audit,
 }
 
 

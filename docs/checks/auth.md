@@ -20,7 +20,7 @@
 
 ## AUTH-01 Server authorization uses a verified identity, not getSession()
 
-Severity: critical · OSI layer 7 (Application) · CWE-287, CWE-345 · Mode: assisted · Stacks: nextjs, supabase
+Severity: critical · OSI layer 7 (Application) · CWE-287, CWE-345 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs, supabase
 
 ### Risk
 

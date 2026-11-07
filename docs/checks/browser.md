@@ -32,7 +32,7 @@
 
 ## BROWSER-01 HSTS sent with a long max-age and includeSubDomains
 
-Severity: medium · OSI layer 7 (Application) · CWE-319, CWE-523 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-319, CWE-523 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -59,7 +59,7 @@ Send `Strict-Transport-Security: max-age=63072000; includeSubDomains` on every H
 
 ## BROWSER-02 Content-Security-Policy without unsafe-inline scripts
 
-Severity: high · OSI layer 7 (Application) · CWE-693, CWE-79 · Mode: auto (proof test built in) · Stacks: any, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-693, CWE-79 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any, nextjs
 
 ### Risk
 
@@ -85,7 +85,7 @@ For dynamic App Router pages, build the policy in `proxy.ts` (`middleware.ts` be
 
 ## BROWSER-03 X-Content-Type-Options set to nosniff
 
-Severity: medium · OSI layer 7 (Application) · CWE-430 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-430 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -109,7 +109,7 @@ Send `X-Content-Type-Options: nosniff` on all responses (`next.config` `headers(
 
 ## BROWSER-04 Clickjacking protection with frame-ancestors or X-Frame-Options
 
-Severity: medium · OSI layer 7 (Application) · CWE-1021 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-1021 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -134,7 +134,7 @@ Send CSP `frame-ancestors 'none'` (or `'self'` if the app frames itself) on all 
 
 ## BROWSER-05 Referrer-Policy limits what leaks to other sites
 
-Severity: medium · OSI layer 7 (Application) · CWE-200, CWE-598 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-200, CWE-598 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -206,7 +206,7 @@ Prefer no CORS: a Next.js front end and its route handlers are same-origin. If c
 
 ## BROWSER-08 Permissions-Policy and Cross-Origin-Opener-Policy set
 
-Severity: low · OSI layer 7 (Application) · CWE-693, CWE-1021 · Mode: auto (proof test built in) · Stacks: any
+Severity: low · OSI layer 7 (Application) · CWE-693, CWE-1021 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -231,7 +231,7 @@ Send `Cross-Origin-Opener-Policy: same-origin` (`same-origin-allow-popups` if th
 
 ## BROWSER-09 No unsanitized HTML through dangerouslySetInnerHTML or innerHTML
 
-Severity: high · OSI layer 7 (Application) · CWE-79 · Mode: review · Stacks: any, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-79 · Mode: review (code audit built in: `asa code`) · Stacks: any, nextjs
 
 ### Risk
 

@@ -486,3 +486,55 @@ sources = [
   { title = "RFC 9110 HTTP Semantics (TRACE)", url = "https://www.rfc-editor.org/rfc/rfc9110" },
   { title = "Apache HTTP Server core: TraceEnable", url = "https://httpd.apache.org/docs/2.4/mod/core.html" },
 ]
+
+[[check]]
+id = "API-30"
+title = "No eval, new Function or vm on dynamic strings"
+severity = "critical"
+layer = 7
+cwe = ["CWE-95"]
+mode = "review"
+stacks = ["any", "node", "nextjs"]
+risk = """`eval`, `new Function`, Node's `vm` module and Python's `eval`/`exec` run a string as code with the server's rights. If any part of that string comes from a request, a stored record or a third-party response, an attacker runs their own code on the server and reads every secret it holds. `vm` is not a security sandbox."""
+build = """Never turn data into code. Parse JSON with `JSON.parse`, look up handlers in a fixed map (`handlers[name]` with an allow list) instead of building function names, and use a real expression parser for formulas. Keep the CSP free of `'unsafe-eval'` so the browser refuses it too."""
+proof = """1. Run `asa code <path>`: it lists every `eval(`, `new Function(`, `vm.run*` and Python `eval`/`exec` call whose argument is not a string literal, with file and line.
+Pass: none. Fail: any listed call. For each, trace where the string comes from; if it cannot contain request data, replace the call anyway and record why.
+2. Confirm the deployed CSP has no `'unsafe-eval'` (BROWSER-02)."""
+sources = [
+  { title = "CWE-95: Eval Injection", url = "https://cwe.mitre.org/data/definitions/95.html" },
+  { title = "OWASP Node.js Security Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "API-31"
+title = "Shell commands never built from strings"
+severity = "critical"
+layer = 7
+cwe = ["CWE-78"]
+mode = "review"
+stacks = ["any", "node", "nextjs"]
+risk = """`child_process.exec`, `execSync`, `spawn` with `shell: true`, `os.system` and `subprocess` with `shell=True` hand the whole string to a shell. A value with `;`, `|`, backticks or `$( )` in it, such as a file name or a URL from a form, runs its own command on the server."""
+build = """Do not call a shell. Use `execFile` or `spawn` with the program and an array of arguments (`shell: false`, the default), or Python `subprocess.run([...])` without `shell=True`. Validate arguments against an allow list, and put `--` before any value that could start with a dash."""
+proof = """1. Run `asa code <path>`: it lists every `exec`/`execSync` call whose command is built with a template string or `+`, every `shell: true`, and Python `os.system`/`subprocess` calls that use a shell with formatted strings.
+Pass: none. Fail: any listed call; rewrite it with an argument array."""
+sources = [
+  { title = "CWE-78: OS Command Injection", url = "https://cwe.mitre.org/data/definitions/78.html" },
+  { title = "OWASP OS Command Injection Defense Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "API-32"
+title = "SQL is parameterized, never built by string concatenation"
+severity = "critical"
+layer = 7
+cwe = ["CWE-89"]
+mode = "review"
+stacks = ["any", "node", "nextjs", "supabase"]
+risk = """A query built by pasting values into SQL text (a template string with `${}`, `+`, a Python f-string or `%`) lets a quote in the value end the string and add its own SQL. The attacker then reads or changes any table the database user can reach, and on Supabase the server often connects as a role that bypasses row-level security."""
+build = """Pass values as parameters: `$1`/`?` placeholders with a values array, tagged templates that parameterize (the `sql` tag of postgres.js or drizzle, Prisma `$queryRaw` used as a tag), or the query builder. Never use `$queryRawUnsafe`, `sql.unsafe` or `knex.raw` with interpolated input. Table and column names that must vary come from a fixed allow list."""
+proof = """1. Run `asa code <path>`: it lists SQL text built from interpolated values or concatenation, and whether it is passed straight to a query call.
+Pass: none. Fail: any query built from strings; warn: SQL-shaped strings with interpolation in files that run queries, to confirm by reading."""
+sources = [
+  { title = "CWE-89: SQL Injection", url = "https://cwe.mitre.org/data/definitions/89.html" },
+  { title = "OWASP Query Parameterization Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html" },
+]

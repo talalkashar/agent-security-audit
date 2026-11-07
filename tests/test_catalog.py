@@ -16,21 +16,25 @@ class CatalogTest(unittest.TestCase):
         cls.checks = catalog.load()
 
     def test_loads_all_areas(self):
-        self.assertEqual(len(self.checks), 117)
+        self.assertEqual(len(self.checks), 120)
         self.assertEqual({c.area for c in self.checks}, set(PREFIX))
 
     def test_ids_unique(self):
         ids = [c.id for c in self.checks]
         self.assertEqual(len(ids), len(set(ids)))
 
-    def test_ids_contiguous_per_area(self):
+    def test_ids_ascending_per_area(self):
+        # Numbers rise within each area. Gaps are allowed: some blocks are reserved (for example API-30.. for the
+        # code audit checks).
         by_area = defaultdict(list)
         for c in self.checks:
             by_area[c.area].append(c.id)
         for area, ids in by_area.items():
             with self.subTest(area=area):
-                expected = [f"{PREFIX[area]}-{n:02d}" for n in range(1, len(ids) + 1)]
-                self.assertEqual(ids, expected)
+                self.assertTrue(all(i.startswith(PREFIX[area] + "-") for i in ids))
+                nums = [int(i.rsplit("-", 1)[1]) for i in ids]
+                self.assertEqual(nums, sorted(set(nums)))
+                self.assertEqual(nums[0], 1)
 
     def test_fields_valid(self):
         for c in self.checks:

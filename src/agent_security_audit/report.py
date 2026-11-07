@@ -6,6 +6,7 @@ import html
 import json
 import re
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from . import __version__, catalog
 
@@ -278,11 +279,19 @@ def to_sarif(target, results):
         if r.status not in ("fail", "warn"):
             continue
         chk = checks[r.check_id]
-        sarif_results.append({
-            "ruleId": r.check_id, "level": SARIF_LEVEL[chk.severity] if r.status == "fail" else "note",
-            "message": {"text": r.summary},
-            "locations": [{"physicalLocation": {"artifactLocation": {"uri": target}}}],
-        })
+        level = SARIF_LEVEL[chk.severity] if r.status == "fail" else "note"
+        if not r.locations:
+            sarif_results.append({"ruleId": r.check_id, "level": level, "message": {"text": r.summary},
+                                  "locations": [{"physicalLocation": {"artifactLocation": {"uri": target}}}]})
+        # Code audit results: one SARIF result per source location, relative to the project root.
+        for loc in r.locations:
+            sarif_results.append({
+                "ruleId": r.check_id, "level": level,
+                "message": {"text": _clean(f"{loc.get('message') or r.summary}. {r.summary}")},
+                "locations": [{"physicalLocation": {
+                    "artifactLocation": {"uri": quote(str(loc["path"])), "uriBaseId": "%SRCROOT%"},
+                    "region": {"startLine": max(1, int(loc.get("line") or 1))}}}],
+            })
     return json.dumps({
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json", "version": "2.1.0",
         "runs": [{"tool": {"driver": {"name": "agent-security-audit", "version": __version__,

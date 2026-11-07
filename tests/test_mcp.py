@@ -90,7 +90,7 @@ class McpServerTest(unittest.TestCase):
 
     def test_tools_list(self):
         tools = {t["name"]: t for t in self.srv.request("tools/list")["result"]["tools"]}
-        self.assertEqual(set(tools), {"list_checks", "get_check", "build_rules", "run_scan"})
+        self.assertEqual(set(tools), {"list_checks", "get_check", "build_rules", "run_scan", "run_code_audit"})
         for t in tools.values():
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertTrue(t["description"])

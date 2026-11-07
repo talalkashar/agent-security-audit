@@ -17,13 +17,18 @@ class Result:
     summary: str
     evidence: list[str] = field(default_factory=list)
     fix: str = ""
+    # Source locations from the code audit: [{"path": "app/x.ts", "line": 3, "message": "..."}]. Empty for live checks.
+    locations: list[dict] = field(default_factory=list)
 
     def __post_init__(self):
         if self.status not in STATUSES:
             raise ValueError(f"unknown status {self.status!r}")
 
     def to_dict(self):
-        return asdict(self)
+        out = asdict(self)
+        if not out["locations"]:
+            del out["locations"]
+        return out
 
 
 def passed(check_id, summary, evidence=None):
