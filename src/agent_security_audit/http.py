@@ -4,14 +4,18 @@
 - A per-run request budget and a minimum delay keep scans gentle.
 - Redirects are never followed automatically, so checks can see them.
 - Response bodies are capped.
+- Each response must arrive in full within the timeout (a watchdog cuts a server that trickles bytes), and an
+  optional scan-level deadline stops new requests once the time budget is used up.
 """
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import re
 import socket
 import ssl
+import threading
 import time
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
@@ -25,6 +29,13 @@ MAX_BODY = 2 * 1024 * 1024
 
 class BudgetExceeded(RuntimeError):
     pass
+
+
+class TimeBudgetExceeded(BudgetExceeded):
+    """The scan-level time budget (--max-time) ran out before this request."""
+
+
+TIME_BUDGET_MESSAGE = "not run: time budget for the scan used up (raise --max-time to allow more)"
 
 
 class Blocked(RuntimeError):
@@ -95,7 +106,7 @@ class Response:
 
 
 class Client:
-    def __init__(self, target, *, timeout=10.0, budget=300, delay=0.05, insecure=False):
+    def __init__(self, target, *, timeout=10.0, budget=300, delay=0.05, insecure=False, deadline=None):
         if insecure and not is_local_host(urlsplit(target).hostname or ""):
             raise ValueError("insecure TLS is only allowed for local development hosts")
         self.target = target
@@ -103,6 +114,7 @@ class Client:
         self.budget = budget
         self.delay = delay
         self.insecure = insecure
+        self.deadline = deadline  # time.monotonic() value after which no new request starts; None: no limit
         self.sent = 0
         self._last = 0.0
         self._cache = {}
@@ -139,6 +151,8 @@ class Client:
 
     def _spend(self):
         """Count one connection against the budget and keep the minimum delay between them."""
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise TimeBudgetExceeded(TIME_BUDGET_MESSAGE)
         if self.sent >= self.budget:
             raise BudgetExceeded(f"request budget of {self.budget} used up")
         wait = self.delay - (time.monotonic() - self._last)
@@ -201,13 +215,26 @@ class Client:
         hdrs.update(headers or {})
         if isinstance(body, str):
             body = body.encode()
+        # The socket timeout only bounds each read, so a server that sends one byte at a time could hold the
+        # request open for minutes. The watchdog shuts the socket once the whole exchange passes the timeout.
+        watchdog = _Watchdog(conn, self.timeout)
         try:
+            conn.connect()
+            if watchdog.expired:  # it fired while the socket was still being opened, so it had nothing to cut
+                raise TimeoutError(watchdog.message)
             conn.request(method, target_path, body=body, headers=hdrs)
             raw = conn.getresponse()
             data = raw.read(MAX_BODY + 1)
             resp = Response(url, raw.status, raw.reason, list(raw.getheaders()), data[:MAX_BODY], len(data) > MAX_BODY)
+        except Exception as exc:
+            if watchdog.finish():
+                raise TimeoutError(watchdog.message) from exc
+            raise
         finally:
+            watchdog.finish()
             conn.close()
+        if watchdog.expired:
+            raise TimeoutError(watchdog.message)
         if not verify:
             why = challenge_of(resp)
             if why:
@@ -235,6 +262,38 @@ class Client:
             resp = self.get(nxt, cache=True)
             hops += 1
         return resp
+
+
+class _Watchdog:
+    """Shut a connection's socket when one request-response exchange runs past `seconds` of wall-clock time."""
+
+    def __init__(self, conn, seconds):
+        self.conn = conn
+        self.message = f"no complete response within {seconds:g} s"
+        self.expired = False
+        self._done = False
+        self._lock = threading.Lock()
+        self._timer = threading.Timer(seconds, self._cut)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _cut(self):
+        with self._lock:
+            if self._done:
+                return
+            self.expired = True
+        sock = self.conn.sock
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                # The plain socket method, so a TLS socket is cut at the TCP level without touching its TLS state.
+                socket.socket.shutdown(sock, socket.SHUT_RDWR)
+
+    def finish(self):
+        """Stop the timer. Returns True when it had already cut the connection."""
+        with self._lock:
+            self._done = True
+        self._timer.cancel()
+        return self.expired
 
 
 NETWORK_ERRORS = (OSError, socket.timeout, ssl.SSLError, http.client.HTTPException)

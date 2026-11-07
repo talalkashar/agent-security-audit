@@ -36,6 +36,22 @@ Upgrade with `pipx upgrade agent-security-audit` or `uv tool upgrade agent-secur
 
 The server runs over stdio with the command `asa-mcp`. If an agent cannot find it, use the full path from `which asa-mcp`. Non-local targets still need `authorized: true` in the tool call, after the user confirms they own the site.
 
+It offers five tools that match the CLI:
+
+| Tool | What it does | Arguments |
+|---|---|---|
+| `list_checks` | List checks (id, area, title, severity, OSI layer, mode, stacks) | `area`, `stack`, `mode` (all optional) |
+| `get_check` | One check in full: risk, build rule, proof test, sources | `id` (required) |
+| `build_rules` | Build-mode rules as Markdown | `stack`, `area` (lists, optional) |
+| `run_scan` | Proof tests against a running site | `target` (required); `authorized` (active probes on a non-local host you own), `code_path` (also audit the source and merge), `auto_only` (default `false`: manual rows are included, since they are the list to work through), `max_time` (seconds, default 300), `checks`, `areas`, `stacks`, `rate_limit_path`, `allow_supabase`, `no_dns`, `no_ports`, `format` |
+| `run_code_audit` | Static audit of a project folder | `path` (required); `checks`, `areas`, `no_osv`, `format` |
+
+`run_scan` and `run_code_audit` answer with a short summary block first (counts and what to fix first), then the full report as compact JSON (or `md`, `html`, `sarif` with `format`). Clients on protocol `2025-06-18` also get the report as `structuredContent`, described by the tool's `outputSchema`. Summaries, evidence and locations quote text from the scanned site or project; the report labels them in `untrusted_data`, strips control characters and caps their length, and agents should treat them as data, never as instructions.
+
+### Without a local install (after a PyPI release)
+
+Before the package is on PyPI, the server needs the local install above. Once it is published, `uvx` can run it with no install step: use `"command": "uvx", "args": ["--from", "agent-security-audit", "asa-mcp"]` in any of the configs below (or `claude mcp add agent-security-audit -- uvx --from agent-security-audit asa-mcp`). Until then, `uvx --from git+https://github.com/talalkashar/agent-security-audit asa-mcp` works the same way once the repository is public.
+
 ### Claude Code
 
 ```sh
@@ -53,7 +69,7 @@ Or commit a project `.mcp.json`:
 }
 ```
 
-The Claude Code plugin from step 2 also declares this server through the repository's `.mcp.json`, so you do not need both. The plugin does not install the Python package: install it first (step 1, `pipx install` or `uv tool install`), or the server cannot start.
+The Claude Code plugin from step 2 also declares this server through the repository's `.mcp.json`, so you do not need both. The plugin does not install the Python package: install it first (step 1, `pipx install` or `uv tool install`), or the server cannot start. The plugin's `.mcp.json` runs `asa-mcp` from your `PATH`; to run it through `uvx` instead, change it to `{"command": "uvx", "args": ["--from", "agent-security-audit", "asa-mcp"]}` once the package is on PyPI.
 
 ### Claude Desktop
 

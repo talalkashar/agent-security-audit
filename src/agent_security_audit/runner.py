@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import time
 from urllib.parse import urljoin, urlsplit
 
 from . import catalog, code_audit
@@ -86,12 +87,14 @@ def probe_skipped(check):
 
 
 def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=None, insecure=False,
-        budget=300, delay=0.05, timeout=10.0, include_manual=True, progress=None):
+        budget=300, delay=0.05, timeout=10.0, include_manual=True, progress=None, max_time=None):
     """Return (normalized_target, [Result]) for the selected checks. progress, when given, is called as
-    progress(done, total, check_id, status) after each check."""
+    progress(done, total, check_id, status) after each check. max_time, in seconds, is the scan's time budget:
+    once it is used up no new request starts, and checks that still need one report an error."""
     target = normalize_target(target)
     registry = load_all()
-    client = Client(target, timeout=timeout, budget=budget, delay=delay, insecure=insecure)
+    deadline = time.monotonic() + max_time if max_time else None
+    client = Client(target, timeout=timeout, budget=budget, delay=delay, insecure=insecure, deadline=deadline)
     if check_ids_need_network(ids, areas, stacks):
         try:
             final = canonical_target(target, client)
@@ -101,7 +104,8 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
             raise ScopeError(f"could not reach {target}: {type(exc).__name__}: {exc}") from exc
         if final != target:
             target = final
-            client = Client(target, timeout=timeout, budget=budget - client.sent, delay=delay, insecure=insecure)
+            client = Client(target, timeout=timeout, budget=budget - client.sent, delay=delay, insecure=insecure,
+                            deadline=deadline)
     may_probe = owned(target, authorized)
     ctx = Context(target, client, dict(options or {}), authorized=authorized, owned=may_probe)
     results = []

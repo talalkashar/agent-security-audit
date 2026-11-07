@@ -6,13 +6,15 @@ import argparse
 import json
 import os
 import sys
+from urllib.parse import urlsplit
 
 from . import __version__, catalog, code_audit, report, runner
-from .scope import ScopeError
+from .scope import ScopeError, is_local_host
 
 FAIL_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 COMMANDS = ("list", "show", "rules", "lab", "scan", "code")
 FORMATS = ("md", "json", "sarif", "html")
+MAX_TIME = 300.0
 EXTENSIONS = {".md": "md", ".json": "json", ".sarif": "sarif", ".html": "html", ".htm": "html"}
 SCAN_EPILOG = """output:
   --out FILE        write the full report to FILE; the format comes from --format, else from the
@@ -59,6 +61,23 @@ def _csv(values):
     return out or None
 
 
+def _stacks(values):
+    """--stack values, checked against the catalog's stacks so a typo is an error, not an unfiltered list."""
+    stacks = _csv(values)
+    bad = [s for s in stacks or [] if s not in catalog.STACKS]
+    if bad:
+        raise ValueError(f"unknown stack {', '.join(bad)}; valid values: {', '.join(catalog.STACKS)}")
+    return stacks
+
+
+def _code_hint(args):
+    """One line suggesting --code . when a local site is scanned from what looks like its project folder."""
+    host = urlsplit(args.target if "://" in args.target else "http://" + args.target).hostname or ""
+    if args.code or not is_local_host(host) or not os.path.isfile("package.json"):
+        return None
+    return "asa: tip: this folder has a package.json; add --code . to settle code checks from the source"
+
+
 def run_lab(mode, port):
     import time
 
@@ -86,7 +105,7 @@ def build_parser():
 
     ls = sub.add_parser("list", help="list checks")
     ls.add_argument("--area", action="append")
-    ls.add_argument("--stack", action="append")
+    ls.add_argument("--stack", action="append", help=f"only checks for these stacks: {', '.join(catalog.STACKS)}")
     ls.add_argument("--json", action="store_true")
 
     sh = sub.add_parser("show", help="show one check in full")
@@ -94,7 +113,8 @@ def build_parser():
     sh.add_argument("--json", action="store_true")
 
     ru = sub.add_parser("rules", help="build rules for a stack, as Markdown")
-    ru.add_argument("--stack", action="append", help="e.g. nextjs,supabase,vercel (default: all)")
+    ru.add_argument("--stack", action="append",
+                    help=f"comma-separated, from: {', '.join(catalog.STACKS)} (default: all)")
     ru.add_argument("--area", action="append")
 
     lb = sub.add_parser("lab", help="run the local practice site (vulnerable or fixed) to try the scanner on")
@@ -108,7 +128,7 @@ def build_parser():
                     help="you own this site or have written permission: also run the active probes")
     sc.add_argument("--check", action="append", help="only these check ids (repeat or comma-separate)")
     sc.add_argument("--area", action="append")
-    sc.add_argument("--stack", action="append")
+    sc.add_argument("--stack", action="append", help=f"only checks for these stacks: {', '.join(catalog.STACKS)}")
     sc.add_argument("--format", choices=FORMATS, help="md, json, sarif or html (see output below)")
     sc.add_argument("--out", help="write the report here instead of stdout")
     sc.add_argument("-q", "--quiet", action="store_true", help="no progress line on stderr")
@@ -134,7 +154,11 @@ def build_parser():
                     help="most same-origin pages the crawl visits (default 25); it never uses more than half the budget")
     sc.add_argument("--max-depth", type=int, default=3, help="most link hops from the home page the crawl follows")
     sc.add_argument("--budget", type=int, default=300, help="maximum requests to the target")
-    sc.add_argument("--timeout", type=float, default=10.0)
+    sc.add_argument("--timeout", type=float, default=10.0,
+                    help="seconds for one full response (default 10); a server that trickles bytes is cut off")
+    sc.add_argument("--max-time", type=float, default=MAX_TIME,
+                    help=f"time budget for the whole scan in seconds (default {MAX_TIME:g}; 0 = no limit). Checks "
+                         "still waiting for a request when it runs out report error \"not run: time budget\"")
     sc.add_argument("--code", metavar="PATH", help="also audit the site's source code at PATH and merge the results "
                     "(code evidence settles manual checks; a live fail always stands)")
     sc.add_argument("--no-osv", action="store_true", help="with --code: skip the OSV dependency vulnerability lookup")
@@ -190,7 +214,7 @@ def _main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         if args.cmd == "list":
-            checks = runner.select(areas=_csv(args.area), stacks=_csv(args.stack))
+            checks = runner.select(areas=_csv(args.area), stacks=_stacks(args.stack))
             if args.json:
                 print(json.dumps([c.to_dict() for c in checks], indent=2))
             else:
@@ -202,7 +226,7 @@ def _main(argv=None):
             print(json.dumps(c.to_dict(), indent=2) if args.json else show_markdown(c), end="")
             return 0
         if args.cmd == "rules":
-            print(rules_markdown(runner.select(areas=_csv(args.area), stacks=_csv(args.stack))), end="")
+            print(rules_markdown(runner.select(areas=_csv(args.area), stacks=_stacks(args.stack))), end="")
             return 0
         if args.cmd == "lab":
             return run_lab(args.mode, args.port)
@@ -217,20 +241,26 @@ def _main(argv=None):
             "no_dns": args.no_dns, "no_ports": args.no_ports, "supabase_tables": _csv(args.supabase_table),
             "dns_resolver": args.dns_resolver, "max_pages": args.max_pages, "max_depth": args.max_depth,
         }
+        if args.max_time < 0:
+            raise ValueError("--max-time must be 0 (no limit) or more seconds")
+        stacks = _stacks(args.stack)
+        hint = _code_hint(args)
+        if hint:
+            print(hint, file=sys.stderr)
         authorized = args.authorized
         show_progress = not args.quiet and _is_tty(sys.stderr)
         try:
             target, results = runner.run(
                 args.target, authorized=authorized, ids=_csv(args.check), areas=_csv(args.area),
-                stacks=_csv(args.stack), options=options, insecure=args.insecure, budget=args.budget,
-                timeout=args.timeout, include_manual=not args.auto_only,
+                stacks=stacks, options=options, insecure=args.insecure, budget=args.budget,
+                timeout=args.timeout, include_manual=not args.auto_only, max_time=args.max_time or None,
                 progress=_progress if show_progress else None)
         finally:
             if show_progress:
                 sys.stderr.write("\r\x1b[K")
                 sys.stderr.flush()
         if args.code:
-            selected = {c.id for c in runner.select(_csv(args.check), _csv(args.area), _csv(args.stack))}
+            selected = {c.id for c in runner.select(_csv(args.check), _csv(args.area), stacks)}
             _, code_results = code_audit.run(args.code, osv=not args.no_osv)
             results = code_audit.merge(results, [r for r in code_results if r.check_id in selected])
     except (ScopeError, catalog.CatalogError, ValueError) as exc:

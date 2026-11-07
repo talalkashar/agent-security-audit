@@ -154,5 +154,53 @@ class ScanCommandTest(unittest.TestCase):
         self.assertEqual(call("scan", "https://example.com", "--authorized", "--insecure")[0], 2)
 
 
+
+class StackAndHintTest(unittest.TestCase):
+    def test_unknown_stack_lists_valid_values(self):
+        for argv in (("rules", "--stack", "django"), ("list", "--stack", "nextjs,rails")):
+            code, out, err = call(*argv)
+            self.assertEqual(code, 2, argv)
+            self.assertEqual(out, "")
+            self.assertIn("valid values: any, nextjs, supabase, vercel, node", err)
+
+    def test_valid_stack_still_works(self):
+        code, out, _ = call("rules", "--stack", "nextjs,supabase")
+        self.assertEqual(code, 0)
+        self.assertIn("NEXT-01", out)
+
+    def test_negative_max_time_exits_2(self):
+        code, _, err = call("scan", "http://localhost:9", "--max-time", "-1")
+        self.assertEqual(code, 2)
+        self.assertIn("--max-time", err)
+
+    def test_code_hint_for_local_project_folder(self):
+        server, url = lab.serve("fixed", 0)
+        cwd = os.getcwd()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with open(os.path.join(tmp, "package.json"), "w") as fh:
+                    fh.write("{}")
+                os.chdir(tmp)
+                _, _, err = call("scan", url, "--auto-only", "--check", "BROWSER-03", "--format", "json")
+                self.assertIn("add --code .", err)
+                _, _, err = call("scan", url, "--auto-only", "--check", "BROWSER-03", "--format", "json",
+                                 "--code", tmp, "--no-osv")
+                self.assertNotIn("add --code .", err)
+                os.remove("package.json")
+                _, _, err = call("scan", url, "--auto-only", "--check", "BROWSER-03", "--format", "json")
+                self.assertNotIn("add --code .", err)
+        finally:
+            os.chdir(cwd)
+            server.shutdown()
+            server.server_close()
+
+    def test_no_code_hint_for_remote_target(self):
+        args = cli.build_parser().parse_args(["scan", "https://example.com"])
+        with mock.patch("os.path.isfile", return_value=True):
+            self.assertIsNone(cli._code_hint(args))
+            local = cli.build_parser().parse_args(["scan", "localhost:3000"])
+            self.assertIn("--code .", cli._code_hint(local))
+
+
 if __name__ == "__main__":
     unittest.main()
