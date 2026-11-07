@@ -10,7 +10,8 @@ from ..model import errored, failed, passed, skipped, warned
 from ..scope import is_local_host
 from . import auto
 
-EXPIRY_WARN_DAYS = 21
+EXPIRY_FAIL_DAYS = 14
+EXPIRY_WARN_DAYS = 30
 
 
 def _host_port(ctx):
@@ -65,10 +66,17 @@ def certificate(ctx):
         return failed("INFRA-02", f"The certificate does not verify: {exc.verify_message}.", [str(exc)])
     not_after = datetime.fromtimestamp(ssl.cert_time_to_seconds(cert["notAfter"]), tz=UTC)
     days = (not_after - datetime.now(UTC)).days
+    # Renewal normally happens with a third of the lifetime left, so short-lived certificates (6 or 47 days) get
+    # proportionally shorter thresholds: 14/30 days for a 90-day certificate.
+    lifetime = (not_after - datetime.fromtimestamp(ssl.cert_time_to_seconds(cert["notBefore"]), tz=UTC)).days
+    fail_days, warn_days = min(EXPIRY_FAIL_DAYS, lifetime // 6), min(EXPIRY_WARN_DAYS, lifetime // 3)
     issuer = dict(x[0] for x in cert.get("issuer", ()))
     ev = [f"expires {not_after.date().isoformat()} ({days} days)", f"issuer: {issuer.get('organizationName', '?')}",
           f"negotiated: {version}"]
-    if days < EXPIRY_WARN_DAYS:
+    if days <= fail_days:
+        return failed("INFRA-02", f"The certificate expires in {days} days and has not been renewed; renewal is "
+                      "probably failing.", ev)
+    if days < warn_days:
         return warned("INFRA-02", f"The certificate expires in {days} days; check that renewal is automatic.", ev)
     return passed("INFRA-02", f"The certificate is valid for {days} more days.", ev)
 

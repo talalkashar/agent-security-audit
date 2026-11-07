@@ -161,6 +161,27 @@ class Client:
             raw.close()
             raise
 
+    def target_address(self):
+        """The first address the target's host resolves to, looked up once per run (for port checks)."""
+        if not hasattr(self, "_address"):
+            host = urlsplit(self.target).hostname
+            self._address = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)[0][4][0]
+        return self._address
+
+    def probe_port(self, port, timeout=2.0):
+        """Open a TCP connection to the target's own address on `port` and close it at once, sending nothing.
+        Counts against the budget like a request. Returns "open", "closed" (refused) or "filtered" (no answer)."""
+        address = self.target_address()
+        self._spend()
+        try:
+            sock = socket.create_connection((address, port), timeout=min(timeout, self.timeout))
+        except ConnectionRefusedError:
+            return "closed"
+        except OSError:  # timed out, or a firewall answered host/port unreachable
+            return "filtered"
+        sock.close()
+        return "open"
+
     def _send(self, method, url, headers, body, cache, verify=False):
         key = (method, url, tuple(sorted((headers or {}).items())), body)
         if cache and key in self._cache:

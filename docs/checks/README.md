@@ -2,7 +2,7 @@
 
 # Check catalog
 
-102 checks in 6 areas. Each check has a risk, a build rule the agent follows while writing code, a proof test that shows the defense working on the running site, and sources.
+107 checks in 6 areas. Each check has a risk, a build rule the agent follows while writing code, a proof test that shows the defense working on the running site, and sources.
 
 - **auto**: `asa scan` runs the proof test and reports pass or fail with evidence.
 - **assisted**: the agent checks the code first, then runs a logged-in test itself if the code does not settle it.
@@ -16,9 +16,9 @@
 | [api](api.md) | API abuse, input handling and rate limits | 18 | 2 | 12 | 4 | 1 | 11 | 6 | 0 |
 | [auth](auth.md) | Authentication and sessions | 11 | 0 | 10 | 1 | 1 | 6 | 4 | 0 |
 | [browser](browser.md) | Browser security headers, cookies and client code | 19 | 8 | 7 | 4 | 0 | 7 | 11 | 1 |
-| [infra](infra.md) | Transport, DNS, email and hosting | 23 | 7 | 2 | 14 | 5 | 11 | 3 | 4 |
+| [infra](infra.md) | Transport, DNS, email and hosting | 28 | 14 | 2 | 12 | 6 | 13 | 4 | 5 |
 | [nextjs](nextjs.md) | Next.js and Vercel | 16 | 3 | 10 | 3 | 3 | 5 | 7 | 1 |
-| **Total** | | **102** | **21** | **51** | **30** | **15** | **49** | **32** | **6** |
+| **Total** | | **107** | **28** | **51** | **28** | **16** | **51** | **33** | **7** |
 
 ## By OSI layer
 
@@ -27,10 +27,10 @@
 | 1 Physical | 2 | 0 | 0 | 2 |
 | 2 Data link | 1 | 0 | 0 | 1 |
 | 3 Network | 1 | 0 | 0 | 1 |
-| 4 Transport | 1 | 0 | 0 | 1 |
+| 4 Transport | 3 | 2 | 0 | 1 |
 | 5 Session | 2 | 0 | 2 | 0 |
-| 6 Presentation | 4 | 3 | 0 | 1 |
-| 7 Application | 91 | 18 | 49 | 24 |
+| 6 Presentation | 5 | 5 | 0 | 0 |
+| 7 Application | 93 | 21 | 49 | 23 |
 
 ## All checks
 
@@ -109,8 +109,8 @@
 | [INFRA-08](infra.md#infra-08-no-secrets-in-git-history-or-working-tree) | critical | L7 | review | No secrets in git history or working tree |
 | [INFRA-09](infra.md#infra-09-dkim-signing-passes-for-every-sending-service) | high | L7 | assisted | DKIM signing passes for every sending service |
 | [INFRA-10](infra.md#infra-10-no-dangling-dns-records-subdomain-takeover) | high | L7 | review | No dangling DNS records (subdomain takeover) |
-| [INFRA-11](infra.md#infra-11-caa-records-name-only-the-cas-in-use-dnssec-considered) | low | L7 | review | CAA records name only the CAs in use; DNSSEC considered |
-| [INFRA-12](infra.md#infra-12-mta-sts-and-tls-rpt-protect-inbound-mail) | low | L6 | review | MTA-STS and TLS-RPT protect inbound mail |
+| [INFRA-11](infra.md#infra-11-caa-records-name-only-the-cas-in-use) | low | L7 | auto | CAA records name only the CAs in use |
+| [INFRA-12](infra.md#infra-12-mta-sts-and-tls-rpt-protect-inbound-mail) | low | L6 | auto | MTA-STS and TLS-RPT protect inbound mail |
 | [INFRA-13](infra.md#infra-13-dependencies-locked-audited-and-install-scripts-restricted) | critical | L7 | review | Dependencies locked, audited and install scripts restricted |
 | [INFRA-14](infra.md#infra-14-new-dependencies-vetted-against-typosquats) | high | L7 | review | New dependencies vetted against typosquats |
 | [INFRA-15](infra.md#infra-15-github-actions-pinned-least-privilege-and-injection-safe) | high | L7 | review | GitHub Actions pinned, least-privilege and injection-safe |
@@ -122,6 +122,11 @@
 | [INFRA-21](infra.md#infra-21-deploys-and-dashboards-used-only-from-trusted-networks) | medium | L2 | review | Deploys and dashboards used only from trusted networks |
 | [INFRA-22](infra.md#infra-22-hosting-providers-hold-current-physical-security-attestations) | low | L1 | review | Hosting providers hold current physical-security attestations |
 | [INFRA-23](infra.md#infra-23-developer-devices-encrypted-and-locked) | high | L1 | review | Developer devices encrypted and locked |
+| [INFRA-24](infra.md#infra-24-database-cache-and-container-api-ports-closed-to-the-internet) | critical | L4 | auto | Database, cache and container API ports closed to the internet |
+| [INFRA-25](infra.md#infra-25-remote-administration-ports-closed-to-the-internet) | high | L4 | auto | Remote administration ports closed to the internet |
+| [INFRA-26](infra.md#infra-26-tls-12-refuses-broken-and-non-forward-secret-cipher-suites) | medium | L6 | auto | TLS 1.2 refuses broken and non-forward-secret cipher suites |
+| [INFRA-27](infra.md#infra-27-dnssec-signs-the-domain-and-validates) | low | L7 | auto | DNSSEC signs the domain and validates |
+| [INFRA-28](infra.md#infra-28-no-dangling-cname-on-the-sites-hostnames-subdomain-takeover) | high | L7 | auto | No dangling CNAME on the site's hostnames (subdomain takeover) |
 | [NEXT-01](nextjs.md#next-01-no-secret-keys-in-client-javascript) | critical | L7 | auto | No secret keys in client JavaScript |
 | [NEXT-02](nextjs.md#next-02-no-production-source-maps) | medium | L7 | auto | No production source maps |
 | [NEXT-03](nextjs.md#next-03-framework-not-advertised-x-powered-by) | low | L7 | auto | Framework not advertised (X-Powered-By) |
@@ -139,4 +144,4 @@
 | [NEXT-15](nextjs.md#next-15-vercel-cron-endpoints-require-cron_secret) | medium | L7 | assisted | Vercel cron endpoints require CRON_SECRET |
 | [NEXT-16](nextjs.md#next-16-no-internal-x-middleware-headers-in-responses) | medium | L7 | assisted | No internal x-middleware headers in responses |
 
-Automated proof tests built in: 21 (ACCESS-01, API-01, API-02, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06, BROWSER-07, BROWSER-08, INFRA-01, INFRA-02, INFRA-03, INFRA-04, INFRA-05, INFRA-06, INFRA-07, NEXT-01, NEXT-02, NEXT-03).
+Automated proof tests built in: 28 (ACCESS-01, API-01, API-02, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06, BROWSER-07, BROWSER-08, INFRA-01, INFRA-02, INFRA-03, INFRA-04, INFRA-05, INFRA-06, INFRA-07, INFRA-11, INFRA-12, INFRA-24, INFRA-25, INFRA-26, INFRA-27, INFRA-28, NEXT-01, NEXT-02, NEXT-03).
