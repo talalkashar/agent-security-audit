@@ -225,6 +225,9 @@ class Client:
             conn.request(method, target_path, body=body, headers=hdrs)
             raw = conn.getresponse()
             data = raw.read(MAX_BODY + 1)
+            # Proof the body is whole even if the watchdog fires right after the read: Content-Length fully met
+            # (length counts down to 0), chunked framing (a cut makes read raise), or the size cap reached.
+            whole = raw.chunked or raw.length == 0 or len(data) > MAX_BODY
             resp = Response(url, raw.status, raw.reason, list(raw.getheaders()), data[:MAX_BODY], len(data) > MAX_BODY)
         except Exception as exc:
             if watchdog.finish():
@@ -233,7 +236,7 @@ class Client:
         finally:
             watchdog.finish()
             conn.close()
-        if watchdog.expired:
+        if watchdog.expired and not whole:  # a body read until close may have been cut short
             raise TimeoutError(watchdog.message)
         if not verify:
             why = challenge_of(resp)

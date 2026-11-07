@@ -7,6 +7,7 @@ anything else (logs, stray prints from checks) goes to stderr.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import re
 import sys
@@ -120,7 +121,8 @@ TOOLS = [
                            "description": "with code_path: skip the OSV dependency lookup (api.osv.dev)"},
                 "max_time": {"type": "integer", "minimum": 10, "maximum": 3600, "default": int(MAX_TIME),
                              "description": "time budget for the whole scan in seconds; checks still waiting "
-                                            "for a request when it runs out report error \"not run: time budget\""},
+                                            "for a request when it runs out, or that would pass on a crawl it "
+                                            "cut short, report error \"not run: time budget\""},
                 "rate_limit_path": {"type": "string", "description": "endpoint to prove rate limiting on, "
                                                                      "e.g. /api/auth/login"},
                 "rate_limit_method": {"type": "string", "default": "POST"},
@@ -266,12 +268,28 @@ def _slim(report_dict):
     return report_dict
 
 
+def _clean_results(results):
+    """Copies of results with the same cleaning mark_untrusted applies, for the md, html and sarif renderers."""
+    out = []
+    for r in results:
+        d = mark_untrusted({"results": [r.to_dict()]})["results"][0]
+        out.append(dataclasses.replace(r, summary=d["summary"], evidence=d["evidence"],
+                                       locations=d.get("locations") or []))
+    return out
+
+
 def _report(target, results, fmt, renderers):
     data = mark_untrusted(_slim(json.loads(report.to_json(target, results))))
     if fmt in renderers:
-        text = renderers[fmt](target, results)
+        text = renderers[fmt](target, _clean_results(results))
         if fmt == "sarif":
-            text = _compact(json.loads(text))
+            sarif = json.loads(text)
+            sarif["runs"][0].setdefault("properties", {})["untrusted_data"] = UNTRUSTED_NOTE
+            text = _compact(sarif)
+        elif fmt == "html":  # after the doctype, so the page still renders in standards mode
+            text = text.replace("<!doctype html>", f"<!doctype html>\n<!-- Note: {UNTRUSTED_NOTE} -->", 1)
+        else:
+            text = "Note: " + UNTRUSTED_NOTE + "\n\n" + text
     else:
         text = _compact(data)
     summary = report.summary_text(target, results) + "\nNote: " + UNTRUSTED_NOTE + "\n"

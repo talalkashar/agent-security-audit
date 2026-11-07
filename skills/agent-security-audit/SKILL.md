@@ -61,7 +61,7 @@ Use before launch and after any change to auth, data access, APIs or hosting.
    asa code . --format json --out .asa/code.json                   # source only, when nothing is running yet
    ```
 
-   A scan stops after `--max-time` seconds (default 300); checks it did not reach report `error` "not run: time budget". Re-run those with `--check <ID>`.
+   A scan stops after `--max-time` seconds (default 300); checks it did not reach, or that would pass on a crawl it cut short, report `error` "not run: time budget" (never `pass`). Re-run those with `--check <ID>`.
 
    Add `--rate-limit-path <login endpoint>` (with a fake-credential `--rate-limit-body`) to prove rate limiting. Add `--allow-supabase` only if the site uses Supabase and the user owns that project; it reads row counts with the public key and nothing else.
 3. Work through every `manual` result without asking the user to set anything up. Run `asa show <ID>` for its proof steps.

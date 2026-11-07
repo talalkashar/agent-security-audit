@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urldefrag, urljoin, urlsplit
 
-from .http import NETWORK_ERRORS, BudgetExceeded
+from .http import NETWORK_ERRORS, BudgetExceeded, TimeBudgetExceeded
 from .scope import same_origin
 
 DEFAULT_MAX_PAGES = 25
@@ -70,6 +70,7 @@ class Site:
     links: list = field(default_factory=list)       # same-origin URLs seen (links, redirects, sitemap), in order
     skipped: list = field(default_factory=list)     # URLs not requested because they look state-changing
     notes: list = field(default_factory=list)       # limits reached, errors
+    timed_out: bool = False                         # the scan's time budget cut the crawl short
 
     def params(self):
         """{(path, name): example_url} for query parameters on same-origin links."""
@@ -241,6 +242,9 @@ class _Crawler:
             return None
         try:
             return self.client.get(url, cache=True)
+        except TimeBudgetExceeded:
+            self.site.timed_out = True
+            self.stop("time budget used up")
         except BudgetExceeded:
             self.stop("request budget used up")
         except NETWORK_ERRORS as exc:
@@ -314,9 +318,12 @@ class _Crawler:
 
 
 def crawl(ctx):
-    """The shared Site for this run. Crawls on first use."""
+    """The shared Site for this run. Crawls on first use. A check that reads a crawl the time budget cut short
+    is flagged (ctx.cache["time_cut"]) so the runner never reports a pass built on part of the site."""
     if "crawl" not in ctx.cache:
         ctx.cache["crawl"] = _Crawler(ctx).run()
+    if ctx.cache["crawl"].timed_out:
+        ctx.cache["time_cut"] = True
     return ctx.cache["crawl"]
 
 

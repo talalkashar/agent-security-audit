@@ -158,7 +158,8 @@ def build_parser():
                     help="seconds for one full response (default 10); a server that trickles bytes is cut off")
     sc.add_argument("--max-time", type=float, default=MAX_TIME,
                     help=f"time budget for the whole scan in seconds (default {MAX_TIME:g}; 0 = no limit). Checks "
-                         "still waiting for a request when it runs out report error \"not run: time budget\"")
+                         "still waiting for a request when it runs out, or that would pass on a crawl it cut short, "
+                         "report error \"not run: time budget\"")
     sc.add_argument("--code", metavar="PATH", help="also audit the site's source code at PATH and merge the results "
                     "(code evidence settles manual checks; a live fail always stands)")
     sc.add_argument("--no-osv", action="store_true", help="with --code: skip the OSV dependency vulnerability lookup")
