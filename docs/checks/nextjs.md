@@ -25,7 +25,7 @@
 
 ## NEXT-01 No secret keys in client JavaScript
 
-Severity: critical · OSI layer 7 (Application) · CWE-798, CWE-200 · Mode: auto (proof test built in) · Stacks: nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-798, CWE-200 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -49,7 +49,7 @@ Only public values may use `NEXT_PUBLIC_`: the Supabase URL, the Supabase publis
 
 ## NEXT-02 No production source maps
 
-Severity: medium · OSI layer 7 (Application) · CWE-540 · Mode: auto (proof test built in) · Stacks: nextjs
+Severity: medium · OSI layer 7 (Application) · CWE-540 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -72,7 +72,7 @@ Keep `productionBrowserSourceMaps` unset or false in `next.config.*`. If error t
 
 ## NEXT-03 Framework not advertised (X-Powered-By)
 
-Severity: low · OSI layer 7 (Application) · CWE-200 · Mode: auto (proof test built in) · Stacks: nextjs
+Severity: low · OSI layer 7 (Application) · CWE-200 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -93,7 +93,7 @@ Set `poweredByHeader: false` in `next.config.*`. Do not add other headers that n
 
 ## NEXT-04 Next.js, React and sharp on a patched release
 
-Severity: critical · OSI layer 7 (Application) · CWE-1395 · Mode: review · Stacks: nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-1395 · Mode: review (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -127,7 +127,7 @@ HTTP alone cannot prove this: `X-Powered-By` (NEXT-03) shows the framework, not 
 
 ## NEXT-05 Authorization enforced beyond middleware or proxy.ts
 
-Severity: critical · OSI layer 7 (Application) · CWE-863, CWE-288 · Mode: assisted · Stacks: nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-863, CWE-288 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -151,7 +151,7 @@ Treat middleware or `proxy.ts` as an early redirect only. Enforce session and ro
 
 ## NEXT-06 Every Server Action checks the caller and resource ownership
 
-Severity: high · OSI layer 7 (Application) · CWE-862, CWE-639 · Mode: assisted · Stacks: nextjs
+Severity: high · OSI layer 7 (Application) · CWE-862, CWE-639 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -175,7 +175,7 @@ Start every action with `const user = await requireUser()` from a `server-only` 
 
 ## NEXT-07 Server Action origin check not weakened
 
-Severity: medium · OSI layer 7 (Application) · CWE-352, CWE-346 · Mode: assisted · Stacks: nextjs
+Severity: medium · OSI layer 7 (Application) · CWE-352, CWE-346 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -269,7 +269,7 @@ Stay patched (NEXT-04). With a CDN in front of Next.js, forward and vary on `RSC
 
 ## NEXT-11 Image optimizer limited to exact remote sources
 
-Severity: high · OSI layer 7 (Application) · CWE-918, CWE-400 · Mode: assisted · Stacks: nextjs
+Severity: high · OSI layer 7 (Application) · CWE-918, CWE-400 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -362,7 +362,7 @@ Set Deployment Protection to Standard (or All Deployments for internal apps), as
 
 ## NEXT-15 Vercel cron endpoints require CRON_SECRET
 
-Severity: medium · OSI layer 7 (Application) · CWE-306 · Mode: assisted · Stacks: vercel
+Severity: medium · OSI layer 7 (Application) · CWE-306 · Mode: assisted (code audit built in: `asa code`) · Stacks: vercel
 
 ### Risk
 

@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from agent_security_audit import catalog
+from agent_security_audit import catalog, code_audit
 from agent_security_audit.checks import load_all
 
 MODES = ("auto", "assisted", "review")
@@ -52,6 +52,7 @@ def render_check(c, automated):
     if c.asvs:
         meta.append("ASVS " + ", ".join(c.asvs))
     mode = c.mode + (" (proof test built in)" if c.id in automated else "")
+    mode += " (code audit built in: `asa code`)" if c.id in code_audit.CHECKS else ""
     meta += [f"Mode: {mode}", "Stacks: " + ", ".join(c.stacks)]
     lines = [f"## {c.id} {c.title}", "", " · ".join(meta), "",
              "### Risk", "", c.risk, "", "### Build rule", "", c.build, "", "### Proof test", "", c.proof, "",
@@ -123,6 +124,8 @@ def render_index(checks, automated):
                      f"{_cell(c.title)} |")
     lines += ["", f"Automated proof tests built in: {len(automated)} ("
               + ", ".join(sorted(automated)) + ")."]
+    lines += ["", f"Settled from source code by `asa code`: {len(code_audit.CHECKS)} ("
+              + ", ".join(sorted(code_audit.CHECKS)) + ")."]
     return "\n".join(lines) + "\n"
 
 

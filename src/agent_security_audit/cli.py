@@ -1,4 +1,4 @@
-"""Command line: asa list | show | rules | scan."""
+"""Command line: asa list | show | rules | lab | scan | code."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-from . import __version__, catalog, report, runner
+from . import __version__, catalog, code_audit, report, runner
 from .scope import ScopeError
 
 FAIL_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -112,6 +112,21 @@ def build_parser():
     sc.add_argument("--insecure", action="store_true", help="accept self-signed TLS (local hosts only)")
     sc.add_argument("--budget", type=int, default=300, help="maximum requests to the target")
     sc.add_argument("--timeout", type=float, default=10.0)
+    sc.add_argument("--code", metavar="PATH", help="also audit the site's source code at PATH and merge the results "
+                    "(code evidence settles manual checks; a live fail always stands)")
+    sc.add_argument("--no-osv", action="store_true", help="with --code: skip the OSV dependency vulnerability lookup")
+
+    co = sub.add_parser("code", help="audit a project's source code statically (nothing is executed)")
+    co.add_argument("path", nargs="?", default=".", help="project folder (default: the current folder)")
+    co.add_argument("--check", action="append", help="only these check ids (repeat or comma-separate)")
+    co.add_argument("--area", action="append")
+    co.add_argument("--format", choices=("md", "json", "sarif"), default="md")
+    co.add_argument("--out", help="write the report here instead of stdout")
+    co.add_argument("--fail-on", choices=("critical", "high", "medium", "low", "none"), default="high",
+                    help="exit 1 when a failed check is at least this severe (default: high)")
+    co.add_argument("--no-osv", action="store_true",
+                    help="skip the dependency vulnerability lookup (the only network call, to api.osv.dev)")
+    co.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for OSV")
     return p
 
 
@@ -145,6 +160,10 @@ def _main(argv=None):
             return 0
         if args.cmd == "lab":
             return run_lab(args.mode, args.port)
+        if args.cmd == "code":
+            target, results = code_audit.run(args.path, osv=not args.no_osv, timeout=args.timeout,
+                                             ids=_csv(args.check), areas=_csv(args.area))
+            return _emit(args, target, results)
         options = {
             "rate_limit_path": args.rate_limit_path, "rate_limit_method": args.rate_limit_method,
             "rate_limit_body": args.rate_limit_body, "rate_limit_content_type": args.rate_limit_content_type,
@@ -155,9 +174,17 @@ def _main(argv=None):
             args.target, authorized=args.authorized, ids=_csv(args.check), areas=_csv(args.area),
             stacks=_csv(args.stack), options=options, insecure=args.insecure, budget=args.budget,
             timeout=args.timeout, include_manual=not args.auto_only)
+        if args.code:
+            selected = {c.id for c in runner.select(_csv(args.check), _csv(args.area), _csv(args.stack))}
+            _, code_results = code_audit.run(args.code, osv=not args.no_osv)
+            results = code_audit.merge(results, [r for r in code_results if r.check_id in selected])
     except (ScopeError, catalog.CatalogError, ValueError) as exc:
         print(f"asa: {exc}", file=sys.stderr)
         return 2
+    return _emit(args, target, results)
+
+
+def _emit(args, target, results):
     render = {"md": report.to_markdown, "json": report.to_json, "sarif": report.to_sarif}[args.format]
     text = render(target, results)
     if args.out:

@@ -2,7 +2,7 @@
 
 # api: API abuse, input handling and rate limits
 
-18 checks. Read one in the terminal with `asa show <ID>`.
+21 checks. Read one in the terminal with `asa show <ID>`.
 
 | ID | Severity | Layer | Mode | Title |
 |---|---|---|---|---|
@@ -24,6 +24,9 @@
 | [API-16](#api-16-authorization-code-fails-closed-on-errors-and-missing-config) | high | L7 | review | Authorization code fails closed on errors and missing config |
 | [API-17](#api-17-every-live-api-route-is-known-documented-and-still-needed) | medium | L7 | review | Every live API route is known, documented and still needed |
 | [API-18](#api-18-responses-from-third-party-apis-are-validated-before-use) | medium | L7 | review | Responses from third-party APIs are validated before use |
+| [API-30](#api-30-no-eval-new-function-or-vm-on-dynamic-strings) | critical | L7 | review | No eval, new Function or vm on dynamic strings |
+| [API-31](#api-31-shell-commands-never-built-from-strings) | critical | L7 | review | Shell commands never built from strings |
+| [API-32](#api-32-sql-is-parameterized-never-built-by-string-concatenation) | critical | L7 | review | SQL is parameterized, never built by string concatenation |
 
 ## API-01 Login endpoint is rate limited (429 + Retry-After)
 
@@ -135,7 +138,7 @@ Writing privileged columns (role, is_admin, plan) through an update is owned by 
 
 ## API-05 User input never builds PostgREST filter strings
 
-Severity: high · OSI layer 7 (Application) · CWE-89, CWE-943 · Mode: assisted · Stacks: supabase
+Severity: high · OSI layer 7 (Application) · CWE-89, CWE-943 · Mode: assisted (code audit built in: `asa code`) · Stacks: supabase
 
 ### Risk
 
@@ -482,3 +485,70 @@ Pass: the response goes through a schema parse, and the call has a timeout and h
 ### Sources
 
 - [OWASP API Security Top 10 2023: API10 Unsafe Consumption of APIs](https://api-security.owasp.org/editions/2023/en/0xaa-unsafe-consumption-of-apis/)
+
+## API-30 No eval, new Function or vm on dynamic strings
+
+Severity: critical · OSI layer 7 (Application) · CWE-95 · Mode: review (code audit built in: `asa code`) · Stacks: any, node, nextjs
+
+### Risk
+
+`eval`, `new Function`, Node's `vm` module and Python's `eval`/`exec` run a string as code with the server's rights. If any part of that string comes from a request, a stored record or a third-party response, an attacker runs their own code on the server and reads every secret it holds. `vm` is not a security sandbox.
+
+### Build rule
+
+Never turn data into code. Parse JSON with `JSON.parse`, look up handlers in a fixed map (`handlers[name]` with an allow list) instead of building function names, and use a real expression parser for formulas. Keep the CSP free of `'unsafe-eval'` so the browser refuses it too.
+
+### Proof test
+
+1. Run `asa code <path>`: it lists every `eval(`, `new Function(`, `vm.run*` and Python `eval`/`exec` call whose argument is not a string literal, with file and line.
+Pass: none. Fail: any listed call. For each, trace where the string comes from; if it cannot contain request data, replace the call anyway and record why.
+2. Confirm the deployed CSP has no `'unsafe-eval'` (BROWSER-02).
+
+### Sources
+
+- [CWE-95: Eval Injection](https://cwe.mitre.org/data/definitions/95.html)
+- [OWASP Node.js Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html)
+
+## API-31 Shell commands never built from strings
+
+Severity: critical · OSI layer 7 (Application) · CWE-78 · Mode: review (code audit built in: `asa code`) · Stacks: any, node, nextjs
+
+### Risk
+
+`child_process.exec`, `execSync`, `spawn` with `shell: true`, `os.system` and `subprocess` with `shell=True` hand the whole string to a shell. A value with `;`, `|`, backticks or `$( )` in it, such as a file name or a URL from a form, runs its own command on the server.
+
+### Build rule
+
+Do not call a shell. Use `execFile` or `spawn` with the program and an array of arguments (`shell: false`, the default), or Python `subprocess.run([...])` without `shell=True`. Validate arguments against an allow list, and put `--` before any value that could start with a dash.
+
+### Proof test
+
+1. Run `asa code <path>`: it lists every `exec`/`execSync` call whose command is built with a template string or `+`, every `shell: true`, and Python `os.system`/`subprocess` calls that use a shell with formatted strings.
+Pass: none. Fail: any listed call; rewrite it with an argument array.
+
+### Sources
+
+- [CWE-78: OS Command Injection](https://cwe.mitre.org/data/definitions/78.html)
+- [OWASP OS Command Injection Defense Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.html)
+
+## API-32 SQL is parameterized, never built by string concatenation
+
+Severity: critical · OSI layer 7 (Application) · CWE-89 · Mode: review (code audit built in: `asa code`) · Stacks: any, node, nextjs, supabase
+
+### Risk
+
+A query built by pasting values into SQL text (a template string with `${}`, `+`, a Python f-string or `%`) lets a quote in the value end the string and add its own SQL. The attacker then reads or changes any table the database user can reach, and on Supabase the server often connects as a role that bypasses row-level security.
+
+### Build rule
+
+Pass values as parameters: `$1`/`?` placeholders with a values array, tagged templates that parameterize (the `sql` tag of postgres.js or drizzle, Prisma `$queryRaw` used as a tag), or the query builder. Never use `$queryRawUnsafe`, `sql.unsafe` or `knex.raw` with interpolated input. Table and column names that must vary come from a fixed allow list.
+
+### Proof test
+
+1. Run `asa code <path>`: it lists SQL text built from interpolated values or concatenation, and whether it is passed straight to a query call.
+Pass: none. Fail: any query built from strings; warn: SQL-shaped strings with interpolation in files that run queries, to confirm by reading.
+
+### Sources
+
+- [CWE-89: SQL Injection](https://cwe.mitre.org/data/definitions/89.html)
+- [OWASP Query Parameterization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html)

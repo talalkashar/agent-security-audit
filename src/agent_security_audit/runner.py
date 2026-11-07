@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 from urllib.parse import urljoin, urlsplit
 
-from . import catalog
+from . import catalog, code_audit
 from .checks import Context, load_all
 from .http import NETWORK_ERRORS, Blocked, BudgetExceeded, Client, OffTarget
 from .model import Result, errored
@@ -71,6 +71,8 @@ def check_ids_need_network(ids, areas, stacks):
 def manual_result(check):
     how = ("check the code first, then a logged-in test if the code does not settle it"
            if check.mode == "assisted" else "check the code and config")
+    if check.id in code_audit.CHECKS:
+        how += " (`asa code <path>` or `asa scan --code <path>` reads the code for it)"
     return Result(check.id, "manual", f"Not visible from outside: {how}. Proof steps: {check.id}.",
                   [check.proof])
 

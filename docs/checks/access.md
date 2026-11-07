@@ -24,7 +24,7 @@
 
 ## ACCESS-01 Supabase tables not readable with the public anon key
 
-Severity: critical · OSI layer 7 (Application) · CWE-862, CWE-284 · Mode: auto (proof test built in) · Stacks: supabase
+Severity: critical · OSI layer 7 (Application) · CWE-862, CWE-284 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: supabase
 
 ### Risk
 
@@ -55,7 +55,7 @@ Pass: every table returns 401/403 or zero rows. Fail: any table returns a row.
 
 ## ACCESS-02 RLS policies restrict rows to their owner, not any signed-in user
 
-Severity: critical · OSI layer 7 (Application) · CWE-863, CWE-639 · Mode: assisted · Stacks: supabase
+Severity: critical · OSI layer 7 (Application) · CWE-863, CWE-639 · Mode: assisted (code audit built in: `asa code`) · Stacks: supabase
 
 ### Risk
 
@@ -153,7 +153,7 @@ Pass: the request is rejected or the privileged column is unchanged. Fail: it ch
 
 ## ACCESS-06 Views and security definer functions do not bypass RLS
 
-Severity: high · OSI layer 7 (Application) · CWE-863, CWE-250 · Mode: review · Stacks: supabase
+Severity: high · OSI layer 7 (Application) · CWE-863, CWE-250 · Mode: review (code audit built in: `asa code`) · Stacks: supabase
 
 ### Risk
 
@@ -200,7 +200,7 @@ Pass: no columns named like email, phone, address, dob, token, stripe_*, ssn or 
 
 ## ACCESS-08 Secret-key client used only off user request paths
 
-Severity: critical · OSI layer 7 (Application) · CWE-250, CWE-862 · Mode: review · Stacks: supabase, nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-250, CWE-862 · Mode: review (code audit built in: `asa code`) · Stacks: supabase, nextjs
 
 ### Risk
 
@@ -276,7 +276,7 @@ Pass: 403/404/empty and B's objects unchanged. Fail: B's data returned or modifi
 
 ## ACCESS-11 Server Actions check session and permission before acting
 
-Severity: high · OSI layer 7 (Application) · CWE-862, CWE-306 · Mode: review · Stacks: nextjs
+Severity: high · OSI layer 7 (Application) · CWE-862, CWE-306 · Mode: review (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 

@@ -1,0 +1,12 @@
+name: ci
+on: [issues, pull_request_target]
+jobs:
+  greet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: someone/setup-thing@v2
+      - run: |
+          echo "New issue: ${{ github.event.issue.title }}"

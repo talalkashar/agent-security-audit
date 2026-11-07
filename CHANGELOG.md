@@ -2,6 +2,11 @@
 
 All notable changes to this project are listed here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- `asa code [path]`, `asa scan --code <path>` and the `run_code_audit` MCP tool: a static code audit that settles 29 checks with file:line evidence (SARIF locations included), with an OSV lookup for locked dependencies (`--no-osv` to skip).
+- New review checks API-30 (eval and dynamic code), API-31 (shell commands built from strings) and API-32 (SQL built from strings).
+
 ## 0.1.0 - 2026-11-07
 
 First release.

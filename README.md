@@ -9,7 +9,7 @@
 
 Point it at any website you own, local or live. It scans the running site, reads the code, and tells you every security flaw it finds, with the evidence and the fix. No accounts to create, no config, no setup.
 
-It works as a skill and an MCP server for Claude Code, Codex, Cursor, Gemini CLI, Windsurf and any agent that reads `AGENTS.md`, and as a plain command line tool (`asa`). 102 checks, mapped to OSI layers 1 to 7. Python, no runtime dependencies.
+It works as a skill and an MCP server for Claude Code, Codex, Cursor, Gemini CLI, Windsurf and any agent that reads `AGENTS.md`, and as a plain command line tool (`asa`). 105 checks, mapped to OSI layers 1 to 7. Python, no runtime dependencies.
 
 ```text
 $ asa scan https://your-site.com --authorized
@@ -105,6 +105,18 @@ Use it before launch and after any change to auth, data access or hosting.
 2. Run `asa scan <url>`. Automated checks report `pass`, `fail` or `warn` with evidence. Assisted and review checks come back as `manual` with their proof steps.
 3. The agent works through each `manual` check without asking you for anything: it reads the code and config, and where the code does not settle it, signs up two accounts on your site and runs a logged-in test in a headless browser.
 4. Every `fail` gets fixed using the build rule, then the scan runs again until it passes. A check that cannot be proven stays reported as unproven.
+
+## Code audit
+
+`asa code [path]` reads the project's source statically and settles the checks code can answer, with `file:line` evidence. It never runs the project, git or a package manager, reads only files under `path` (tracked files from `.git/index`, otherwise a walk that honours `.gitignore`; `node_modules`, build output and lockfiles are skipped for secrets) and masks every secret it quotes.
+
+```sh
+asa code .                                   # Markdown report of the current project
+asa code . --format sarif --out code.sarif   # one SARIF result per source line
+asa scan http://localhost:3000 --code .      # one report: live proof tests plus code evidence
+```
+
+It covers committed secrets and tracked `.env` files (INFRA-08), secret-looking `NEXT_PUBLIC_`/`VITE_`/`PUBLIC_` variables (NEXT-01), Supabase migrations without row-level security or with open policies, owner-rights views and security definer functions (ACCESS-01, ACCESS-02, ACCESS-06), route handlers and Server Actions that touch data with no auth call (NEXT-05, NEXT-06, ACCESS-11), `getSession()` on the server (AUTH-01), the secret-key client in client components (ACCESS-08), cron routes without `CRON_SECRET` (NEXT-15), `next.config` and security header settings (NEXT-02, NEXT-03, NEXT-07, NEXT-11, BROWSER-01 to 05, BROWSER-08), raw HTML, `eval`, shell and SQL built from strings (BROWSER-09, API-30, API-31, API-32, API-05), GitHub Actions (INFRA-15) and vulnerable locked dependencies (INFRA-13, NEXT-04). Heuristic findings are `warn` and say "Suspected". The dependency lookup sends package names and versions to the [OSV](https://osv.dev) database; `--no-osv` skips it, and an OSV outage is reported as `error`, never `pass`. In `asa scan --code`, a live `fail` always stands, a code `fail` beats a live pass, and code results fill in the checks the scanner could only mark `manual`.
 
 ## Install as an agent skill
 
@@ -206,7 +218,7 @@ asa scan <url> --format sarif --out asa.sarif   # SARIF 2.1.0 for GitHub code sc
 
 ### GitHub code scanning
 
-This workflow starts the app in CI, scans it on localhost and uploads the SARIF file. Failed and warned checks appear under the repository's Security tab. Results point at the scanned URL, not at a line of source code.
+This workflow starts the app in CI, scans it on localhost and uploads the SARIF file. Failed and warned checks appear under the repository's Security tab. Live results point at the scanned URL; code audit results (`asa code`, or `asa scan --code`) point at the file and line.
 
 ```yaml
 name: security-proof
@@ -246,12 +258,12 @@ Checks by area:
 | Area | What it covers | Checks | Auto | Assisted | Review | Critical | High | Medium | Low |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | [access](docs/checks/access.md) | Access control and Supabase row-level security | 15 | 1 | 10 | 4 | 5 | 9 | 1 | 0 |
-| [api](docs/checks/api.md) | API abuse, input handling and rate limits | 18 | 2 | 12 | 4 | 1 | 11 | 6 | 0 |
+| [api](docs/checks/api.md) | API abuse, input handling and rate limits | 21 | 2 | 12 | 7 | 4 | 11 | 6 | 0 |
 | [auth](docs/checks/auth.md) | Authentication and sessions | 11 | 0 | 10 | 1 | 1 | 6 | 4 | 0 |
 | [browser](docs/checks/browser.md) | Browser security headers, cookies and client code | 19 | 8 | 7 | 4 | 0 | 7 | 11 | 1 |
 | [infra](docs/checks/infra.md) | Transport, DNS, email and hosting | 23 | 7 | 2 | 14 | 5 | 11 | 3 | 4 |
 | [nextjs](docs/checks/nextjs.md) | Next.js and Vercel | 16 | 3 | 10 | 3 | 3 | 5 | 7 | 1 |
-| **Total** | | **102** | **21** | **51** | **30** | **15** | **49** | **32** | **6** |
+| **Total** | | **105** | **21** | **51** | **33** | **18** | **49** | **32** | **6** |
 
 Checks by OSI layer:
 
@@ -263,7 +275,7 @@ Checks by OSI layer:
 | 4 Transport | 1 | 0 | 0 | 1 |
 | 5 Session | 2 | 0 | 2 | 0 |
 | 6 Presentation | 4 | 3 | 0 | 1 |
-| 7 Application | 91 | 18 | 49 | 24 |
+| 7 Application | 94 | 18 | 49 | 27 |
 
 <!-- catalog:end -->
 

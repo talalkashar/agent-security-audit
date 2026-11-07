@@ -1,0 +1,1 @@
+{ "name": "code-fixed", "private": true, "dependencies": { "next": "15.5.9", "react": "19.2.3" } }

@@ -1,0 +1,6 @@
+import subprocess
+
+
+def find_user(cursor, name):
+    cursor.execute(f"SELECT * FROM users WHERE name = '{name}'")
+    subprocess.run(f"grep {name} users.txt", shell=True)
