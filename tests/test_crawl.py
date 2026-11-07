@@ -310,7 +310,7 @@ class LibraryTest(unittest.TestCase):
             "/*! jQuery v3.4.1 | (c) JS Foundation */": ("jquery", "3.4.1"),
             "/*! jQuery UI - v1.12.1 */": None,
             "/**\n * @license AngularJS v1.8.2\n */": ("angularjs", "1.8.2"),
-            " * Bootstrap v4.1.3 (https://getbootstrap.com/)": ("bootstrap", "4.1.3"),
+            "/*!\n  * Bootstrap v4.1.3 (https://getbootstrap.com/)": ("bootstrap", "4.1.3"),
             "//! moment.js\n//! version : 2.29.1\n": ("moment", "2.29.1"),
             "/** @license Lodash <https://lodash.com/> */ var VERSION = '4.17.15';": ("lodash", "4.17.15"),
             "/** @license Lodash lodash.com/license */ var t,r=\"4.17.11\",e=200,": ("lodash", "4.17.11"),
@@ -358,7 +358,7 @@ class OpenRedirectTest(unittest.TestCase):
         self.assertFalse(any("logout" in u for _, u in c.client.calls))
 
     def test_relative_only_passes(self):
-        _, r = self.run_check(lambda d: d if d.startswith("/") and not d.startswith("//") else "/")
+        _, r = self.run_check(lambda d: d if d.startswith("/") and not d.startswith(("//", "/\\")) else "/")
         self.assertEqual(r.status, "pass")
 
     def test_no_params_skips(self):

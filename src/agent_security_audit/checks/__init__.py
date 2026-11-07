@@ -39,6 +39,16 @@ class Context:
         return default if value in (None, "") else value
 
 
+def count(n, one, many=None):
+    """'1 file' / '2 files'. Pass `many` for irregular plurals ('1 library' / '2 libraries')."""
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def are(n):
+    """The verb that agrees with a count: 'is' for 1, 'are' otherwise."""
+    return "is" if n == 1 else "are"
+
+
 def load_all():
     """Import every check module so its @auto functions register."""
     from . import browser, dns_email, exposure, network, ratelimit, supabase, transport, webapp  # noqa: F401

@@ -12,7 +12,9 @@ risk = """Any hostname that serves content over plain HTTP exposes cookies and f
 build = """Serve every hostname through Vercel or another host that forces HTTPS. Keep apex and www both on the project, one redirecting to the other. HSTS belongs to BROWSER-01."""
 proof = """1. Request http://<host>/ for the apex, www and every known subdomain, without following redirects.
 2. Pass: 301 or 308 with a Location starting https:// on the same host.
-3. Fail: a 200 (content served over HTTP) or a redirect to another http:// URL."""
+3. Pass also: port 80 refuses the connection (nothing is served without TLS).
+4. Fail: a 200 (content served over HTTP) or a redirect to another http:// URL. Warning: a temporary redirect (302/307) or a redirect to HTTPS on another host.
+5. Manual: port 80 does not answer at all. A silent drop cannot be told apart from a network problem on the way, so open http:// in a browser and confirm it does not load or redirects."""
 sources = [
   { title = "Vercel: Encryption and TLS", url = "https://vercel.com/docs/cdn-security/encryption" },
 ]
@@ -22,7 +24,7 @@ id = "INFRA-02"
 title = "TLS certificate valid and not near expiry"
 severity = "high"
 layer = 6
-cwe = ["CWE-298", "CWE-295"]
+cwe = ["CWE-324"]
 mode = "auto"
 stacks = ["any"]
 risk = """An expired or mismatched certificate takes the site down and trains users to click through warnings. Microsoft Teams went down on 2020-02-03 because an authentication certificate expired. On Vercel, renewal fails silently when a custom domain's DNS stops pointing at Vercel."""
@@ -85,9 +87,9 @@ mode = "auto"
 stacks = ["any"]
 risk = """A researcher who finds a leaked key or dangling subdomain has no contact, so the report is dropped or posted publicly."""
 build = """Add public/.well-known/security.txt with `Contact: mailto:security@<domain>` (a mailbox someone reads), `Expires:` within 12 months, and `Preferred-Languages`. Set a reminder before Expires."""
-proof = """1. GET https://<host>/.well-known/security.txt.
-2. Pass: 200, text/plain, a Contact: line, and an Expires: date in the future.
-3. Fail: missing, not text/plain (for example an SPA HTML page), no Contact, or Expires in the past."""
+proof = """1. GET https://<host>/.well-known/security.txt. Redirects on the same site are followed (RFC 9116 allows them, up to 3 hops); a redirect to another host is reported as manual, because the scan does not leave the target.
+2. Pass: 200, not HTML, a Contact: line, and an Expires: date in the future.
+3. Warning: missing, HTML instead of text (for example an SPA page), no Contact or Expires, or Expires in the past. It is a disclosure-process gap, not a flaw in the site."""
 sources = [
   { title = "RFC 9116: A File Format to Aid in Security Vulnerability Disclosure", url = "https://www.rfc-editor.org/rfc/rfc9116" },
 ]
@@ -95,7 +97,7 @@ sources = [
 [[check]]
 id = "INFRA-06"
 title = "SPF record restricts senders"
-severity = "high"
+severity = "medium"
 layer = 7
 cwe = ["CWE-290"]
 mode = "auto"
@@ -115,7 +117,7 @@ sources = [
 [[check]]
 id = "INFRA-07"
 title = "DMARC policy enforced"
-severity = "high"
+severity = "medium"
 layer = 7
 cwe = ["CWE-290"]
 mode = "auto"

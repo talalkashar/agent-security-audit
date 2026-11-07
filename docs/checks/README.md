@@ -16,9 +16,9 @@
 | [api](api.md) | API abuse, input handling and rate limits | 27 | 8 | 12 | 7 | 4 | 12 | 9 | 2 |
 | [auth](auth.md) | Authentication and sessions | 11 | 0 | 10 | 1 | 1 | 6 | 4 | 0 |
 | [browser](browser.md) | Browser security headers, cookies and client code | 23 | 12 | 7 | 4 | 0 | 8 | 13 | 2 |
-| [infra](infra.md) | Transport, DNS, email and hosting | 28 | 14 | 2 | 12 | 6 | 13 | 4 | 5 |
+| [infra](infra.md) | Transport, DNS, email and hosting | 28 | 14 | 2 | 12 | 6 | 11 | 6 | 5 |
 | [nextjs](nextjs.md) | Next.js and Vercel | 16 | 3 | 10 | 3 | 3 | 5 | 7 | 1 |
-| **Total** | | **120** | **38** | **51** | **31** | **19** | **53** | **38** | **10** |
+| **Total** | | **120** | **38** | **51** | **31** | **19** | **51** | **40** | **10** |
 
 ## By OSI layer
 
@@ -117,8 +117,8 @@
 | [INFRA-03](infra.md#infra-03-legacy-tls-10-and-11-refused) | medium | L6 | auto | Legacy TLS 1.0 and 1.1 refused |
 | [INFRA-04](infra.md#infra-04-sensitive-files-not-served-env-git-backups-ds_store) | critical | L7 | auto | Sensitive files not served (.env, .git, backups, .DS_Store) |
 | [INFRA-05](infra.md#infra-05-securitytxt-published) | low | L7 | auto | security.txt published |
-| [INFRA-06](infra.md#infra-06-spf-record-restricts-senders) | high | L7 | auto | SPF record restricts senders |
-| [INFRA-07](infra.md#infra-07-dmarc-policy-enforced) | high | L7 | auto | DMARC policy enforced |
+| [INFRA-06](infra.md#infra-06-spf-record-restricts-senders) | medium | L7 | auto | SPF record restricts senders |
+| [INFRA-07](infra.md#infra-07-dmarc-policy-enforced) | medium | L7 | auto | DMARC policy enforced |
 | [INFRA-08](infra.md#infra-08-no-secrets-in-git-history-or-working-tree) | critical | L7 | review | No secrets in git history or working tree |
 | [INFRA-09](infra.md#infra-09-dkim-signing-passes-for-every-sending-service) | high | L7 | assisted | DKIM signing passes for every sending service |
 | [INFRA-10](infra.md#infra-10-no-dangling-dns-records-subdomain-takeover) | high | L7 | review | No dangling DNS records (subdomain takeover) |

@@ -5,16 +5,17 @@ submitted, nothing is followed off the target."""
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import secrets
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from ..crawl import crawl
-from ..model import failed, passed, skipped, warned
+from ..crawl import crawl, is_html
+from ..model import Result, failed, passed, skipped, warned
 from ..scope import is_local_host, same_origin
-from . import auto
-from .browser import _merged_csp
+from . import are, auto, count
+from .browser import META_ATTR, META_TAG, _merged_csp
 from .exposure import scripts
 
 
@@ -55,13 +56,14 @@ def mixed_content(ctx):
         (active if r.active else passive).append(line)
     ev = active + passive + ev + [site.summary()]
     if active:
-        return failed("BROWSER-20", f"{len(active)} script, style, frame or plugin load(s) use http:// on HTTPS "
-                      "pages. Browsers block them (breaking the page) or, in old browsers, let a network attacker "
+        return failed("BROWSER-20", f"{count(len(active), 'script, style, frame or plugin load')} "
+                      f"{'uses' if len(active) == 1 else 'use'} http:// on HTTPS pages. Browsers block them (breaking the page) or, in old browsers, let a network attacker "
                       "replace them.", ev)
     if passive:
-        return warned("BROWSER-20", f"{len(passive)} image or media load(s) use http:// on HTTPS pages; a network "
+        return warned("BROWSER-20", f"{count(len(passive), 'image or media load')} "
+                      f"{'uses' if len(passive) == 1 else 'use'} http:// on HTTPS pages; a network "
                       "attacker can see or swap them.", ev)
-    return passed("BROWSER-20", f"No http:// subresources on {len(site.pages)} crawled HTTPS page(s).", ev)
+    return passed("BROWSER-20", f"No http:// subresources on {count(len(site.pages), 'crawled HTTPS page')}.", ev)
 
 
 # --- BROWSER-21 Subresource Integrity -------------------------------------------------------------------------------
@@ -89,13 +91,15 @@ def subresource_integrity(ctx):
         else:
             missing.append(label + ": no integrity attribute")
     if not seen:
-        return skipped("BROWSER-21", f"No third-party scripts or stylesheets on {len(site.pages)} crawled page(s).")
+        return skipped("BROWSER-21", f"No third-party scripts or stylesheets on {count(len(site.pages), 'crawled page')}.")
     ev = missing + ok + exempt + [site.summary()]
     if missing:
-        return warned("BROWSER-21", f"{len(missing)} third-party script(s) or stylesheet(s) load without "
+        return warned("BROWSER-21", f"{count(len(missing), 'third-party script or stylesheet', 'third-party scripts or stylesheets')} "
+                      f"{'loads' if len(missing) == 1 else 'load'} without "
                       "Subresource Integrity, so a compromised CDN could change what runs on the site.", ev)
-    return passed("BROWSER-21", f"{len(ok)} third-party script(s) and stylesheet(s) carry an integrity hash"
-                  + (f"; {len(exempt)} versionless vendor loader(s) cannot use one" if exempt else "") + ".", ev)
+    return passed("BROWSER-21", f"{count(len(ok), 'third-party script or stylesheet', 'third-party scripts and stylesheets')} "
+                  f"{'carries' if len(ok) == 1 else 'carry'} an integrity hash"
+                  + (f"; {count(len(exempt), 'versionless vendor loader')} cannot use one" if exempt else "") + ".", ev)
 
 
 # --- BROWSER-22 password forms --------------------------------------------------------------------------------------
@@ -105,7 +109,7 @@ def password_forms(ctx):
     site = crawl(ctx)
     forms = [f for f in site.forms if f.has_password]
     if not forms:
-        return skipped("BROWSER-22", f"No password fields on {len(site.pages)} crawled page(s).")
+        return skipped("BROWSER-22", f"No password fields on {count(len(site.pages), 'crawled page')}.")
     problems, ev = [], []
     for f in forms:
         page_http = urlsplit(f.page).scheme == "http" and not is_local_host(urlsplit(f.page).hostname or "")
@@ -123,7 +127,7 @@ def password_forms(ctx):
     ev.append(site.summary())
     if problems:
         return failed("BROWSER-22", "Password forms are not safe in transit: " + "; ".join(problems) + ".", ev)
-    return passed("BROWSER-22", f"{len(forms)} password form(s) are served and submitted over HTTPS (or a local "
+    return passed("BROWSER-22", f"{count(len(forms), 'password form')} {are(len(forms))} served and submitted over HTTPS (or a local "
                   "development host) with POST.", ev)
 
 
@@ -146,13 +150,16 @@ LIBRARIES = {
     "moment": ("Moment.js", lambda v: v < (2, 29, 4),
                "denial of service through RFC 2822 parsing (CVE-2022-31129); fixed in 2.29.4"),
 }
+# A banner counts only at the start of the library's own header comment ("/*! jQuery v3.4.1", "/**\n * @license
+# AngularJS v1.8.2"), so a plugin's "Requires jQuery v1.7.2 or later" further down its own comment is not a match.
+HEAD = r"(?:/\*[*!]?|//!?)[\s*]*"
 BANNERS = [
-    ("jquery", re.compile(r"\bjQuery(?: JavaScript Library)? v(\d+\.\d+\.\d+)\b")),
-    ("angularjs", re.compile(r"@license AngularJS v(\d+\.\d+\.\d+)\b")),
-    ("bootstrap", re.compile(r"\bBootstrap v(\d+\.\d+\.\d+) \(https?://getbootstrap\.com")),
-    ("moment", re.compile(r"moment\.js\s*\n\s*//! version : (\d+\.\d+\.\d+)\b")),
+    ("jquery", re.compile(HEAD + r"jQuery(?: JavaScript Library)? v(\d+\.\d+\.\d+)\b")),
+    ("angularjs", re.compile(HEAD + r"@license AngularJS v(\d+\.\d+\.\d+)\b")),
+    ("bootstrap", re.compile(HEAD + r"Bootstrap v(\d+\.\d+\.\d+) \(https?://getbootstrap\.com")),
+    ("moment", re.compile(r"//! moment\.js\s*\n\s*//! version : (\d+\.\d+\.\d+)\b")),
 ]
-LODASH_MARK = re.compile(r"lodash\.com/license|Lodash <https://lodash\.com/>")
+LODASH_MARK = re.compile(HEAD + r"@license[\s*]*(?:Lodash\b|lodash\.com/license)")
 LODASH_VERSION = re.compile(r"\bVERSION\s*=\s*['\"](\d+\.\d+\.\d+)['\"]|=\s*\"(4\.\d+\.\d+)\",\w+=200,")
 URL_VERSION = re.compile(r"(?i)(?:^|/)(jquery|angularjs|angular(?:\.js)?|bootstrap|lodash(?:\.js)?|moment(?:\.js)?)"
                          r"[-@/]v?(\d+\.\d+\.\d+)(?![\w])")
@@ -214,21 +221,66 @@ def vulnerable_libraries(ctx):
             bad.append(f"{line}: {why}")
     ev = bad + eol + ok + [site.summary()]
     if bad:
-        return failed("BROWSER-23", f"{len(bad)} client library version(s) with published vulnerabilities are "
-                      "served to visitors. Upgrade them.", ev)
+        return failed("BROWSER-23", f"{count(len(bad), 'client library version')} with published vulnerabilities "
+                      f"{are(len(bad))} served to visitors. Upgrade {'it' if len(bad) == 1 else 'them'}.", ev)
     if eol:
         return warned("BROWSER-23", "An end-of-life client library is served to visitors; it gets no security "
                       "fixes. Plan the migration.", ev)
-    return passed("BROWSER-23", f"No listed library at a vulnerable version in {len(texts)} script(s) and the script "
-                  f"URLs of {len(site.pages)} crawled page(s).", ev)
+    return passed("BROWSER-23", f"No listed library at a vulnerable version in {count(len(texts), 'script')} and the "
+                  f"script URLs of {count(len(site.pages), 'crawled page')}.", ev)
 
 
 # --- API-19 open redirect -------------------------------------------------------------------------------------------
 
 REDIRECT_PARAM = re.compile(r"(?i)^(?:next|url|continue|goto|redir|redirect\w*|return\w*|dest\w*|callback_?url|"
                             r"target_?url)$")
-REDIRECT_PROBE = "https://asa-redirect-probe.invalid/"
+REDIRECT_HOST = "asa-redirect-probe.invalid"
+# Forms of the same destination that a careless check lets through: an absolute URL, a scheme-relative //host, the
+# backslash form browsers read as //host, a scheme without slashes, and //host encoded twice for apps that decode
+# again. Every one names the reserved .invalid host, which never resolves; redirects are never followed.
+REDIRECT_PROBES = (f"https://{REDIRECT_HOST}/", f"//{REDIRECT_HOST}/", f"/\\{REDIRECT_HOST}/", f"https:{REDIRECT_HOST}/",
+                   f"%2F%2F{REDIRECT_HOST}%2F")
+REDIRECT_PROBE = REDIRECT_PROBES[0]
 MAX_REDIRECT_PROBES = 8
+# <meta http-equiv="refresh" content="0; url=..."> and the Refresh header: a delay, then an optional "url=".
+REFRESH = re.compile(r"(?is)^\s*[\d.]*\s*[;,]?\s*(?:url\s*=\s*)?['\"]?([^'\"]*)")
+
+
+def redirect_host(base, location):
+    """The host a browser goes to for this Location or refresh URL, following the WHATWG URL rules that matter here:
+    tabs and newlines are dropped, a backslash is a slash, and "https:host" on a page of the other scheme names a
+    host. None when it does not parse."""
+    loc = re.sub(r"[\t\n\r]", "", location).strip("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0e\x0f"
+                                                 "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f ")
+    loc = loc.replace("\\", "/")
+    try:
+        m = re.match(r"(?i)(https?):(?!//)", loc)
+        if m and m.group(1).lower() != urlsplit(base).scheme.lower():
+            loc = f"{m.group(1).lower()}://{loc[m.end():].lstrip('/')}"
+        elif m:
+            loc = loc[m.end():]
+        return (urlsplit(urljoin(base, loc)).hostname or "").lower() or None
+    except ValueError:
+        return None
+
+
+def refresh_targets(resp):
+    """[(how, url)] for a redirect Location, a Refresh header and <meta http-equiv="refresh"> tags."""
+    out = []
+    if resp.is_redirect and resp.get("location"):
+        out.append(("Location", resp.get("location")))
+    values = [("Refresh header", resp.get("refresh") or "")]
+    if is_html(resp):
+        for tag in META_TAG.findall(resp.text[:65536]):
+            attrs = {m.group(1).lower(): html.unescape(m.group(2) or m.group(3) or m.group(4) or "")
+                     for m in META_ATTR.finditer(tag[5:])}
+            if attrs.get("http-equiv", "").strip().lower() == "refresh":
+                values.append(("meta refresh", attrs.get("content", "")))
+    for how, value in values:
+        m = REFRESH.match(value)
+        if value and m and m.group(1).strip():
+            out.append((how, m.group(1).strip()))
+    return out
 
 
 @auto("API-19")
@@ -242,24 +294,29 @@ def open_redirect(ctx):
     open_, ev = [], []
     for path, name, url in candidates[:MAX_REDIRECT_PROBES]:
         parts = urlsplit(url)
-        query = [(k, REDIRECT_PROBE if k == name else v) for k, v in parse_qsl(parts.query, keep_blank_values=True)]
-        probe = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
-        resp = ctx.client.get(probe)
-        loc = resp.get("location") or ""
-        dest = (urlsplit(urljoin(probe, loc)).hostname or "").lower() if loc else ""
-        label = f"GET {path}?{name}=<probe> -> {resp.status}"
-        if resp.is_redirect and dest == "asa-redirect-probe.invalid":
-            open_.append(f"{path}?{name}=")
-            ev.append(f"{label}, Location points to the probe host")
+        stays = set()
+        for value in REDIRECT_PROBES:
+            query = [(k, value if k == name else v) for k, v in parse_qsl(parts.query, keep_blank_values=True)]
+            probe = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+            resp = ctx.client.get(probe)
+            label = f"GET {path}?{name}={value.replace(REDIRECT_HOST, '<probe>')} -> {resp.status}"
+            hits = [how for how, dest in refresh_targets(resp) if redirect_host(probe, dest) == REDIRECT_HOST]
+            if hits:
+                open_.append(f"{path}?{name}=")
+                ev.append(f"{label}, {hits[0]} points to the probe host")
+                break
+            stays |= {redirect_host(probe, dest) or "an unparsable URL" for _, dest in refresh_targets(resp)}
         else:
-            ev.append(label + (f", Location stays on {dest or 'the site'}" if loc else ", no redirect"))
+            ev.append(f"GET {path}?{name}=<{len(REDIRECT_PROBES)} probe forms> -> "
+                      + (f"redirects stay on {', '.join(sorted(stays))}" if stays else "no redirect"))
     if len(candidates) > MAX_REDIRECT_PROBES:
-        ev.append(f"{len(candidates) - MAX_REDIRECT_PROBES} more parameter(s) not probed")
+        ev.append(f"{count(len(candidates) - MAX_REDIRECT_PROBES, 'more parameter')} not probed")
     if open_:
         return failed("API-19", f"Open redirect: {', '.join(open_)} sends visitors to any site named in the "
                       "parameter, which phishing links and OAuth token theft rely on.", ev)
-    return passed("API-19", f"{min(len(candidates), MAX_REDIRECT_PROBES)} redirect parameter(s) refused an "
-                  "off-site destination.", ev)
+    n = min(len(candidates), MAX_REDIRECT_PROBES)
+    return passed("API-19", f"{count(n, 'redirect parameter')} refused an off-site destination in all "
+                  f"{len(REDIRECT_PROBES)} probe forms (absolute, //host, /\\host, https:host, double-encoded).", ev)
 
 
 # --- API-20 directory listing ---------------------------------------------------------------------------------------
@@ -379,9 +436,32 @@ INTROSPECTION = json.dumps({"query": "query AsaIntrospectionProbe { __schema { q
                                      "mutationType { name } types { name } } }"})
 
 
+# A refusal counts only when the answer is provably GraphQL: a GraphQL media type, or an error that names GraphQL
+# itself (introspection, "Cannot query field", Apollo's GRAPHQL_* codes). A generic JSON {"errors": [...]} from a REST
+# API or a 404 page proves nothing; nor does "graphql" alone, which a 404 echoing the path contains. The probe's own
+# text is removed first, so an API that echoes the request body back in a validation error does not count; __schema
+# and __type are not markers for the same reason (they are in the probe).
+GRAPHQL_ERROR = re.compile(r"(?i)introspection|cannot query field|\bGRAPHQL_[A-Z_]+")
+PROBE_ECHO = re.compile(r"(?i)AsaIntrospectionProbe")
+
+
+def _graphql_refusal(resp, data):
+    """'proven', 'unclear' (GraphQL-shaped errors only) or None (not GraphQL errors at all)."""
+    if not (isinstance(data, dict) and isinstance(data.get("errors"), list) and data["errors"]
+            and all(isinstance(e, dict) and "message" in e for e in data["errors"])):
+        return None
+    if "graphql" in (resp.get("content-type") or "").lower():
+        return "proven"
+    query = json.loads(INTROSPECTION)["query"]
+    text = json.dumps(data["errors"])[:5000].replace(json.dumps(query)[1:-1], "").replace(query, "")
+    if GRAPHQL_ERROR.search(PROBE_ECHO.sub("", text)):
+        return "proven"
+    return None if resp.status in (404, 405) else "unclear"
+
+
 @auto("API-23")
 def graphql_introspection(ctx):
-    open_, closed, ev = [], [], []
+    open_, closed, unclear, ev = [], [], [], []
     for path in GRAPHQL_PATHS:
         resp = ctx.client.request("POST", path, body=INTROSPECTION, headers={"Content-Type": "application/json"})
         try:
@@ -396,19 +476,24 @@ def graphql_introspection(ctx):
             open_.append(path)
             ev.append(f"POST {path} -> {resp.status}, introspection answered: {types} type(s), {mutations} "
                       "(names not shown)")
-        elif isinstance(data, dict) and isinstance(data.get("errors"), list) and all(
-                isinstance(e, dict) and "message" in e for e in data["errors"]) and data["errors"]:
+        elif _graphql_refusal(resp, data) == "proven":
             closed.append(path)
             ev.append(f"POST {path} -> {resp.status}, GraphQL error returned (introspection refused)")
+        elif _graphql_refusal(resp, data) == "unclear":
+            unclear.append(path)
+            ev.append(f"POST {path} -> {resp.status}, JSON errors, but no GraphQL media type or GraphQL error message")
         else:
             ev.append(f"POST {path} -> {resp.status}, not a GraphQL endpoint")
     if open_:
         return warned("API-23", f"GraphQL introspection is on at {', '.join(open_)}: anyone can download the full "
                       "schema, including admin and internal fields. Turn it off in production unless the API is "
                       "public by design, and make sure every resolver checks authorization.", ev)
-    if not closed:
-        return skipped("API-23", "No GraphQL endpoint at /graphql or /api/graphql.")
-    return passed("API-23", f"GraphQL at {', '.join(closed)} refuses introspection.", ev)
+    if closed:
+        return passed("API-23", f"GraphQL at {', '.join(closed)} refuses introspection.", ev)
+    if unclear:
+        return Result("API-23", "manual", f"{', '.join(unclear)} answered the introspection query with errors, but "
+                      "nothing shows it is GraphQL. If it is, confirm by hand that introspection is refused.", ev)
+    return skipped("API-23", "No GraphQL endpoint at /graphql or /api/graphql.")
 
 
 # --- API-24 TRACE ---------------------------------------------------------------------------------------------------

@@ -11,10 +11,10 @@ probe = "active"
 stacks = ["any"]
 risk = """Without per-account and per-IP limits on login, signup, password reset and OTP verify, attackers can credential-stuff accounts and brute-force 6-digit codes. Custom routes that check a secret themselves get none of Supabase Auth's built-in limits, and in-memory counters reset per serverless instance."""
 build = """Use Supabase Auth's built-in endpoints where possible and keep its limits on. For any custom route or Server Action that checks a password, OTP, reset or invite code, enforce a shared-store limiter (Upstash @upstash/ratelimit sliding window, or a Vercel WAF rate-limit rule on the path), never an in-memory Map. Key it by both client IP and normalized target account, e.g. 5 per 15 min per account and 20 per 15 min per IP. Return 429 with a Retry-After header. Apply the limit inside the handler, not only in middleware (see NEXT checks). Do not reveal whether the account exists. Key IPs correctly (API-14)."""
-proof = """1. Run the CLI with --rate-limit-path set to the login endpoint of the user's own site, e.g. /api/auth/login. Without a path the check reports manual.
-2. The CLI sends up to N POST requests (default 30, max 60) with fake credentials that match no real account, and stops at the first 429.
-3. Pass: a 429 appears within N requests; the CLI notes whether Retry-After is present.
-4. Fail: every request returns 200/400/401 with no 429. With fewer than 10 attempts the result is a warning, since that is too few to show no limit exists.
+proof = """1. Run the CLI with --rate-limit-path set to the login endpoint of the user's own site, e.g. /api/auth/login. Without a path the CLI uses a same-origin POST login form found by the crawl (one password field; a page or action that names login, sign-in, session or auth, and never sign-up, register or reset), filling only the user and password fields with fake values. With neither the check reports manual.
+2. The CLI sends up to N requests (default 30, max 60) with fake credentials that match no real account, and stops at the first sign of throttling.
+3. Pass: a 429 with Retry-After appears within N requests; the report gives the attempt number.
+4. Warning: throttling of another kind, reported with the attempt number where it began: a 429 without Retry-After, a change to 403, 423 or 503, a change to another error status that repeats on the next attempt (a single 500 or 502 is a blip, not a limit), or limit words that the first answer did not have ("too many", "locked", "captcha"...). Also a warning: every answer stayed the same ("no limit observed up to N"), because many limits sit above 30 attempts. A detected form that refuses the first attempt with 400 or 403 (often a CSRF token) is reported as manual.
 5. Manual follow-up: with an owned test account, confirm the correct password is also refused or challenged during the lockout."""
 sources = [
   { title = "OWASP API Security Top 10 2023", url = "https://api-security.owasp.org/editions/2023/en/0x11-t10" },
@@ -35,10 +35,11 @@ stacks = ["any"]
 risk = """Handlers that return err.message or err.stack, or forward Supabase/PostgREST errors verbatim (details, hint, table and constraint names, SQL), hand attackers a map of the schema and code, and confirm when a probe hit something. Upstream API errors can echo keys or internal URLs."""
 build = """Route every route handler and Server Action through one handleError() helper: log the full error server-side with a request id, return { error: "Something went wrong", id } with the right status. Map validation errors to field-level messages without echoing internals. Never return Supabase error.details, error.hint or error.message to clients. Run with NODE_ENV=production and no debug flags. Source maps belong to NEXT-02."""
 proof = """1. The CLI requests a random path that does not exist on the user's own site.
-2. It sends a malformed JSON body to that same path.
-3. Pass: both responses are generic (4xx/5xx with a short message) and contain no stack frames, file paths (/var/task, node_modules, C:\\), SQL or PGRST text, or framework internals.
-4. Fail: any of those markers appears in either response body.
-5. Manual follow-up: send malformed JSON, wrong types and an invalid UUID to each real API route and check the same markers."""
+2. It sends a malformed JSON body to a random path under /api/, and to the login endpoint (--rate-limit-path, or the login form found by the crawl, as in API-01).
+3. Pass: no response contains stack frames, file paths (/var/task, node_modules, C:\\), SQL or PGRST text, or framework internals, and at least one answer is an error other than 401, 403, 404, 405, 407 or 429, so a handler's error path actually ran (those come from the router, auth middleware, a CDN or a WAF). Otherwise the result is manual.
+4. Fail: any of those markers appears in a response body.
+5. Manual: only not-found or wrong-method answers came back. They come from the router and do not prove what a handler shows when it fails.
+6. Manual follow-up: send malformed JSON, wrong types and an invalid UUID to each real API route and check the same markers."""
 sources = [
   { title = "OWASP API Security Top 10 2023 (API8 Security Misconfiguration)", url = "https://api-security.owasp.org/editions/2023/en/0x11-t10" },
   { title = "Next.js: Error Handling", url = "https://nextjs.org/docs/app/getting-started/error-handling" },
@@ -382,8 +383,8 @@ stacks = ["any", "nextjs", "node"]
 risk = """A route that redirects to whatever a `next`, `returnTo`, `redirect` or `url` parameter says lets anyone build a link on the real domain that lands on their own site. Phishing mails use such links because the domain looks trusted, and in OAuth and magic-link flows an open redirect can hand an access token or code to the attacker."""
 build = """Only redirect to relative paths: accept a value that starts with a single `/` and not `//` or `/\\`, then build the URL from your own origin. If other hosts are needed, compare the parsed host against an exact allowlist. In Next.js, validate the parameter before calling `redirect()` or `NextResponse.redirect()`; fall back to `/` when the check fails."""
 proof = """1. The tool crawls the site and collects query parameters on same-origin links whose names look like redirect targets (next, url, continue, goto, redirect..., return..., dest..., callback_url).
-2. For up to 8 of them it sends one GET with the value `https://asa-redirect-probe.invalid/` (a reserved name that never resolves) and does not follow the redirect.
-3. Fail: the `Location` header points to `asa-redirect-probe.invalid`. Pass: every probed parameter redirects on-site or not at all. Not applicable when no such parameter is linked; then test the login and logout redirects by hand the same way. Redirects done in JavaScript or meta refresh are not covered."""
+2. For up to 8 of them it sends a GET per probe form of the same reserved host, `asa-redirect-probe.invalid` (it never resolves): `https://asa-redirect-probe.invalid/`, `//asa-redirect-probe.invalid/`, `/\\asa-redirect-probe.invalid/`, `https:asa-redirect-probe.invalid/` and the double-encoded `%2F%2Fasa-redirect-probe.invalid%2F`. It stops at the first hit and never follows a redirect.
+3. Fail: the `Location` header, a `Refresh` header or a `<meta http-equiv="refresh">` tag sends the browser to `asa-redirect-probe.invalid`, read the way browsers read URLs (a backslash counts as a slash). Pass: every probe form stays on-site or does not redirect. Not applicable when no such parameter is linked; then test the login and logout redirects by hand the same way. Redirects done in JavaScript are not covered."""
 sources = [
   { title = "OWASP Unvalidated Redirects and Forwards Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html" },
   { title = "CWE-601: URL Redirection to Untrusted Site", url = "https://cwe.mitre.org/data/definitions/601.html" },
@@ -461,7 +462,7 @@ risk = """With introspection on, anyone can download the whole GraphQL schema: e
 build = """Disable introspection in production (for example `introspection: false` in Apollo Server, or a validation rule that rejects `__schema` and `__type`), keep it on in development, and still check authorization in every resolver, because hiding the schema is not access control."""
 proof = """1. The tool sends one POST to `/graphql` and `/api/graphql` with the standard, read-only introspection query `{ __schema { queryType { name } mutationType { name } types { name } } }`. It runs no resolvers and changes nothing.
 2. Warning: the response contains `data.__schema`. Only the number of types and whether mutations exist are reported.
-3. Pass: a GraphQL error is returned instead. Not applicable when neither path is a GraphQL endpoint."""
+3. Pass: the answer is provably GraphQL and refuses: a GraphQL media type (`application/graphql-response+json`), or an error that names introspection, "Cannot query field" or a `GRAPHQL_*` code once the probe's own text is removed (an API that echoes the request body back proves nothing). A generic JSON `{"errors": [...]}` proves nothing: it is manual when the status is not 404/405, and not applicable (no GraphQL endpoint) when it is."""
 sources = [
   { title = "OWASP GraphQL Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html" },
   { title = "GraphQL specification: Introspection", url = "https://spec.graphql.org/October2021/" },

@@ -272,9 +272,9 @@ Checks by area:
 | [api](docs/checks/api.md) | API abuse, input handling and rate limits | 27 | 8 | 12 | 7 | 4 | 12 | 9 | 2 |
 | [auth](docs/checks/auth.md) | Authentication and sessions | 11 | 0 | 10 | 1 | 1 | 6 | 4 | 0 |
 | [browser](docs/checks/browser.md) | Browser security headers, cookies and client code | 23 | 12 | 7 | 4 | 0 | 8 | 13 | 2 |
-| [infra](docs/checks/infra.md) | Transport, DNS, email and hosting | 28 | 14 | 2 | 12 | 6 | 13 | 4 | 5 |
+| [infra](docs/checks/infra.md) | Transport, DNS, email and hosting | 28 | 14 | 2 | 12 | 6 | 11 | 6 | 5 |
 | [nextjs](docs/checks/nextjs.md) | Next.js and Vercel | 16 | 3 | 10 | 3 | 3 | 5 | 7 | 1 |
-| **Total** | | **120** | **38** | **51** | **31** | **19** | **53** | **38** | **10** |
+| **Total** | | **120** | **38** | **51** | **31** | **19** | **51** | **40** | **10** |
 
 Checks by OSI layer:
 

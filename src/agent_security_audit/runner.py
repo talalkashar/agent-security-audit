@@ -9,7 +9,7 @@ from . import catalog, code_audit
 from .checks import Context, load_all
 from .http import NETWORK_ERRORS, Blocked, BudgetExceeded, Client, OffTarget
 from .model import Result, errored, skipped
-from .scope import ScopeError, normalize_target, owned
+from .scope import ScopeError, normalize_target, owned, same_origin
 
 
 def _is_ip(host):
@@ -36,10 +36,10 @@ def canonical_target(target, client):
         return target
     nxt = urlsplit(urljoin(target + "/", resp.get("location") or ""))
     here = urlsplit(target)
-    if (nxt.scheme, nxt.hostname, nxt.port) == (here.scheme, here.hostname, here.port):
+    if same_origin(target, nxt.geturl()):  # https://host:443/ is the same origin as https://host
         return target
     if nxt.scheme == "https" and _twin(here.hostname or "", nxt.hostname or ""):
-        return f"https://{nxt.hostname}" + (f":{nxt.port}" if nxt.port else "")
+        return normalize_target(f"https://{nxt.netloc}")
     raise ScopeError(f"{target} redirects to {nxt.scheme}://{nxt.netloc}. Scan that URL directly "
                      "(with --authorized if you own it).")
 
