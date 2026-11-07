@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from urllib.parse import urljoin, urlsplit
 
 from ..crawl import crawl, next_chunks
-from ..http import BudgetExceeded
+from ..http import BudgetExceeded, TimeBudgetExceeded
 from ..model import Result, failed, passed, skipped, warned
 from ..scope import same_origin
 from . import are, auto, count
@@ -112,8 +112,12 @@ def scripts(ctx):
     """[(label, text)] for inline scripts and same-origin script files on every crawled page, plus Next.js chunks
     those reference (build manifest, RSC payload). At most MAX_SCRIPTS files. Cached per run."""
     if "scripts" in ctx.cache:
+        if ctx.cache.get("scripts_time_cut"):  # built from a crawl or fetch the time budget cut short
+            ctx.cache["time_cut"] = True
         return ctx.cache["scripts"]
     site = crawl(ctx)
+    if site.timed_out:
+        ctx.cache["scripts_time_cut"] = True
     home = site.pages[0].url if site.pages else None
     out, by_page = [], {}
     for page, text in site.inline:
@@ -133,6 +137,9 @@ def scripts(ctx):
         seen.add(url)
         try:
             resp = ctx.client.get(url, cache=True)
+        except TimeBudgetExceeded:
+            ctx.cache["scripts_time_cut"] = ctx.cache["time_cut"] = True
+            break
         except BudgetExceeded:
             break
         if resp.status == 200:

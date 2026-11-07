@@ -378,7 +378,7 @@ class McpTest(unittest.TestCase):
             res = mcp_server.call_tool({"name": "run_code_audit",
                                         "arguments": {"path": str(vuln), "no_osv": True, "checks": ["AUTH-01"]}})
             self.assertFalse(res["isError"], res)
-            data = json.loads(res["content"][0]["text"])
+            data = json.loads(res["content"][-1]["text"])  # the summary block comes first, the report last
             self.assertEqual([r["check_id"] for r in data["results"]], ["AUTH-01"])
             self.assertEqual(data["results"][0]["status"], "fail")
             res = mcp_server.call_tool({"name": "run_code_audit", "arguments": {"path": str(Path(tmp) / "nope")}})
