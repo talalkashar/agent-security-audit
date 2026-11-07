@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from agent_security_audit import cli, lab
 
@@ -137,10 +138,15 @@ class ScanCommandTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("pass another --port", err)
 
-    def test_unauthorized_non_local_exits_2(self):
-        code, out, err = call("scan", "https://example.com")
-        self.assertEqual((code, out), (2, ""))
-        self.assertIn("--authorized", err)
+    def test_non_local_without_authorized_runs_passive_only(self):
+        hostport = self.servers["vulnerable"][1]
+        with mock.patch("agent_security_audit.runner.owned", return_value=False):
+            code, out, _ = call("scan", hostport, "--auto-only", "--format", "json")
+        by_id = {r["check_id"]: r for r in json.loads(out)["results"]}
+        self.assertEqual(by_id["INFRA-04"]["status"], "skip")
+        self.assertIn("--authorized", by_id["INFRA-04"]["summary"])
+        self.assertEqual(by_id["NEXT-03"]["status"], "fail")
+        self.assertEqual(code, 1)
 
     def test_bad_scheme_and_unknown_check_exit_2(self):
         self.assertEqual(call("scan", "ftp://localhost")[0], 2)

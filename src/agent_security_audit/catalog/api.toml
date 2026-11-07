@@ -7,6 +7,7 @@ severity = "high"
 layer = 7
 cwe = ["CWE-307", "CWE-770"]
 mode = "auto"
+probe = "active"
 stacks = ["any"]
 risk = """Without per-account and per-IP limits on login, signup, password reset and OTP verify, attackers can credential-stuff accounts and brute-force 6-digit codes. Custom routes that check a secret themselves get none of Supabase Auth's built-in limits, and in-memory counters reset per serverless instance."""
 build = """Use Supabase Auth's built-in endpoints where possible and keep its limits on. For any custom route or Server Action that checks a password, OTP, reset or invite code, enforce a shared-store limiter (Upstash @upstash/ratelimit sliding window, or a Vercel WAF rate-limit rule on the path), never an in-memory Map. Key it by both client IP and normalized target account, e.g. 5 per 15 min per account and 20 per 15 min per IP. Return 429 with a Retry-After header. Apply the limit inside the handler, not only in middleware (see NEXT checks). Do not reveal whether the account exists. Key IPs correctly (API-14)."""
@@ -29,6 +30,7 @@ severity = "medium"
 layer = 7
 cwe = ["CWE-209", "CWE-215"]
 mode = "auto"
+probe = "active"
 stacks = ["any"]
 risk = """Handlers that return err.message or err.stack, or forward Supabase/PostgREST errors verbatim (details, hint, table and constraint names, SQL), hand attackers a map of the schema and code, and confirm when a probe hit something. Upstream API errors can echo keys or internal URLs."""
 build = """Route every route handler and Server Action through one handleError() helper: log the full error server-side with a request id, return { error: "Something went wrong", id } with the right status. Map validation errors to field-level messages without echoing internals. Never return Supabase error.details, error.hint or error.message to clients. Run with NODE_ENV=production and no debug flags. Source maps belong to NEXT-02."""

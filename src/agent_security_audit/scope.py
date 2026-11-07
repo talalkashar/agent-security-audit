@@ -65,6 +65,15 @@ def _resolves_off_machine(host: str) -> str | None:
     return None
 
 
+def owned(target: str, authorized: bool) -> bool:
+    """True when active probes may run: the user said they own the site, or it is a local dev host."""
+    try:
+        check_authorized(target, authorized)
+    except ScopeError:
+        return False
+    return True
+
+
 def check_authorized(target: str, authorized: bool) -> None:
     if authorized:
         return

@@ -90,8 +90,9 @@ class ScopeTest(unittest.TestCase):
         scope.check_authorized("http://localhost:3000", False)
 
     def test_run_refuses_before_any_request(self):
-        with self.assertRaises(scope.ScopeError):
-            runner.run("https://example.com", ids=["NEXT-03"])
+        self.assertFalse(scope.owned("https://example.com", False))
+        self.assertTrue(scope.owned("https://example.com", True))
+        self.assertTrue(scope.owned("http://localhost:3000", False))
         with self.assertRaises(scope.ScopeError):
             runner.run("http://user:pw@localhost:9", ids=["NEXT-03"])
 

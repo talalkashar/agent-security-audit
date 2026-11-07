@@ -8,8 +8,8 @@ from urllib.parse import urljoin, urlsplit
 from . import catalog
 from .checks import Context, load_all
 from .http import NETWORK_ERRORS, Blocked, BudgetExceeded, Client, OffTarget
-from .model import Result, errored
-from .scope import ScopeError, check_authorized, normalize_target
+from .model import Result, errored, skipped
+from .scope import ScopeError, normalize_target, owned
 
 
 def _is_ip(host):
@@ -75,12 +75,19 @@ def manual_result(check):
                   [check.proof])
 
 
+ACTIVE_SKIP = "Active probe not run: "
+
+
+def probe_skipped(check):
+    return skipped(check.id, f"{ACTIVE_SKIP}it sends test requests only a site owner should approve. "
+                             "Re-run with --authorized if you own this site or have written permission.")
+
+
 def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=None, insecure=False,
         budget=300, delay=0.05, timeout=10.0, include_manual=True, progress=None):
     """Return (normalized_target, [Result]) for the selected checks. progress, when given, is called as
     progress(done, total, check_id, status) after each check."""
     target = normalize_target(target)
-    check_authorized(target, authorized)
     registry = load_all()
     client = Client(target, timeout=timeout, budget=budget, delay=delay, insecure=insecure)
     if check_ids_need_network(ids, areas, stacks):
@@ -91,9 +98,9 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
         except NETWORK_ERRORS as exc:
             raise ScopeError(f"could not reach {target}: {type(exc).__name__}: {exc}") from exc
         if final != target:
-            check_authorized(final, authorized)
             target = final
             client = Client(target, timeout=timeout, budget=budget - client.sent, delay=delay, insecure=insecure)
+    may_probe = owned(target, authorized)
     ctx = Context(target, client, dict(options or {}), authorized=authorized)
     results = []
     chosen = [c for c in select(ids, areas, stacks)
@@ -104,6 +111,11 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
             results.append(manual_result(check))
             if progress:
                 progress(done, len(chosen), check.id, "manual")
+            continue
+        if check.probe == "active" and not may_probe:
+            results.append(probe_skipped(check))
+            if progress:
+                progress(done, len(chosen), check.id, "skip")
             continue
         try:
             result = fn(ctx)

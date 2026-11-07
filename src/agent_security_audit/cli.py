@@ -6,10 +6,9 @@ import argparse
 import json
 import os
 import sys
-from urllib.parse import urlsplit
 
 from . import __version__, catalog, report, runner
-from .scope import ScopeError, check_authorized, normalize_target
+from .scope import ScopeError
 
 FAIL_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 COMMANDS = ("list", "show", "rules", "lab", "scan")
@@ -23,7 +22,9 @@ SCAN_EPILOG = """output:
   progress          one updating line on stderr while a terminal is attached; --quiet turns it off
 
 ownership:
-  A non-local host needs --authorized. In a terminal, asa asks once instead and scans only on y/yes.
+  Any URL gets every passive check (headers, TLS, DNS, cookies, public code). Active probes
+  (sensitive-file fetches, login rate limit, malformed requests, Supabase reads) run on local hosts,
+  and on other hosts only with --authorized: you own the site or have written permission.
 
 `asa <url> ...` is the same as `asa scan <url> ...`."""
 
@@ -102,9 +103,9 @@ def build_parser():
 
     sc = sub.add_parser("scan", help="run the proof tests against a running site", epilog=SCAN_EPILOG,
                         formatter_class=argparse.RawDescriptionHelpFormatter)
-    sc.add_argument("target", help="URL of a site you own or are authorized to test")
+    sc.add_argument("target", help="URL of the site to check")
     sc.add_argument("--authorized", action="store_true",
-                    help="confirm you own this non-local site or have written permission to test it")
+                    help="you own this site or have written permission: also run the active probes")
     sc.add_argument("--check", action="append", help="only these check ids (repeat or comma-separate)")
     sc.add_argument("--area", action="append")
     sc.add_argument("--stack", action="append")
@@ -137,35 +138,6 @@ def _is_tty(stream):
         return bool(stream.isatty())
     except (AttributeError, ValueError):
         return False
-
-
-def confirm_ownership(host):
-    """Ask once on a terminal. Anything but y or yes (an empty line, end of input, Ctrl-C) is a no."""
-    sys.stderr.write(f"Do you own {host} or have written permission to test it? [y/N] ")
-    sys.stderr.flush()
-    try:
-        answer = input()
-    except (EOFError, KeyboardInterrupt):
-        sys.stderr.write("\n")
-        return False
-    return answer.strip().lower() in ("y", "yes")
-
-
-def _authorize(target_arg, authorized):
-    """Return True when the scan may treat the target as authorized. Raises ScopeError when it may not."""
-    if authorized:
-        return True
-    target = normalize_target(target_arg)
-    try:
-        check_authorized(target, False)
-        return False
-    except ScopeError:
-        if not (_is_tty(sys.stdin) and _is_tty(sys.stderr)):
-            raise
-    host = urlsplit(target).hostname or target
-    if not confirm_ownership(host):
-        raise ScopeError(f"not scanning {host}: ownership or written permission was not confirmed.")
-    return True
 
 
 def _output_format(args):
@@ -220,7 +192,7 @@ def _main(argv=None):
             "rate_limit_attempts": args.rate_limit_attempts, "allow_supabase": args.allow_supabase,
             "no_dns": args.no_dns, "supabase_tables": _csv(args.supabase_table), "dns_resolver": args.dns_resolver,
         }
-        authorized = _authorize(args.target, args.authorized)
+        authorized = args.authorized
         show_progress = not args.quiet and _is_tty(sys.stderr)
         try:
             target, results = runner.run(

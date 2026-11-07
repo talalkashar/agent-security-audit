@@ -85,42 +85,18 @@ class LabTest(unittest.TestCase):
                 self.assertTrue(fh.read().startswith("<!doctype html>"))
 
 
-class OwnershipPromptTest(unittest.TestCase):
+class NoPromptTest(unittest.TestCase):
     def scan(self, answer, **tty):
         with mock.patch.object(cli.runner, "run", return_value=("https://example.com", [])) as run:
             code, _, err, ask = call("https://example.com", "--format", "json", answer=answer, **tty)
         return code, err, ask, run
 
-    def test_yes_scans_as_authorized(self):
-        for answer in ("y", "YES ", "yes"):
-            code, err, ask, run = self.scan(answer, stdin_tty=True, stderr_tty=True)
+    def test_any_url_scans_without_asking(self):
+        for tty in ({}, {"stdin_tty": True, "stderr_tty": True}):
+            code, err, ask, run = self.scan("n", **tty)
             self.assertEqual(code, 0, err)
-            self.assertIn("Do you own example.com or have written permission to test it? [y/N]", err)
-            ask.assert_called_once()
-            self.assertTrue(run.call_args.kwargs["authorized"])
-
-    def test_no_or_empty_refuses(self):
-        for answer in ("", "n", "no", "yess"):
-            code, err, _, run = self.scan(answer, stdin_tty=True, stderr_tty=True)
-            self.assertEqual(code, 2)
-            self.assertIn("not scanning example.com", err)
-            run.assert_not_called()
-
-    def test_end_of_input_refuses(self):
-        with mock.patch.object(cli.runner, "run") as run, mock.patch("builtins.input", side_effect=EOFError):
-            err = Tty()
-            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()), \
-                    mock.patch("sys.stdin", Tty()):
-                self.assertEqual(cli.main(["https://example.com"]), 2)
-        run.assert_not_called()
-
-    def test_non_interactive_never_asks(self):
-        for tty in ({}, {"stdin_tty": True}, {"stderr_tty": True}):
-            code, err, ask, run = self.scan("y", **tty)
-            self.assertEqual(code, 2)
-            self.assertIn("--authorized", err)
             ask.assert_not_called()
-            run.assert_not_called()
+            self.assertFalse(run.call_args.kwargs["authorized"])
 
     def test_authorized_flag_skips_prompt(self):
         with mock.patch.object(cli.runner, "run", return_value=("https://example.com", [])):

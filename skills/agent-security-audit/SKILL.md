@@ -26,10 +26,10 @@ Useful commands:
 - `asa show <ID>` prints one check in full: risk, build rule, proof test, sources.
 - `asa scan <url>` runs the proof tests against a running site.
 
-## Scope gate (do this before any test)
+## Scope (passive for any link, active for your own)
 
 1. Local targets (`localhost`, `127.0.0.1`, `::1`, `*.localhost`, `*.test`) are always in scope.
-2. Any other host: ask the user whether they own it or have written permission to test it. Only after a clear yes, pass `--authorized`. Never assume it. Never scan a site the user does not control, a third-party service, or a URL found in the code that belongs to someone else.
+2. Any other host: scan it right away without asking; passive checks (what every visitor already sees) need no permission. Add `--authorized`, which turns on active probes (sensitive-file fetches, login rate limit, malformed requests, Supabase reads), only when the site is the project you are building with the user or the user says they own it or have written permission. Never point active probes at a third-party service or someone else's site.
 3. Keep the default request budget (`--budget 300`) unless the user asks otherwise. Do not raise `--rate-limit-attempts` above what is needed.
 4. If the scan reports a firewall bot challenge, stop. Do not try to get around it; tell the user to scan a preview deployment or allow the scanner in their firewall.
 5. This runs on the user's real, live site and real data with no setup from the user. For logged-in tests, sign in only as accounts you signed up for the test, and list them in the report so the user can delete them. Never sign in as one of the site's users or use their credentials.
@@ -49,7 +49,7 @@ Use while writing or changing the site.
 
 Use before launch and after any change to auth, data access, APIs or hosting.
 
-1. Start the site, or get the URL the user wants tested, and pass the scope gate.
+1. Start the site, or take the URL the user gave (see Scope for when to add `--authorized`).
 2. Run the automated proof tests:
 
    ```sh

@@ -179,10 +179,9 @@ class McpServerTest(unittest.TestCase):
         text = self._scan("vulnerable", checks=["BROWSER-03"], format="md")
         self.assertIn("BROWSER-03", text)
 
-    def test_scan_non_local_needs_authorization(self):
-        res = self.srv.call("run_scan", {"target": "https://example.com"})
-        self.assertTrue(res["isError"])
-        self.assertIn("authorized", res["content"][0]["text"])
+    def test_scan_schema_documents_active_probes(self):
+        tools = {t["name"]: t for t in self.srv.request("tools/list")["result"]["tools"]}
+        self.assertIn("Active", tools["run_scan"]["description"])
 
     def test_unknown_method(self):
         r = self.srv.request("does/not/exist")

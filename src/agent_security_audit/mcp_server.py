@@ -21,9 +21,9 @@ INSTRUCTIONS = (
     "agent-security-audit has two modes. BUILD mode: before writing a Next.js/Supabase/Vercel site, call "
     "build_rules (filter by stack/area) and follow every rule; get_check shows one control in full. VERIFY mode: "
     "once the site runs, call run_scan on it. Each control comes back pass (with evidence), fail (with the fix), "
-    "or manual/skip (needs a person, code review, or does not apply). localhost, *.localhost and *.test are "
-    "always in scope; any other host needs authorized=true, set only when the user owns the site or has written "
-    "permission. The claim is that every listed check was built in and proven, not that the site has no flaws."
+    "or manual/skip (check in code, does not apply, or an active probe that was not run). Any URL gets the "
+    "passive checks. Active probes run on local hosts, and on other hosts only with authorized=true, set only when "
+    "the user owns the site or has written permission. The claim is that every listed check was built in and proven, not that the site has no flaws."
 )
 
 AREAS = sorted({c.area for c in catalog.load()})
@@ -80,16 +80,16 @@ TOOLS = [
     {
         "name": "run_scan",
         "title": "Run proof tests",
-        "description": "VERIFY mode: run the proof tests against a running site. Local hosts (localhost, "
-                       "*.localhost, *.test, loopback IPs) are always allowed; any other host is refused unless "
-                       "authorized is true, which you may set only when the user owns the site or has written "
-                       "permission to test it.",
+        "description": "VERIFY mode: run the proof tests against a running site. Any URL gets the passive checks. Active "
+                       "probes (sensitive files, login rate limit, malformed requests, Supabase reads) run on local "
+                       "hosts, and on other hosts only when authorized is true, which you may set only when the "
+                       "user owns the site or has written permission to test it.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "target": {"type": "string", "description": "site URL, e.g. http://localhost:3000"},
                 "authorized": {"type": "boolean", "default": False,
-                               "description": "the user owns this non-local site or has written permission"},
+                               "description": "the user owns this site or has written permission: also run active probes"},
                 "checks": {**_str_list, "description": "only these check ids"},
                 "areas": {**_enum_list(AREAS), "description": "only these areas"},
                 "stacks": {**_enum_list(catalog.STACKS), "description": "only checks for these stacks"},

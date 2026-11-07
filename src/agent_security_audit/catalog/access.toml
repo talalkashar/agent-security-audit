@@ -7,6 +7,7 @@ severity = "critical"
 layer = 7
 cwe = ["CWE-862", "CWE-284"]
 mode = "auto"
+probe = "active"
 stacks = ["supabase"]
 risk = """The anon (publishable) key is public by design, and Supabase's Data API serves every table in an exposed schema to anyone holding it; on existing projects new public tables are granted to anon by default, so RLS is the only gate. CVE-2025-48757: Lovable-built apps without working RLS let anyone read and write their tables (the researcher reported about 170 of 1,645 apps exposed; the CVE is disputed). Moltbook: a Supabase key in client JavaScript plus no RLS exposed the whole production database."""
 build = """Every `create table` in an exposed schema is followed in the same migration by `alter table ... enable row level security;` and an explicit policy per needed operation. Keep internal tables in a non-exposed schema (e.g. `private`), or revoke default privileges from `anon, authenticated` so exposure is opt-in. Run `supabase db lint` or the Security Advisor in CI and fail on ERROR (lint 0013 `rls_disabled_in_public`). The anon key in the bundle is expected; a service_role key is NEXT-01."""

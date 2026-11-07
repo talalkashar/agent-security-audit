@@ -87,7 +87,7 @@ asa list --area auth                     # checks in one area
 asa show AUTH-01                         # one check in full: risk, build rule, proof test, sources
 asa rules --stack nextjs,supabase        # build rules for your stack, as Markdown
 asa scan http://localhost:3000           # prove the automated checks on your dev server
-asa https://your-site.com                # shortcut for `asa scan`; asks once whether you own the site
+asa https://any-site.com                # shortcut for `asa scan`; passive checks, no setup
 ```
 
 In a terminal, a scan shows a progress line and ends with a short summary: the counts and the failed checks to fix first, most severe first, each with its fix. Add `--out asa-report.html` for the full report with evidence.
@@ -188,7 +188,8 @@ More detail per agent is in [docs/INSTALL.md](docs/INSTALL.md).
 
 This tool is for testing sites you own or have written permission to test. It is defensive: it contains no exploit payloads or bypass techniques, and its proof tests are built not to damage data or overload a service.
 
-- **Own site or written permission.** `localhost`, loopback addresses, `*.localhost` and `*.test` are always allowed. Any other host is refused unless you pass `--authorized` (CLI) or `authorized: true` (MCP), which states that you own the site or have written permission.
+- **Any link, passive by default.** Any URL gets the passive checks: what the site already shows every visitor (headers, TLS, certificates, DNS and email records, cookies, public JavaScript and source maps). Nothing is sent that a normal browser would not send.
+- **Active probes need ownership.** Probes that test the server itself (fetching `/.env` and `.git`, the login rate-limit test, malformed requests, Supabase table reads) run on `localhost`, loopback, `*.localhost` and `*.test`, and on any other host only with `--authorized` (CLI) or `authorized: true` (MCP), which states that you own the site or have written permission. Without it they are listed as skipped, with how to run them.
 - **Request budget.** A scan sends at most 300 requests by default (`--budget`), with a short delay between them. The rate-limit probe sends at most 60 (`--rate-limit-attempts`, default 30).
 - **Same origin.** Requests stay on the target's scheme, host and port. Redirects to other hosts are reported, not followed. The only exceptions are the www/apex twin of the same site over HTTPS, the Supabase project the site itself points to when you pass `--allow-supabase` (read-only, row counts only; on a local target it also needs `--authorized`, because that project is not local), and DNS lookups through a public resolver (turn off with `--no-dns`).
 - **Stops at a firewall challenge.** If the site's firewall answers with a bot challenge, the scan stops and says so. It does not try to get around it.
@@ -209,7 +210,7 @@ asa scan <url> --format sarif --out asa.sarif   # SARIF 2.1.0 for GitHub code sc
 
 With `--out`, the format comes from `--format`, else from the file extension (`.md`, `.json`, `.sarif`, `.html`), else Markdown. The Markdown and HTML reports open with "Fix these first" (up to 10 failed checks, most severe first, each with its fix) and a coverage table by OSI layer, then every result with its evidence. JSON adds the same as `fix_first` and `osi_layers`. The progress line goes to stderr only when it is a terminal; `--quiet` turns it off.
 
-A non-local host needs `--authorized`. In an interactive terminal, `asa` asks once instead ("Do you own <host> or have written permission to test it? [y/N]") and scans only on `y` or `yes`. In scripts and CI there is no prompt: pass `--authorized`.
+Any URL scans without a prompt. Active probes on a non-local host run only with `--authorized`; otherwise they come back as `skip` with the reason.
 
 `asa scan` exits 1 when a failed check is at least as severe as `--fail-on` (default `high`), 2 on a usage or scope error, and 0 otherwise. Use `--fail-on none` to always exit 0, and `--auto-only` to leave out the `manual` rows.
 

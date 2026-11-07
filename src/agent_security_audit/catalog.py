@@ -13,7 +13,8 @@ MODES = ("auto", "assisted", "review")
 ID_RE = re.compile(r"^[A-Z]+-\d{2}$")
 CWE_RE = re.compile(r"^CWE-\d+$")
 REQUIRED = ("id", "title", "severity", "layer", "cwe", "risk", "build", "proof", "mode", "stacks", "sources")
-ALLOWED = (*REQUIRED, "asvs")
+ALLOWED = (*REQUIRED, "asvs", "probe")
+PROBES = ("passive", "active")
 STACKS = ("any", "nextjs", "supabase", "vercel", "node")
 
 
@@ -42,12 +43,13 @@ class Check:
     stacks: tuple[str, ...]
     sources: tuple[Source, ...]
     asvs: tuple[str, ...] = field(default=())
+    probe: str = "passive"
 
     def to_dict(self):
         return {
             "id": self.id, "area": self.area, "title": self.title, "severity": self.severity,
             "osi_layer": self.layer, "cwe": list(self.cwe), "asvs": list(self.asvs), "mode": self.mode,
-            "stacks": list(self.stacks), "risk": self.risk, "build": self.build, "proof": self.proof,
+            "stacks": list(self.stacks), "probe": self.probe, "risk": self.risk, "build": self.build, "proof": self.proof,
             "sources": [{"title": s.title, "url": s.url} for s in self.sources],
         }
 
@@ -66,6 +68,8 @@ def _parse(area, raw):
         raise CatalogError(f"{where}: bad id")
     if raw["severity"] not in SEVERITIES:
         raise CatalogError(f"{where}: severity must be one of {SEVERITIES}")
+    if raw.get("probe", "passive") not in PROBES:
+        raise CatalogError(f"{where}: probe must be one of {PROBES}")
     if raw["mode"] not in MODES:
         raise CatalogError(f"{where}: mode must be one of {MODES}")
     if not isinstance(raw["layer"], int) or not 1 <= raw["layer"] <= 7:
@@ -85,7 +89,7 @@ def _parse(area, raw):
     return Check(
         id=raw["id"], area=area, title=raw["title"].strip(), severity=raw["severity"], layer=raw["layer"],
         cwe=tuple(raw["cwe"]), risk=raw["risk"].strip(), build=raw["build"].strip(), proof=raw["proof"].strip(),
-        mode=raw["mode"], stacks=tuple(raw["stacks"]), asvs=tuple(raw.get("asvs", ())),
+        mode=raw["mode"], stacks=tuple(raw["stacks"]), asvs=tuple(raw.get("asvs", ())), probe=raw.get("probe", "passive"),
         sources=tuple(Source(s["title"], s["url"]) for s in sources),
     )
 
