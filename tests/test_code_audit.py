@@ -90,7 +90,7 @@ class FixtureTest(unittest.TestCase):
         results = by_id(self.fixed_results)
         bad = {cid: r.summary for cid, r in results.items() if r.status in ("fail", "warn", "error")}
         self.assertEqual(bad, {})
-        for cid in ("INFRA-08", "NEXT-01", "ACCESS-01", "ACCESS-02", "ACCESS-06", "NEXT-05", "NEXT-06", "AUTH-01",
+        for cid in ("NEXT-01", "ACCESS-01", "ACCESS-02", "ACCESS-06", "NEXT-05", "NEXT-06", "AUTH-01",
                     "NEXT-15", "NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02", "BROWSER-03",
                     "BROWSER-04", "BROWSER-05", "BROWSER-08", "BROWSER-09", "API-30", "API-31", "API-32", "API-05",
                     "INFRA-13", "NEXT-04", "INFRA-15"):
@@ -98,6 +98,9 @@ class FixtureTest(unittest.TestCase):
                 self.assertEqual(results[cid].status, "pass", results[cid].summary)
         # Server-side secret-key use is listed for review, not passed.
         self.assertEqual(results["ACCESS-08"].status, "manual")
+        # A clean working tree says nothing about git history, so INFRA-08 is never a pass from the code.
+        self.assertEqual(results["INFRA-08"].status, "manual")
+        self.assertIn("Git history was not read", results["INFRA-08"].summary)
 
     def test_evidence_points_at_lines(self):
         results = by_id(self.vuln_results)
@@ -149,7 +152,8 @@ class FixtureTest(unittest.TestCase):
         os.symlink(outside, link)
         try:
             _, results = code_audit.run(self.fixed, osv=False, ids=["INFRA-08"])
-            self.assertEqual(results[0].status, "pass")
+            self.assertEqual(results[0].status, "manual")
+            self.assertNotIn("linked.ts", json.dumps(results[0].to_dict()))
         finally:
             link.unlink()
 
@@ -262,10 +266,14 @@ class GitIndexTest(unittest.TestCase):
                 self.git("update-index", "--index-version", version)
                 proj = project.Project(root)
                 self.assertTrue(proj.source.startswith("git index"))
-                self.assertEqual(proj.files, [".env.production", "a/deep/x.ts", "a/deep/y.ts"])
+                self.assertIn("plus 1 untracked file not ignored", proj.source)
+                # Untracked files that git would commit are read too; the index decides what is "tracked".
+                self.assertEqual(proj.files, [".env.production", "a/deep/x.ts", "a/deep/y.ts", "untracked.ts"])
+                self.assertEqual(proj.tracked, {".env.production", "a/deep/x.ts", "a/deep/y.ts"})
         _, results = code_audit.run(root, osv=False, ids=["INFRA-08"])
         self.assertEqual(results[0].status, "fail")
-        self.assertIn("tracked in git", results[0].evidence[0])
+        self.assertIn("untracked.ts:1:", results[0].evidence[0])
+        self.assertIn("tracked in git", results[0].evidence[1])
         self.assertNotIn("hunter2", json.dumps(results[0].to_dict()))
 
 
@@ -379,3 +387,286 @@ class McpTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def audit_files(files, **kw):
+    """Run the code audit on a temporary project made of {path: text}."""
+    with tempfile.TemporaryDirectory() as tmp:
+        for rel, text in files.items():
+            (Path(tmp) / rel).parent.mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / rel).write_text(text)
+        return by_id(code_audit.run(tmp, osv=kw.pop("osv", False), **kw)[1])
+
+
+class EdgeFixtureTest(unittest.TestCase):
+    """Regression cases where a static read used to pass, or stay silent, without evidence."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.root = copy_fixture("code_edge", cls.tmp)
+        _, results = code_audit.run(cls.root, osv_query=fake_osv)
+        cls.results = by_id(results)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_weak_header_values_fail(self):
+        for cid in ("BROWSER-01", "BROWSER-02", "BROWSER-03", "BROWSER-04", "BROWSER-05"):
+            with self.subTest(check=cid):
+                self.assertEqual(self.results[cid].status, "fail", self.results[cid].summary)
+        self.assertIn("max-age is 0", self.results["BROWSER-01"].summary)
+        self.assertIn("any host", self.results["BROWSER-02"].summary)
+        self.assertIn("unsafe-url", self.results["BROWSER-05"].summary)
+        self.assertEqual(self.results["BROWSER-08"].status, "pass")
+        self.assertTrue(any("next.config.js:" in e and "max-age=0" in e for e in self.results["BROWSER-01"].evidence))
+
+    def test_sanitizer_lookalikes_and_json_in_script(self):
+        r = self.results["BROWSER-09"]
+        self.assertEqual(r.status, "warn")
+        lines = sorted(loc["line"] for loc in r.locations)
+        self.assertEqual(lines, [5, 10, 14])
+        self.assertTrue(any("</script>" in e for e in r.evidence))
+
+    def test_aliased_and_promisified_shell_calls(self):
+        r = self.results["API-31"]
+        self.assertEqual(r.status, "fail")
+        self.assertEqual(sorted(loc["line"] for loc in r.locations), [9, 10])
+        self.assertIn("2 shell commands are built", r.summary)
+
+    def test_auth_in_one_method_does_not_cover_another(self):
+        r = self.results["NEXT-05"]
+        self.assertEqual(r.status, "warn")
+        self.assertEqual(len(r.locations), 1)
+        self.assertIn("GET touches data", r.evidence[0])
+
+    def test_unsupported_lockfile_is_not_silent(self):
+        self.assertEqual(self.results["INFRA-13"].status, "manual")
+        self.assertIn("bun.lock", self.results["INFRA-13"].summary)
+        self.assertEqual(self.results["NEXT-04"].status, "manual")
+        _, results = code_audit.run(self.root, osv=False)
+        self.assertEqual(by_id(results)["INFRA-13"].status, "manual")
+
+
+class AccuracyTest(unittest.TestCase):
+    def test_header_values_from_host_config(self):
+        vercel = json.dumps({"headers": [{"source": "/(.*)", "headers": [
+            {"key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains"},
+            {"key": "X-Frame-Options", "value": "ALLOWALL"}]}]})
+        r = audit_files({"vercel.json": vercel, "_headers": "/*\n  Referrer-Policy: unsafe-url\n"})
+        self.assertEqual(r["BROWSER-01"].status, "pass")
+        self.assertEqual(r["BROWSER-04"].status, "fail")
+        self.assertEqual(r["BROWSER-05"].status, "fail")
+
+    def test_dynamic_header_value_is_manual(self):
+        r = audit_files({"next.config.js": 'const csp = process.env.CSP;\nmodule.exports = { async headers() { '
+                         'return [{ source: "/(.*)", headers: [{ key: "Content-Security-Policy", value: csp }, '
+                         '{ key: "X-Content-Type-Options", value: `${process.env.NOSNIFF}` }] }]; } };\n'})
+        self.assertEqual(r["BROWSER-02"].status, "manual")
+        self.assertIn("built at run time", r["BROWSER-02"].summary)
+        self.assertEqual(r["BROWSER-03"].status, "manual")
+
+    def test_header_value_built_from_a_constant(self):
+        mw = ("export function middleware() {\n  const nonce = crypto.randomUUID();\n"
+              "  const cspHeader = `\n    default-src 'self';\n    script-src 'self' 'nonce-${nonce}' 'strict-dynamic';\n"
+              "    base-uri 'none';\n  `;\n  const res = NextResponse.next();\n"
+              "  res.headers.set('Content-Security-Policy', cspHeader.replace(/\\s{2,}/g, ' ').trim());\n"
+              "  res.headers.set('Permissions-Policy', ['camera=()', 'microphone=()'].join(', '));\n"
+              "  return res;\n}\n")
+        r = audit_files({"middleware.ts": mw})
+        self.assertEqual(r["BROWSER-02"].status, "pass", r["BROWSER-02"].summary)
+        self.assertEqual(r["BROWSER-08"].status, "warn")  # no Cross-Origin-Opener-Policy, as the live check says
+
+    def test_header_value_from_import_and_ternary(self):
+        r = audit_files({
+            "src/config/headers.ts": 'export const HSTS = "max-age=100";\n',
+            "src/proxy.ts": 'import { HSTS } from "@/config/headers";\nexport function proxy(req) {\n'
+                            '  res.headers.set("Strict-Transport-Security", HSTS);\n'
+                            '  res.headers.set("Referrer-Policy", req.auth ? "strict-origin" : "unsafe-url");\n}\n'})
+        self.assertEqual(r["BROWSER-01"].status, "fail")  # max-age under a year, read from the imported constant
+        self.assertIn("max-age is 100", r["BROWSER-01"].summary)
+        self.assertEqual(r["BROWSER-05"].status, "fail")  # the weaker branch decides
+
+    def test_more_shell_aliases(self):
+        r = audit_files({"lib/a.js": "const { exec: run } = require('child_process');\nrun(`rm ${x}`);\n",
+                         "lib/b.ts": "import * as cp2 from 'node:child_process';\ncp2.execSync('ls ' + dir);\n",
+                         "lib/c.ts": "import { exec as sh } from 'child_process';\nsh('ls -la');\n"})
+        self.assertEqual(r["API-31"].status, "fail")
+        self.assertEqual({loc["path"] for loc in r["API-31"].locations}, {"lib/a.js", "lib/b.ts"})
+
+    def test_headers_on_different_routes_are_not_one_response(self):
+        def cfg(*routes):
+            return ("module.exports = { async headers() { return [" + ", ".join(
+                f'{{ source: "{src}", headers: [' + ", ".join(f'{{ key: "{k}", value: "{v}" }}' for k, v in hs) + "] }"
+                for src, hs in routes) + "]; } };\n")
+        pp, coop = ("Permissions-Policy", "camera=()"), ("Cross-Origin-Opener-Policy", "same-origin")
+        r = audit_files({"next.config.js": cfg(("/a", [pp]), ("/b", [coop]))})
+        self.assertEqual(r["BROWSER-08"].status, "manual", r["BROWSER-08"].summary)
+        self.assertIn("different routes", r["BROWSER-08"].summary)
+        r = audit_files({"next.config.js": cfg(("/(.*)", [pp, coop]))})
+        self.assertEqual(r["BROWSER-08"].status, "pass")
+        vercel = json.dumps({"headers": [{"source": "/a", "headers": [{"key": pp[0], "value": pp[1]}]},
+                                         {"source": "/b", "headers": [{"key": coop[0], "value": coop[1]}]}]})
+        self.assertEqual(audit_files({"vercel.json": vercel})["BROWSER-08"].status, "manual")
+        headers = f"/a\n  {pp[0]}: {pp[1]}\n/b\n  {coop[0]}: {coop[1]}\n"
+        self.assertEqual(audit_files({"_headers": headers})["BROWSER-08"].status, "manual")
+        # A strong X-Frame-Options on one route does not cover a frame-ancestors * on another.
+        r = audit_files({"next.config.js": cfg(("/a", [("X-Frame-Options", "DENY")]),
+                                               ("/b", [("Content-Security-Policy", "frame-ancestors *")]))})
+        self.assertEqual(r["BROWSER-04"].status, "fail")
+        r = audit_files({"next.config.js": "module.exports = {};\n"})
+        self.assertIn("Cross-Origin-Opener-Policy are not set", r["BROWSER-08"].summary)
+        self.assertIn("Set them there", r["BROWSER-08"].summary)
+
+    def test_every_route_header_value_is_judged(self):
+        hsts = [(f"/r{i}", [("Strict-Transport-Security", f"max-age={63072000 + i}; includeSubDomains")])
+                for i in range(17)] + [("/z", [("Strict-Transport-Security", "max-age=0")])]
+        code = "module.exports = { async headers() { return [" + ", ".join(
+            f'{{ source: "{s}", headers: [{{ key: "{k}", value: "{v}" }}] }}' for s, [(k, v)] in hsts) + "]; } };\n"
+        self.assertEqual(audit_files({"next.config.js": code})["BROWSER-01"].status, "fail")
+        mw = "export function middleware() {\n  res.headers.set('Strict-Transport-Security', hsts);\n}\n"
+        with mock.patch("agent_security_audit.code_audit.nextjs._branches", lambda e: [
+                f'"max-age={63072000 + i}; includeSubDomains"' for i in range(300)]):
+            r = audit_files({"middleware.ts": mw})
+        self.assertEqual(r["BROWSER-01"].status, "manual")  # too many values to judge them all is never a pass
+
+    def test_shell_alias_with_named_import_and_inline_require(self):
+        r = audit_files({"a.js": "import child, { spawn } from 'child_process';\nchild.exec(`ls ${x}`);\n"})
+        self.assertEqual(r["API-31"].status, "fail")
+        r = audit_files({"b.js": "const run = promisify(require('child_process').exec);\nrun(`ls ${x}`);\n"})
+        self.assertEqual(r["API-31"].status, "fail")
+        r = audit_files({"c.js": "require('node:child_process').execSync('ls ' + dir);\n"})
+        self.assertEqual(r["API-31"].status, "fail")
+
+    def test_sanitizer_must_wrap_the_whole_value_and_be_real(self):
+        def html(value, head=""):
+            return audit_files({"a.jsx": head + "export const A = () => "
+                                f"<div dangerouslySetInnerHTML={{{{ __html: {value} }}}} />;\n"})["BROWSER-09"].status
+        self.assertEqual(html("DOMPurify.sanitize(x) + b"), "warn")
+        self.assertEqual(html("sanitize(x)", "const sanitize = (s) => s;\n"), "warn")
+        self.assertEqual(html("renderToString(x)"), "warn")
+        self.assertEqual(html("DOMPurify.sanitize(x)"), "pass")
+        self.assertEqual(html("sanitize(x, { allowedTags: [] })", "import sanitize from 'sanitize-html';\n"), "pass")
+        self.assertEqual(html("renderToString(x)", "import { renderToString } from 'react-dom/server';\n"), "pass")
+
+    def test_next04_manual_when_next_lockfile_unread(self):
+        r = audit_files({"package.json": json.dumps({"dependencies": {"next": "15.0.0"}}), "bun.lock": "{}",
+                         "py/poetry.lock": '[[package]]\nname = "requests"\nversion = "2.31.0"\n'})
+        self.assertEqual(r["NEXT-04"].status, "manual")
+        self.assertIn("bun.lock", r["NEXT-04"].summary)
+
+    def test_column_zero_statement_stays_in_its_handler(self):
+        code = ("import { db } from '@/db';\nexport async function GET(req) {\nconst id = req.nextUrl.searchParams;\n"
+                "const rows = await db.select().from(t);\nreturn Response.json(rows);\n}\n")
+        r = audit_files({"app/api/x/route.ts": code})
+        self.assertIn(r["NEXT-05"].status, ("fail", "warn"), r["NEXT-05"].summary)
+
+    def test_route_helper_auth_counts_and_all_guarded_pass(self):
+        code = ("async function requireOwner() { return supabase.auth.getUser(); }\n"
+                "export async function GET() {\n  await requireOwner();\n  return supabase.from('notes').select();\n}\n"
+                "export const DELETE = withAuth(async () => supabase.from('notes').delete());\n"
+                "export function OPTIONS() {\n  return new Response(null);\n}\n")
+        r = audit_files({"app/api/notes/route.ts": code})
+        self.assertEqual(r["NEXT-05"].status, "pass", r["NEXT-05"].evidence)
+        self.assertIn("2 of 2", r["NEXT-05"].summary)
+        r = audit_files({"app/api/ping/route.ts": "export function GET() {\n  return Response.json({ ok: 1 });\n}\n"})
+        self.assertEqual(r["NEXT-05"].status, "manual")  # no data seen is not proof that every handler is guarded
+
+    def test_file_cap_makes_passes_manual(self):
+        files = {f"lib/f{i}.ts": "export const x = 1;\n" for i in range(4)}
+        with mock.patch.object(project, "MAX_FILES", 2):
+            r = audit_files(files)
+        self.assertEqual(r["API-30"].status, "manual")
+        self.assertIn("only the first 2 of 4 files", r["API-30"].summary)
+        self.assertFalse([cid for cid, x in r.items() if x.status == "pass"])
+
+    def test_oversized_file_makes_pass_manual(self):
+        files = {"lib/small.ts": "export const x = 1;\n", "lib/big.ts": "export const y = 2;\n" + "//\n" * 400}
+        with mock.patch.object(project, "MAX_BYTES", 200):
+            r = audit_files(files)
+        self.assertEqual(r["API-30"].status, "manual")
+        self.assertIn("lib/big.ts", r["API-30"].summary)
+        with mock.patch.object(project, "MAX_BYTES", 200):
+            r = audit_files({"lib/small.ts": "export const x = 1;\n", "img.png": "\0" * 400})
+        self.assertEqual(r["API-30"].status, "pass")  # a large binary file is not a coverage gap
+
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_ignored_untracked_files_stay_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".gitignore").write_text("secret.ts\n")
+            (root / "secret.ts").write_text(f'const k = "{STRIPE}";\n')
+            (root / "new.ts").write_text("export const n = 1;\n")
+            (root / "a.ts").write_text("export const a = 1;\n")
+            subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
+            subprocess.run(["git", "add", "a.ts", ".gitignore"], cwd=tmp, check=True)
+            proj = project.Project(root)
+            self.assertEqual(proj.files, [".gitignore", "a.ts", "new.ts"])
+            self.assertEqual(proj.tracked, {".gitignore", "a.ts"})
+
+
+# One project per summary, with n findings, and the words the summary must use at n = 1 and n = 2.
+def _verb_cases():
+    def route(n):
+        return {f"app/api/r{i}/route.ts": "export async function GET() { return db.select(); }\n" for i in range(n)}
+
+    def action(n):
+        return {"app/actions.ts": "'use server';\n" + "".join(
+            f"export async function a{i}() {{ await db.insert(); }}\n" for i in range(n))}
+
+    def sql(n, body):
+        return {"supabase/migrations/1.sql": "".join(body(i) for i in range(n))}
+
+    def lock(n):
+        pkgs = {"node_modules/lodash": {"version": "4.17.20"}}
+        if n == 2:
+            pkgs["node_modules/next"] = {"version": "14.0.0"}
+        return {"package.json": "{}", "package-lock.json": json.dumps({"lockfileVersion": 3, "packages": pkgs})}
+
+    return [
+        ("BROWSER-09", lambda n: {f"c{i}.jsx": "export const C = (p) => <div dangerouslySetInnerHTML={{ __html: "
+                                  "p.h }} />;\n" for i in range(n)}, "place puts", "places put"),
+        ("API-30", lambda n: {f"e{i}.js": "eval(code);\n" for i in range(n)}, "place runs", "places run"),
+        ("API-31", lambda n: {"s.js": "import { exec } from 'child_process';\n" + "exec(`ls ${d}`);\n" * n},
+         "shell command is", "shell commands are"),
+        ("API-32", lambda n: {"q.js": "pool.query(`SELECT * FROM t WHERE id = ${id}`);\n" * n},
+         "query is", "queries are"),
+        ("API-05", lambda n: {"f.js": "import { createClient } from '@supabase/supabase-js';\n"
+                              + "supabase.from('t').select().or(`name.eq.${x}`);\n" * n},
+         "filter string for .or()/.filter() is", "filter strings for .or()/.filter() are"),
+        ("NEXT-05", route, "route handler reads or writes", "route handlers read or write"),
+        ("NEXT-06", action, "Server Action changes or reads", "Server Actions change or read"),
+        ("AUTH-01", lambda n: {f"app/p{i}/page.ts": "await supabase.auth.getSession();\n" for i in range(n)},
+         "server file trusts", "server files trust"),
+        ("NEXT-15", lambda n: {"vercel.json": json.dumps({"crons": [{"path": f"/api/c{i}"} for i in range(n)]})},
+         "cron route runs", "cron routes run"),
+        ("NEXT-01", lambda n: {".env.example": "".join(f"NEXT_PUBLIC_S{i}_SECRET=\n" for i in range(n))},
+         "variable with a secret-looking name", "variables with secret-looking names"),
+        ("INFRA-13", lock, "package has", "packages have"),
+        ("INFRA-15", lambda n: {".github/workflows/ci.yml": "permissions: {}\njobs:\n  a:\n    steps:\n"
+                                + "      - run: echo ${{ github.event.issue.title }}\n" * n},
+         "workflow step lets", "workflow steps let"),
+        ("ACCESS-01", lambda n: sql(n, lambda i: f"create table public.t{i} (id int);\n"),
+         "table in an exposed schema never enables", "tables in an exposed schema never enable"),
+        ("ACCESS-02", lambda n: sql(n, lambda i: f"create table public.profiles{i} (id int, user_id uuid);\n"
+                                    f"alter table public.profiles{i} enable row level security;\n"
+                                    f"create policy p{i} on public.profiles{i} for update using (true);\n"),
+         "policy on user-data tables allows", "policies on user-data tables allow"),
+        ("ACCESS-06", lambda n: sql(n, lambda i: f"create function public.f{i}() returns void language sql "
+                                    "security definer as $$ select 1 $$;\n"),
+         "1 view or function in", "2 views or functions in"),
+    ]
+
+
+class VerbAgreementTest(unittest.TestCase):
+    def test_each_summary_at_one_and_two(self):
+        for cid, files, one, two in _verb_cases():
+            for n, words in ((1, one), (2, two)):
+                with self.subTest(check=cid, n=n):
+                    r = audit_files(files(n), osv_query=fake_osv, osv=True)[cid]
+                    self.assertIn(words, r.summary)
+                    self.assertIn(f" {n} ", f" {r.summary.replace(SUSPECTED, '')}")
+
+
+SUSPECTED = "Suspected, from a static read of the code: "

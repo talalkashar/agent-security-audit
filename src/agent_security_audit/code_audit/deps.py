@@ -13,7 +13,7 @@ import urllib.request
 from .. import __version__
 from ..model import Result
 from .base import make, plural
-from .project import Finding, is_test_path
+from .project import LOCKFILES, Finding, is_test_path
 
 OSV_URL = "https://api.osv.dev/v1/querybatch"
 OSV_BATCH = 500
@@ -116,9 +116,12 @@ def query_osv(packages, timeout=20.0):
 def dependencies(project, osv=True, osv_query=None, timeout=20.0):
     files = [f for f in project.files if not is_test_path(f)]
     locks, manifests = {}, [f for f in files if posixpath.basename(f) == "package.json"]
+    unchecked = []  # lockfiles present but not read: a format with no parser, or one that gave no packages
     for rel in files:
         base = posixpath.basename(rel)
         if base not in PARSERS:
+            if base in LOCKFILES:
+                unchecked.append(Finding(rel, 1, "lockfile format not supported, so its packages were not checked"))
             continue
         eco, parse = PARSERS[base]
         try:
@@ -127,32 +130,49 @@ def dependencies(project, osv=True, osv_query=None, timeout=20.0):
             pkgs = set()
         if pkgs:
             locks[rel] = pkgs
+        elif base != "requirements.txt":
+            unchecked.append(Finding(rel, 1, "no package versions could be read from this lockfile"))
+    declares_next = any(re.search(r'"next"\s*:', project.text(m)) for m in manifests)
     npm_dirs = {posixpath.dirname(f) for f in files
                 if posixpath.basename(f) in ("package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
                                              "yarn.lock", "bun.lockb", "bun.lock")}
     unlocked = [Finding(m, 1, "package.json with no lockfile in its folder or a parent folder") for m in manifests
                 if m.endswith("package.json") and not any(_under(posixpath.dirname(m), d) for d in npm_dirs)]
+    gap = (f"Not checked: {', '.join(f.path for f in unchecked[:5])}"
+           + (f" and {len(unchecked) - 5} more" if len(unchecked) > 5 else "") + ".") if unchecked else ""
     if not locks:
         if unlocked:
             return [make("INFRA-13", "warn", "No lockfile, so every install can pull different (and newly "
-                         "compromised) versions. Commit the lockfile and install with npm ci.", unlocked)]
+                         "compromised) versions. Commit the lockfile and install with npm ci.", unlocked + unchecked)]
+        if unchecked:
+            out = [make("INFRA-13", "manual", "Dependencies were not checked for known vulnerabilities: no "
+                        f"supported lockfile could be read. {gap} Run the package manager's audit (for example "
+                        "bun audit, cargo audit or pip-audit) or export a supported lockfile.", unchecked)]
+            if declares_next:
+                out.append(make("NEXT-04", "manual", "The Next.js, React and sharp versions were not checked: the "
+                                f"lockfile could not be read. {gap}", unchecked))
+            return out
         return []
     all_pkgs = set().union(*locks.values())
     framework = {p for p in all_pkgs if p[0] == "npm" and p[1] in FRAMEWORK}
     has_next = any(p[1] == "next" for p in framework)
+    # package.json declares next, but no lockfile that was read lists it: say the versions went unchecked.
+    next_unread = [make("NEXT-04", "manual", "The Next.js, React and sharp versions were not checked: no lockfile "
+                        "that was read lists next." + (f" {gap}" if gap else ""), unchecked + unlocked)] \
+        if declares_next and not has_next else []
     note = f"Read {plural(len(all_pkgs), 'package version')} from {', '.join(sorted(locks))}."
     if not osv:
-        out = [Result("INFRA-13", "manual", "Dependency vulnerability lookup skipped (--no-osv). " + note,
-                      [f.evidence() for f in unlocked])]
+        out = [Result("INFRA-13", "manual", "Dependency vulnerability lookup skipped (--no-osv). " + note
+                      + (" " + gap if gap else ""), [f.evidence() for f in unlocked + unchecked])]
         if has_next:
             out.append(Result("NEXT-04", "manual", "Vulnerability lookup skipped (--no-osv): "
                               + ", ".join(sorted(f"{n} {v}" for _, n, v in framework))))
-        return out
+        return out + next_unread
     try:
         vulns = (osv_query or query_osv)(all_pkgs, timeout=timeout)
     except OsvError as exc:
         msg = f"Could not query the OSV vulnerability database ({exc}); dependencies were not checked."
-        return [Result("INFRA-13", "error", msg)] + ([Result("NEXT-04", "error", msg)] if has_next else [])
+        return [Result("INFRA-13", "error", msg)] + ([Result("NEXT-04", "error", msg)] if has_next else next_unread)
 
     def finding(pkg, ids):
         _, name, version = pkg
@@ -164,11 +184,17 @@ def dependencies(project, osv=True, osv_query=None, timeout=20.0):
     general = [finding(p, ids) for p, ids in sorted(vulns.items()) if p not in framework]
     core = [finding(p, ids) for p, ids in sorted(vulns.items()) if p in framework]
     if general or core:
-        out.append(make("INFRA-13", "fail", f"{plural(len(general) + len(core), 'locked package')} have known "
-                        "vulnerabilities in OSV. Upgrade to a fixed version.", core + general + unlocked, [note]))
+        n = len(general) + len(core)
+        out.append(make("INFRA-13", "fail", f"{plural(n, 'locked package')} {'has' if n == 1 else 'have'} known "
+                        "vulnerabilities in OSV. Upgrade to a fixed version.", core + general + unlocked + unchecked,
+                        [note]))
     elif unlocked:
         out.append(make("INFRA-13", "warn", "Locked packages have no known vulnerabilities, but a package.json has no "
-                        "lockfile.", unlocked, [note]))
+                        "lockfile.", unlocked + unchecked, [note]))
+    elif unchecked:
+        out.append(make("INFRA-13", "manual", f"No known vulnerabilities in OSV for "
+                        f"{plural(len(all_pkgs), 'locked package version')}, but not every lockfile was read. {gap}",
+                        unchecked, [note]))
     else:
         out.append(make("INFRA-13", "pass", f"No known vulnerabilities in OSV for "
                         f"{plural(len(all_pkgs), 'locked package version')}. Install-script and typosquat review still apply.", evidence=[note]))
@@ -179,7 +205,7 @@ def dependencies(project, osv=True, osv_query=None, timeout=20.0):
                             "Upgrade to the latest patch release.", core))
         else:
             out.append(make("NEXT-04", "pass", f"No known vulnerabilities in OSV for {versions}."))
-    return out
+    return out + next_unread
 
 
 def _under(path, folder):

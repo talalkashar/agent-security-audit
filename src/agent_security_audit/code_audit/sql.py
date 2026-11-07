@@ -203,8 +203,8 @@ def supabase_sql(project):
               for name, t in exposed.items()
               if not t["rls"] and not ({"anon", "authenticated"} <= t["revoked"] or "public" in t["revoked"])]
     if no_rls:
-        results.append(make("ACCESS-01", "fail", f"{plural(len(no_rls), 'table')} in an exposed schema never enable "
-                            "row-level security in the migrations, so the public anon key can read and write them.",
+        results.append(make("ACCESS-01", "fail", f"{plural(len(no_rls), 'table')} in an exposed schema "
+                            f"{'never enables' if len(no_rls) == 1 else 'never enable'} row-level security in the migrations, so the public anon key can read and write them.",
                             no_rls, [files_note]))
     elif exposed:
         results.append(make("ACCESS-01", "pass", "Every table created in an exposed schema "
@@ -226,11 +226,12 @@ def supabase_sql(project):
         note = f"{p['cmd']} policy on {p['table']} lets {who} through (no owner check)"
         (hard if owned or p["cmd"] in ("update", "delete") else soft).append(_finding(p["where"], note))
     if hard:
-        results.append(make("ACCESS-02", "fail", f"{plural(len(hard), 'policy')} on user-data tables allow every "
-                            "row to any caller instead of the row's owner. Compare the owner column with "
+        results.append(make("ACCESS-02", "fail", f"{plural(len(hard), 'policy')} on user-data tables "
+                            f"{'allows' if len(hard) == 1 else 'allow'} every row to any caller instead of the row's owner. Compare the owner column with "
                             "(select auth.uid()).", hard + soft))
     elif soft:
-        results.append(make("ACCESS-02", "warn", SUSPECTED + f"{plural(len(soft), 'policy')} allow every row "
+        results.append(make("ACCESS-02", "warn", SUSPECTED + f"{plural(len(soft), 'policy')} "
+                            f"{'allows' if len(soft) == 1 else 'allow'} every row "
                             "(using (true) or any signed-in user). Fine only for public content tables.", soft))
     elif policies:
         results.append(make("ACCESS-02", "pass", f"None of {plural(len(policies), 'policy')} in the migrations is "
@@ -251,8 +252,9 @@ def supabase_sql(project):
             risky.append(_finding(f["where"], f"security definer function {name} is callable through the API"
                                   + ("" if f["search_path"] else " and has no fixed search_path")))
     if risky:
-        results.append(make("ACCESS-06", "warn", SUSPECTED + f"{plural(len(risky), 'view or function')} in an "
-                            "exposed schema can bypass row-level security. Use security_invoker views and move "
+        results.append(make("ACCESS-06", "warn", SUSPECTED + f"{len(risky)} "
+                            f"{'view or function' if len(risky) == 1 else 'views or functions'} in an exposed schema "
+                            "can bypass row-level security. Use security_invoker views and move "
                             "security definer functions to a private schema.", risky))
     elif views or functions:
         results.append(make("ACCESS-06", "pass", f"{plural(len(views), 'view')} and {plural(len(functions), 'function')}"
