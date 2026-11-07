@@ -7,7 +7,7 @@ from agent_security_audit.checks import load_all
 
 # Over plain HTTP on a local host these have nothing to test. The lab ships no Supabase project URL, so ACCESS-01
 # never leads a practice scan off the machine.
-SKIP_LOCAL = {"INFRA-01", "INFRA-02", "INFRA-03", "INFRA-06", "INFRA-07", "BROWSER-01", "ACCESS-01"}
+SKIP_LOCAL = {"INFRA-01", "INFRA-02", "INFRA-03", "INFRA-06", "INFRA-07", "BROWSER-01", "BROWSER-20", "ACCESS-01"}
 MANUAL = set()
 
 

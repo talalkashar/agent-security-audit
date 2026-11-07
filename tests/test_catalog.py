@@ -16,7 +16,7 @@ class CatalogTest(unittest.TestCase):
         cls.checks = catalog.load()
 
     def test_loads_all_areas(self):
-        self.assertEqual(len(self.checks), 102)
+        self.assertEqual(len(self.checks), 112)
         self.assertEqual({c.area for c in self.checks}, set(PREFIX))
 
     def test_ids_unique(self):
@@ -54,7 +54,7 @@ class CatalogTest(unittest.TestCase):
         registry = load_all()
         auto_ids = {c.id for c in self.checks if c.mode == "auto"}
         self.assertEqual(set(registry), auto_ids)
-        self.assertEqual(len(auto_ids), 21)
+        self.assertEqual(len(auto_ids), 31)
         for cid, fn in registry.items():
             self.assertEqual(fn.check_id, cid)
 

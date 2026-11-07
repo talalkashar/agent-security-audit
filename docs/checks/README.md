@@ -2,7 +2,7 @@
 
 # Check catalog
 
-102 checks in 6 areas. Each check has a risk, a build rule the agent follows while writing code, a proof test that shows the defense working on the running site, and sources.
+112 checks in 6 areas. Each check has a risk, a build rule the agent follows while writing code, a proof test that shows the defense working on the running site, and sources.
 
 - **auto**: `asa scan` runs the proof test and reports pass or fail with evidence.
 - **assisted**: the agent checks the code first, then runs a logged-in test itself if the code does not settle it.
@@ -13,12 +13,12 @@
 | Area | What it covers | Checks | Auto | Assisted | Review | Critical | High | Medium | Low |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | [access](access.md) | Access control and Supabase row-level security | 15 | 1 | 10 | 4 | 5 | 9 | 1 | 0 |
-| [api](api.md) | API abuse, input handling and rate limits | 18 | 2 | 12 | 4 | 1 | 11 | 6 | 0 |
+| [api](api.md) | API abuse, input handling and rate limits | 24 | 8 | 12 | 4 | 1 | 12 | 9 | 2 |
 | [auth](auth.md) | Authentication and sessions | 11 | 0 | 10 | 1 | 1 | 6 | 4 | 0 |
-| [browser](browser.md) | Browser security headers, cookies and client code | 19 | 8 | 7 | 4 | 0 | 7 | 11 | 1 |
+| [browser](browser.md) | Browser security headers, cookies and client code | 23 | 12 | 7 | 4 | 0 | 8 | 13 | 2 |
 | [infra](infra.md) | Transport, DNS, email and hosting | 23 | 7 | 2 | 14 | 5 | 11 | 3 | 4 |
 | [nextjs](nextjs.md) | Next.js and Vercel | 16 | 3 | 10 | 3 | 3 | 5 | 7 | 1 |
-| **Total** | | **102** | **21** | **51** | **30** | **15** | **49** | **32** | **6** |
+| **Total** | | **112** | **31** | **51** | **30** | **15** | **51** | **37** | **9** |
 
 ## By OSI layer
 
@@ -30,7 +30,7 @@
 | 4 Transport | 1 | 0 | 0 | 1 |
 | 5 Session | 2 | 0 | 2 | 0 |
 | 6 Presentation | 4 | 3 | 0 | 1 |
-| 7 Application | 91 | 18 | 49 | 24 |
+| 7 Application | 101 | 28 | 49 | 24 |
 
 ## All checks
 
@@ -69,6 +69,12 @@
 | [API-16](api.md#api-16-authorization-code-fails-closed-on-errors-and-missing-config) | high | L7 | review | Authorization code fails closed on errors and missing config |
 | [API-17](api.md#api-17-every-live-api-route-is-known-documented-and-still-needed) | medium | L7 | review | Every live API route is known, documented and still needed |
 | [API-18](api.md#api-18-responses-from-third-party-apis-are-validated-before-use) | medium | L7 | review | Responses from third-party APIs are validated before use |
+| [API-19](api.md#api-19-no-open-redirects-in-redirect-parameters) | medium | L7 | auto | No open redirects in redirect parameters |
+| [API-20](api.md#api-20-no-directory-listings) | medium | L7 | auto | No directory listings |
+| [API-21](api.md#api-21-no-public-debug-or-status-endpoints) | high | L7 | auto | No public debug or status endpoints |
+| [API-22](api.md#api-22-api-description-not-public-unless-intended) | low | L7 | auto | API description not public unless intended |
+| [API-23](api.md#api-23-graphql-introspection-off-in-production) | medium | L7 | auto | GraphQL introspection off in production |
+| [API-24](api.md#api-24-trace-method-disabled) | low | L7 | auto | TRACE method disabled |
 | [AUTH-01](auth.md#auth-01-server-authorization-uses-a-verified-identity-not-getsession) | critical | L7 | assisted | Server authorization uses a verified identity, not getSession() |
 | [AUTH-02](auth.md#auth-02-password-policy-enforces-length-and-rejects-breached-passwords) | medium | L7 | assisted | Password policy enforces length and rejects breached passwords |
 | [AUTH-03](auth.md#auth-03-self-managed-password-hashes-use-argon2id-or-bcrypt-within-72-bytes) | high | L7 | review | Self-managed password hashes use Argon2id or bcrypt within 72 bytes |
@@ -99,6 +105,10 @@
 | [BROWSER-17](browser.md#browser-17-auth-cookies-after-login-are-scoped-to-the-host-not-the-parent-domain) | medium | L7 | assisted | Auth cookies after login are scoped to the host, not the parent domain |
 | [BROWSER-18](browser.md#browser-18-third-party-scripts-are-pinned-with-sri-or-inventoried) | high | L7 | review | Third-party scripts are pinned with SRI or inventoried |
 | [BROWSER-19](browser.md#browser-19-postmessage-listeners-check-the-senders-origin) | medium | L7 | review | postMessage listeners check the sender's origin |
+| [BROWSER-20](browser.md#browser-20-no-mixed-content-on-https-pages) | medium | L7 | auto | No mixed content on HTTPS pages |
+| [BROWSER-21](browser.md#browser-21-third-party-scripts-and-styles-pinned-with-subresource-integrity) | low | L7 | auto | Third-party scripts and styles pinned with Subresource Integrity |
+| [BROWSER-22](browser.md#browser-22-password-forms-served-and-submitted-over-https-with-post) | high | L7 | auto | Password forms served and submitted over HTTPS with POST |
+| [BROWSER-23](browser.md#browser-23-no-known-vulnerable-client-javascript-libraries) | medium | L7 | auto | No known-vulnerable client JavaScript libraries |
 | [INFRA-01](infra.md#infra-01-http-redirects-to-https) | high | L6 | auto | HTTP redirects to HTTPS |
 | [INFRA-02](infra.md#infra-02-tls-certificate-valid-and-not-near-expiry) | high | L6 | auto | TLS certificate valid and not near expiry |
 | [INFRA-03](infra.md#infra-03-legacy-tls-10-and-11-refused) | medium | L6 | auto | Legacy TLS 1.0 and 1.1 refused |
@@ -139,4 +149,4 @@
 | [NEXT-15](nextjs.md#next-15-vercel-cron-endpoints-require-cron_secret) | medium | L7 | assisted | Vercel cron endpoints require CRON_SECRET |
 | [NEXT-16](nextjs.md#next-16-no-internal-x-middleware-headers-in-responses) | medium | L7 | assisted | No internal x-middleware headers in responses |
 
-Automated proof tests built in: 21 (ACCESS-01, API-01, API-02, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06, BROWSER-07, BROWSER-08, INFRA-01, INFRA-02, INFRA-03, INFRA-04, INFRA-05, INFRA-06, INFRA-07, NEXT-01, NEXT-02, NEXT-03).
+Automated proof tests built in: 31 (ACCESS-01, API-01, API-02, API-19, API-20, API-21, API-22, API-23, API-24, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06, BROWSER-07, BROWSER-08, BROWSER-20, BROWSER-21, BROWSER-22, BROWSER-23, INFRA-01, INFRA-02, INFRA-03, INFRA-04, INFRA-05, INFRA-06, INFRA-07, NEXT-01, NEXT-02, NEXT-03).

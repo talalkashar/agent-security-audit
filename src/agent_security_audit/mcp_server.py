@@ -109,6 +109,8 @@ TOOLS = [
                                                          "in the site's JavaScript)"},
                 "no_dns": {"type": "boolean", "default": False,
                            "description": "skip DNS and email checks (they query a public resolver)"},
+                "max_pages": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25,
+                              "description": "most same-origin pages the crawl visits"},
                 "format": {"type": "string", "enum": ["json", "md"], "default": "json"},
             },
             "required": ["target"],
@@ -182,13 +184,13 @@ def tool_build_rules(stack=None, area=None):
 
 def tool_run_scan(target, authorized=False, checks=None, areas=None, stacks=None, auto_only=True,
                   rate_limit_path=None, rate_limit_method=None, rate_limit_body=None, rate_limit_attempts=None,
-                  allow_supabase=False, supabase_tables=None, no_dns=False, format="json"):
+                  allow_supabase=False, supabase_tables=None, no_dns=False, max_pages=None, format="json"):
     options = {
         "rate_limit_path": rate_limit_path, "rate_limit_method": rate_limit_method or "POST",
         "rate_limit_body": rate_limit_body, "rate_limit_content_type": "application/json",
         "rate_limit_attempts": 30 if rate_limit_attempts is None else rate_limit_attempts,
         "allow_supabase": bool(allow_supabase), "no_dns": bool(no_dns), "supabase_tables": supabase_tables or None,
-        "dns_resolver": None,
+        "dns_resolver": None, "max_pages": max_pages,
     }
     final, results = runner.run(target, authorized=bool(authorized), ids=checks or None, areas=areas or None,
                                 stacks=stacks or None, options=options, include_manual=not auto_only)

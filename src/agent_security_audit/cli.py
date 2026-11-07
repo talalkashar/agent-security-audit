@@ -110,6 +110,9 @@ def build_parser():
     sc.add_argument("--dns-resolver", help="DNS-over-HTTPS JSON endpoint (default https://cloudflare-dns.com/dns-query)")
     sc.add_argument("--no-dns", action="store_true", help="skip DNS and email checks (they query a public resolver)")
     sc.add_argument("--insecure", action="store_true", help="accept self-signed TLS (local hosts only)")
+    sc.add_argument("--max-pages", type=int, default=25,
+                    help="most same-origin pages the crawl visits (default 25); it never uses more than half the budget")
+    sc.add_argument("--max-depth", type=int, default=3, help="most link hops from the home page the crawl follows")
     sc.add_argument("--budget", type=int, default=300, help="maximum requests to the target")
     sc.add_argument("--timeout", type=float, default=10.0)
     return p
@@ -150,6 +153,7 @@ def _main(argv=None):
             "rate_limit_body": args.rate_limit_body, "rate_limit_content_type": args.rate_limit_content_type,
             "rate_limit_attempts": args.rate_limit_attempts, "allow_supabase": args.allow_supabase,
             "no_dns": args.no_dns, "supabase_tables": _csv(args.supabase_table), "dns_resolver": args.dns_resolver,
+            "max_pages": args.max_pages, "max_depth": args.max_depth,
         }
         target, results = runner.run(
             args.target, authorized=args.authorized, ids=_csv(args.check), areas=_csv(args.area),

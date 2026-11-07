@@ -9,7 +9,7 @@
 
 Point it at any website you own, local or live. It scans the running site, reads the code, and tells you every security flaw it finds, with the evidence and the fix. No accounts to create, no config, no setup.
 
-It works as a skill and an MCP server for Claude Code, Codex, Cursor, Gemini CLI, Windsurf and any agent that reads `AGENTS.md`, and as a plain command line tool (`asa`). 102 checks, mapped to OSI layers 1 to 7. Python, no runtime dependencies.
+It works as a skill and an MCP server for Claude Code, Codex, Cursor, Gemini CLI, Windsurf and any agent that reads `AGENTS.md`, and as a plain command line tool (`asa`). 112 checks, mapped to OSI layers 1 to 7. Python, no runtime dependencies.
 
 ```text
 $ asa scan https://your-site.com --authorized
@@ -187,6 +187,7 @@ This tool is for testing sites you own or have written permission to test. It is
 
 - **Own site or written permission.** `localhost`, loopback addresses, `*.localhost` and `*.test` are always allowed. Any other host is refused unless you pass `--authorized` (CLI) or `authorized: true` (MCP), which states that you own the site or have written permission.
 - **Request budget.** A scan sends at most 300 requests by default (`--budget`), with a short delay between them. The rate-limit probe sends at most 60 (`--rate-limit-attempts`, default 30).
+- **Whole-site crawl, bounded.** Checks read one shared crawl seeded from `/`, `robots.txt` and `sitemap.xml`: same-origin GET only, up to `--max-pages` pages (default 25) and `--max-depth` link hops (default 3), never more than half the remaining budget. Forms are recorded, never submitted, and logout or other state-changing links (sign-out, delete, unsubscribe) are never requested.
 - **Same origin.** Requests stay on the target's scheme, host and port. Redirects to other hosts are reported, not followed. The only exceptions are the www/apex twin of the same site over HTTPS, the Supabase project the site itself points to when you pass `--allow-supabase` (read-only, row counts only; on a local target it also needs `--authorized`, because that project is not local), and DNS lookups through a public resolver (turn off with `--no-dns`).
 - **Stops at a firewall challenge.** If the site's firewall answers with a bot challenge, the scan stops and says so. It does not try to get around it.
 - **Runs on your real, live site.** Scans and proof tests work against production and its real data. That is the point: find the leak before your users or an attacker do.
@@ -246,12 +247,12 @@ Checks by area:
 | Area | What it covers | Checks | Auto | Assisted | Review | Critical | High | Medium | Low |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | [access](docs/checks/access.md) | Access control and Supabase row-level security | 15 | 1 | 10 | 4 | 5 | 9 | 1 | 0 |
-| [api](docs/checks/api.md) | API abuse, input handling and rate limits | 18 | 2 | 12 | 4 | 1 | 11 | 6 | 0 |
+| [api](docs/checks/api.md) | API abuse, input handling and rate limits | 24 | 8 | 12 | 4 | 1 | 12 | 9 | 2 |
 | [auth](docs/checks/auth.md) | Authentication and sessions | 11 | 0 | 10 | 1 | 1 | 6 | 4 | 0 |
-| [browser](docs/checks/browser.md) | Browser security headers, cookies and client code | 19 | 8 | 7 | 4 | 0 | 7 | 11 | 1 |
+| [browser](docs/checks/browser.md) | Browser security headers, cookies and client code | 23 | 12 | 7 | 4 | 0 | 8 | 13 | 2 |
 | [infra](docs/checks/infra.md) | Transport, DNS, email and hosting | 23 | 7 | 2 | 14 | 5 | 11 | 3 | 4 |
 | [nextjs](docs/checks/nextjs.md) | Next.js and Vercel | 16 | 3 | 10 | 3 | 3 | 5 | 7 | 1 |
-| **Total** | | **102** | **21** | **51** | **30** | **15** | **49** | **32** | **6** |
+| **Total** | | **112** | **31** | **51** | **30** | **15** | **51** | **37** | **9** |
 
 Checks by OSI layer:
 
@@ -263,7 +264,7 @@ Checks by OSI layer:
 | 4 Transport | 1 | 0 | 0 | 1 |
 | 5 Session | 2 | 0 | 2 | 0 |
 | 6 Presentation | 4 | 3 | 0 | 1 |
-| 7 Application | 91 | 18 | 49 | 24 |
+| 7 Application | 101 | 28 | 49 | 24 |
 
 <!-- catalog:end -->
 

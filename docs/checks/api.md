@@ -2,7 +2,7 @@
 
 # api: API abuse, input handling and rate limits
 
-18 checks. Read one in the terminal with `asa show <ID>`.
+24 checks. Read one in the terminal with `asa show <ID>`.
 
 | ID | Severity | Layer | Mode | Title |
 |---|---|---|---|---|
@@ -24,6 +24,12 @@
 | [API-16](#api-16-authorization-code-fails-closed-on-errors-and-missing-config) | high | L7 | review | Authorization code fails closed on errors and missing config |
 | [API-17](#api-17-every-live-api-route-is-known-documented-and-still-needed) | medium | L7 | review | Every live API route is known, documented and still needed |
 | [API-18](#api-18-responses-from-third-party-apis-are-validated-before-use) | medium | L7 | review | Responses from third-party APIs are validated before use |
+| [API-19](#api-19-no-open-redirects-in-redirect-parameters) | medium | L7 | auto | No open redirects in redirect parameters |
+| [API-20](#api-20-no-directory-listings) | medium | L7 | auto | No directory listings |
+| [API-21](#api-21-no-public-debug-or-status-endpoints) | high | L7 | auto | No public debug or status endpoints |
+| [API-22](#api-22-api-description-not-public-unless-intended) | low | L7 | auto | API description not public unless intended |
+| [API-23](#api-23-graphql-introspection-off-in-production) | medium | L7 | auto | GraphQL introspection off in production |
+| [API-24](#api-24-trace-method-disabled) | low | L7 | auto | TRACE method disabled |
 
 ## API-01 Login endpoint is rate limited (429 + Retry-After)
 
@@ -482,3 +488,144 @@ Pass: the response goes through a schema parse, and the call has a timeout and h
 ### Sources
 
 - [OWASP API Security Top 10 2023: API10 Unsafe Consumption of APIs](https://api-security.owasp.org/editions/2023/en/0xaa-unsafe-consumption-of-apis/)
+
+## API-19 No open redirects in redirect parameters
+
+Severity: medium · OSI layer 7 (Application) · CWE-601 · Mode: auto (proof test built in) · Stacks: any, nextjs, node
+
+### Risk
+
+A route that redirects to whatever a `next`, `returnTo`, `redirect` or `url` parameter says lets anyone build a link on the real domain that lands on their own site. Phishing mails use such links because the domain looks trusted, and in OAuth and magic-link flows an open redirect can hand an access token or code to the attacker.
+
+### Build rule
+
+Only redirect to relative paths: accept a value that starts with a single `/` and not `//` or `/\`, then build the URL from your own origin. If other hosts are needed, compare the parsed host against an exact allowlist. In Next.js, validate the parameter before calling `redirect()` or `NextResponse.redirect()`; fall back to `/` when the check fails.
+
+### Proof test
+
+1. The tool crawls the site and collects query parameters on same-origin links whose names look like redirect targets (next, url, continue, goto, redirect..., return..., dest..., callback_url).
+2. For up to 8 of them it sends one GET with the value `https://asa-redirect-probe.invalid/` (a reserved name that never resolves) and does not follow the redirect.
+3. Fail: the `Location` header points to `asa-redirect-probe.invalid`. Pass: every probed parameter redirects on-site or not at all. Not applicable when no such parameter is linked; then test the login and logout redirects by hand the same way. Redirects done in JavaScript or meta refresh are not covered.
+
+### Sources
+
+- [OWASP Unvalidated Redirects and Forwards Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html)
+- [CWE-601: URL Redirection to Untrusted Site](https://cwe.mitre.org/data/definitions/601.html)
+
+## API-20 No directory listings
+
+Severity: medium · OSI layer 7 (Application) · CWE-548 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+When the web server lists the contents of a folder that has no index page, anyone can browse every file stored there, including uploads, exports and backups that were never linked.
+
+### Build rule
+
+Turn automatic indexes off: `autoindex off;` in nginx, `Options -Indexes` in Apache, no `directory` listing in static file middleware. Keep user uploads in object storage with private buckets and signed URLs rather than in a web-served folder.
+
+### Proof test
+
+1. The tool requests a few common folders (`/uploads/`, `/static/`, `/assets/`, `/images/`, `/files/`, `/backup/`, `/public/`) and the folders of same-origin files found by the crawl, up to 10 in total.
+2. Fail: a 200 response is a server-generated index (`Index of /...` or `Directory listing for /...`). File names are not shown in the report.
+3. Pass: none of them is a listing.
+
+### Sources
+
+- [CWE-548: Exposure of Information Through Directory Listing](https://cwe.mitre.org/data/definitions/548.html)
+- [nginx ngx_http_autoindex_module](https://nginx.org/en/docs/http/ngx_http_autoindex_module.html)
+- [Apache HTTP Server core: Options directive](https://httpd.apache.org/docs/2.4/mod/core.html)
+
+## API-21 No public debug or status endpoints
+
+Severity: high · OSI layer 7 (Application) · CWE-489, CWE-215 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+Server and framework debug pages left reachable in production publish what an attacker would otherwise have to guess: Apache `server-status` shows live request URLs and client addresses, `phpinfo()` and Spring Boot's `/actuator/env` print configuration and environment values, and profilers expose request data and internals.
+
+### Build rule
+
+Do not deploy debug tools to production. Restrict Apache `mod_status` and `mod_info` to localhost, delete `phpinfo()` files, expose only `health` from Spring Boot Actuator (`management.endpoints.web.exposure.include=health`) and put any other management endpoint on an internal port behind authentication.
+
+### Proof test
+
+1. The tool requests `/server-status`, `/server-info`, `/phpinfo.php`, `/info.php`, `/actuator/env`, `/debug/pprof/`, `/elmah.axd` and `/_profiler/` once each.
+2. Fail: a 200 response whose content matches the real page (for example the Apache status heading, a `phpinfo()` title, or actuator JSON with `propertySources`). A single-page-app fallback page does not count. Contents are never shown.
+3. Pass: none of them is served.
+
+### Sources
+
+- [Apache HTTP Server mod_status](https://httpd.apache.org/docs/2.4/mod/mod_status.html)
+- [Spring Boot reference: Actuator endpoints](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html)
+- [PHP manual: phpinfo](https://www.php.net/manual/en/function.phpinfo.php)
+- [CWE-489: Active Debug Code](https://cwe.mitre.org/data/definitions/489.html)
+
+## API-22 API description not public unless intended
+
+Severity: low · OSI layer 7 (Application) · CWE-200 · Mode: auto (proof test built in) · Stacks: any, node
+
+### Risk
+
+A public OpenAPI or Swagger document lists every endpoint, parameter and model, including internal and admin routes that nothing in the UI links to. It does not create a flaw by itself, but it removes the guesswork from finding one, and old or forgotten endpoints show up in it.
+
+### Build rule
+
+Publish the API description only for APIs that are public by design. Otherwise serve it only in development or behind authentication, and keep it in sync with the deployed routes so that retired versions are actually removed.
+
+### Proof test
+
+1. The tool requests `/openapi.json`, `/swagger.json`, `/v3/api-docs`, `/api-docs`, `/swagger/v1/swagger.json`, `/api/openapi.json` and `/swagger-ui.html` once each.
+2. Warning: a JSON document with an `openapi` or `swagger` field and a `paths` object, or a Swagger UI page, is served. Only the version and path count are reported.
+3. Pass: none of them is served. Decide whether a warning is intended; if the API is public, record that and move on.
+
+### Sources
+
+- [OWASP API Security Top 10 2023: API9 Improper Inventory Management](https://owasp.org/API-Security/editions/2023/en/0xa9-improper-inventory-management/)
+
+## API-23 GraphQL introspection off in production
+
+Severity: medium · OSI layer 7 (Application) · CWE-200 · Mode: auto (proof test built in) · Stacks: any, node
+
+### Risk
+
+With introspection on, anyone can download the whole GraphQL schema: every query, mutation, type and field, including admin and internal ones. Attackers use it to find fields that resolvers forgot to protect. It is a warning, not a flaw by itself, because some APIs are public by design.
+
+### Build rule
+
+Disable introspection in production (for example `introspection: false` in Apollo Server, or a validation rule that rejects `__schema` and `__type`), keep it on in development, and still check authorization in every resolver, because hiding the schema is not access control.
+
+### Proof test
+
+1. The tool sends one POST to `/graphql` and `/api/graphql` with the standard, read-only introspection query `{ __schema { queryType { name } mutationType { name } types { name } } }`. It runs no resolvers and changes nothing.
+2. Warning: the response contains `data.__schema`. Only the number of types and whether mutations exist are reported.
+3. Pass: a GraphQL error is returned instead. Not applicable when neither path is a GraphQL endpoint.
+
+### Sources
+
+- [OWASP GraphQL Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html)
+- [GraphQL specification: Introspection](https://spec.graphql.org/October2021/)
+
+## API-24 TRACE method disabled
+
+Severity: low · OSI layer 7 (Application) · CWE-200 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+A server that answers TRACE echoes the whole request back, headers included. Combined with another bug it can reveal cookies or authorization headers that a proxy adds (cross-site tracing), and it shows the server has not been hardened. Browsers no longer let pages send TRACE, so the risk is low.
+
+### Build rule
+
+Turn TRACE off: `TraceEnable off` in Apache, and in other servers and proxies allow only the methods the app uses (GET, HEAD, POST and the ones your API needs).
+
+### Proof test
+
+1. The tool sends one `TRACE /` request with a random `X-Asa-Trace-Probe` header.
+2. Fail: the response is 200 and its body echoes the request line and the probe header.
+3. Pass: any other answer (405, 501, or a normal page without the echo).
+
+### Sources
+
+- [OWASP WSTG: Test HTTP Methods](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/06-Test_HTTP_Methods)
+- [RFC 9110 HTTP Semantics (TRACE)](https://www.rfc-editor.org/rfc/rfc9110)
+- [Apache HTTP Server core: TraceEnable](https://httpd.apache.org/docs/2.4/mod/core.html)
