@@ -256,6 +256,9 @@ def find_leaks(text):
     return [name for name, pattern in LEAK_MARKERS if pattern.search(text)]
 
 
+NOT_A_HANDLER = (401, 403, 404, 405, 407, 429)
+
+
 @auto("API-02")
 def error_leaks(ctx):
     token = secrets.token_hex(6)
@@ -272,15 +275,16 @@ def error_leaks(ctx):
         hit = find_leaks(resp.text)
         ev.append(f"{method} {path} -> {resp.status}" + (f": shows {', '.join(hit)}" if hit else ""))
         leaks += hit
-        # A not-found or wrong-method answer comes from the router; it never reaches code that can throw.
-        if resp.status >= 400 and resp.status not in (404, 405):
+        # Not-found and wrong-method answers come from the router; auth, proxy-auth and throttle answers often come
+        # from middleware, a CDN or a WAF before any route handler runs. None of them proves a handler's error path ran.
+        if resp.status >= 400 and resp.status not in NOT_A_HANDLER:
             handled.append(path)
     if leaks:
         return failed("API-02", "Error responses reveal internals (" + ", ".join(sorted(set(leaks))) + "). "
                       "Return a generic message and log details on the server.", ev)
     if not handled:
-        return Result("API-02", "manual", "Only not-found answers came back, and they show no internals, but no "
-                      "request reached a handler's error path. Name an API route with --rate-limit-path, or check "
+        return Result("API-02", "manual", "Only not-found, auth or block answers came back, and they show no "
+                      "internals, but no request reached a handler's error path. Name an API route with --rate-limit-path, or check "
                       "the error handler in code.", ev)
     return passed("API-02", "Error responses show no stack traces, file paths or database errors, including a "
                   "handler error on " + ", ".join(dict.fromkeys(handled)) + ".", ev)

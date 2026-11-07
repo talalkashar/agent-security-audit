@@ -86,6 +86,14 @@ class GraphqlProofTest(unittest.TestCase):
     def test_generic_json_errors_elsewhere_are_manual(self):
         self.assertEqual(self.run_check(400, {"errors": [{"message": "Bad request"}]}).status, "manual")
 
+    def test_echoed_probe_is_not_a_refusal(self):
+        # A REST validator that echoes the request body back contains __schema and the probe's name, not GraphQL.
+        query = json.loads(webapp.INTROSPECTION)["query"]
+        for status in (400, 404, 422):
+            with self.subTest(status=status):
+                body = {"errors": [{"message": f"invalid body: {query}", "value": query}]}
+                self.assertNotEqual(self.run_check(status, body).status, "pass")
+
     def test_graphql_media_type_or_error_passes(self):
         self.assertEqual(self.run_check(400, {"errors": [{"message": "x"}]}, "application/graphql-response+json").status,
                          "pass")
@@ -193,6 +201,21 @@ class RateLimitVerdictTest(unittest.TestCase):
         self.assertEqual(r.status, "warn")
         self.assertIn("after 3 attempts", r.summary)
 
+    def test_single_server_error_is_not_throttling(self):
+        _, r = self.run_check(lambda i: resp(502 if i == 7 else 401, [], "x"), rate_limit_path="/api/login")
+        self.assertNotIn("Throttled", r.summary)
+        self.assertIn("No limit observed", r.summary)
+
+    def test_repeated_new_status_is_throttling_from_its_start(self):
+        _, r = self.run_check(lambda i: resp(400 if i > 8 else 401, [], "x"), rate_limit_path="/api/login")
+        self.assertEqual(r.status, "warn")
+        self.assertIn("Throttled after 8 attempts", r.summary)
+
+    def test_lockout_status_counts_at_once(self):
+        c, r = self.run_check(lambda i: resp(423 if i > 4 else 401, [], "x"), rate_limit_path="/api/login")
+        self.assertIn("Throttled after 4 attempts", r.summary)
+        self.assertEqual(len([x for x in c.client.calls if x[0] == "POST"]), 5)
+
     def test_no_change_is_a_warning_not_a_fail(self):
         _, r = self.run_check(lambda i: resp(401, [], "Wrong password"), rate_limit_path="/api/login")
         self.assertEqual(r.status, "warn")
@@ -251,6 +274,37 @@ class CookieNameTest(unittest.TestCase):
                      "refresh_token"):
             with self.subTest(name=name):
                 self.assertEqual(self.status(f"{name}=1; Secure; SameSite=Lax"), "fail")
+
+
+    def test_run_together_platform_session_names_fail(self):
+        for name in (".ASPXAUTH", "ASPSESSIONIDQQAB", "SESSa1b2c3d4", "SSESSa1b2c3d4", "MOODLESESSION", "CFTOKEN"):
+            with self.subTest(name=name):
+                self.assertEqual(self.status(f"{name}=abc; Secure; SameSite=Lax"), "fail")
+
+    def test_home_page_is_counted_once(self):
+        r = browser.cookies(ctx({"/": html("x", ("Set-Cookie", "a=1; Secure; HttpOnly; SameSite=Lax"))}))
+        self.assertEqual(r.status, "pass")
+        self.assertIn("1 crawled page", r.summary)
+
+
+class ErrorPathProofTest(unittest.TestCase):
+    """API-02 passes only when a handler's error path answered, not auth middleware, a CDN or a WAF."""
+
+    def run_check(self, status):
+        class Every(dict):
+            def get(self, key, default=None):
+                return resp(status, [("Content-Type", "text/html")], "Blocked")
+        c = ctx({})
+        c.client.routes = Every()
+        return exposure.error_leaks(c)
+
+    def test_auth_and_block_answers_are_manual(self):
+        for status in (401, 403, 407, 429):
+            with self.subTest(status=status):
+                self.assertEqual(self.run_check(status).status, "manual")
+
+    def test_handler_error_passes(self):
+        self.assertEqual(self.run_check(400).status, "pass")
 
 
 class LibraryBannerTest(unittest.TestCase):

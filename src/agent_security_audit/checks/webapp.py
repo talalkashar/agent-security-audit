@@ -437,9 +437,12 @@ INTROSPECTION = json.dumps({"query": "query AsaIntrospectionProbe { __schema { q
 
 
 # A refusal counts only when the answer is provably GraphQL: a GraphQL media type, or an error that names GraphQL
-# itself (introspection, __schema, "Cannot query field", Apollo's GRAPHQL_* codes). A generic JSON {"errors": [...]}
-# from a REST API or a 404 page proves nothing; nor does "graphql" alone, which a 404 echoing the path contains.
-GRAPHQL_ERROR = re.compile(r"(?i)introspection|__schema|__type|cannot query field|\bGRAPHQL_[A-Z_]+")
+# itself (introspection, "Cannot query field", Apollo's GRAPHQL_* codes). A generic JSON {"errors": [...]} from a REST
+# API or a 404 page proves nothing; nor does "graphql" alone, which a 404 echoing the path contains. The probe's own
+# text is removed first, so an API that echoes the request body back in a validation error does not count; __schema
+# and __type are not markers for the same reason (they are in the probe).
+GRAPHQL_ERROR = re.compile(r"(?i)introspection|cannot query field|\bGRAPHQL_[A-Z_]+")
+PROBE_ECHO = re.compile(r"(?i)AsaIntrospectionProbe")
 
 
 def _graphql_refusal(resp, data):
@@ -449,7 +452,9 @@ def _graphql_refusal(resp, data):
         return None
     if "graphql" in (resp.get("content-type") or "").lower():
         return "proven"
-    if GRAPHQL_ERROR.search(json.dumps(data["errors"])[:5000]):
+    query = json.loads(INTROSPECTION)["query"]
+    text = json.dumps(data["errors"])[:5000].replace(json.dumps(query)[1:-1], "").replace(query, "")
+    if GRAPHQL_ERROR.search(PROBE_ECHO.sub("", text)):
         return "proven"
     return None if resp.status in (404, 405) else "unclear"
 

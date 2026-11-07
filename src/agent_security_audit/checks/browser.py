@@ -20,6 +20,10 @@ PROBE_ORIGIN = "https://asa-origin-probe.invalid"
 # "author" or "consider" do not count.
 SESSION_WORDS = {"session", "sess", "sessid", "sessionid", "sid", "auth", "token", "jwt", "login", "remember",
                  "refresh", "jsessionid", "phpsessid"}
+# Run-together platform names: ASP.NET .ASPXAUTH and ASPSESSIONID<suffix>, Drupal SESS<hash> and SSESS<hash>,
+# MOODLESESSION, ColdFusion CFTOKEN. A word counts when it starts with sess or ssess, contains session, or ends with
+# auth or token; "author", "authorized" and "tokenizer" still do not.
+SESSION_RUN_ON = re.compile(r"^s?sess|session|(auth|token)$")
 # Double-submit CSRF cookies (Django csrftoken, Laravel/Angular XSRF-TOKEN, csurf _csrf) must be readable by
 # JavaScript, so a missing HttpOnly on them is by design.
 CSRF_WORDS = {"csrf", "xsrf", "csrftoken", "xsrftoken"}
@@ -289,13 +293,13 @@ def _looks_like_session(name):
     low = name.lower().removeprefix("__host-").removeprefix("__secure-")
     if is_csrf_cookie(name):
         return False
-    return low.startswith("sb-") or any(w in SESSION_WORDS for w in _words(name))
+    return low.startswith("sb-") or any(w in SESSION_WORDS or SESSION_RUN_ON.search(w) for w in _words(name))
 
 
 @auto("BROWSER-06")
 def cookies(ctx):
     home = ctx.client.home()
-    responses = [home] + [p for p in crawl(ctx).pages if p is not home]
+    responses = [home] + [p for p in crawl(ctx).pages if p is not home and p.url != home.url]
     raw, where = [], {}
     for resp in responses:
         for value in resp.get_all("set-cookie"):

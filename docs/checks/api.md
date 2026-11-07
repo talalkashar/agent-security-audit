@@ -51,7 +51,7 @@ Use Supabase Auth's built-in endpoints where possible and keep its limits on. Fo
 1. Run the CLI with --rate-limit-path set to the login endpoint of the user's own site, e.g. /api/auth/login. Without a path the CLI uses a same-origin POST login form found by the crawl (one password field; a page or action that names login, sign-in, session or auth, and never sign-up, register or reset), filling only the user and password fields with fake values. With neither the check reports manual.
 2. The CLI sends up to N requests (default 30, max 60) with fake credentials that match no real account, and stops at the first sign of throttling.
 3. Pass: a 429 with Retry-After appears within N requests; the report gives the attempt number.
-4. Warning: throttling of another kind, reported with the attempt number where it began: a 429 without Retry-After, a change to another error status (400, 403, 423, 503...), or limit words that the first answer did not have ("too many", "locked", "captcha"...). Also a warning: every answer stayed the same ("no limit observed up to N"), because many limits sit above 30 attempts. A detected form that refuses the first attempt with 400 or 403 (often a CSRF token) is reported as manual.
+4. Warning: throttling of another kind, reported with the attempt number where it began: a 429 without Retry-After, a change to 403, 423 or 503, a change to another error status that repeats on the next attempt (a single 500 or 502 is a blip, not a limit), or limit words that the first answer did not have ("too many", "locked", "captcha"...). Also a warning: every answer stayed the same ("no limit observed up to N"), because many limits sit above 30 attempts. A detected form that refuses the first attempt with 400 or 403 (often a CSRF token) is reported as manual.
 5. Manual follow-up: with an owned test account, confirm the correct password is also refused or challenged during the lockout.
 
 ### Sources
@@ -77,7 +77,7 @@ Route every route handler and Server Action through one handleError() helper: lo
 
 1. The CLI requests a random path that does not exist on the user's own site.
 2. It sends a malformed JSON body to a random path under /api/, and to the login endpoint (--rate-limit-path, or the login form found by the crawl, as in API-01).
-3. Pass: no response contains stack frames, file paths (/var/task, node_modules, C:\), SQL or PGRST text, or framework internals, and at least one answer is an error other than 404/405, so a handler's error path actually ran.
+3. Pass: no response contains stack frames, file paths (/var/task, node_modules, C:\), SQL or PGRST text, or framework internals, and at least one answer is an error other than 401, 403, 404, 405, 407 or 429, so a handler's error path actually ran (those come from the router, auth middleware, a CDN or a WAF). Otherwise the result is manual.
 4. Fail: any of those markers appears in a response body.
 5. Manual: only not-found or wrong-method answers came back. They come from the router and do not prove what a handler shows when it fails.
 6. Manual follow-up: send malformed JSON, wrong types and an invalid UUID to each real API route and check the same markers.
@@ -603,7 +603,7 @@ Disable introspection in production (for example `introspection: false` in Apoll
 
 1. The tool sends one POST to `/graphql` and `/api/graphql` with the standard, read-only introspection query `{ __schema { queryType { name } mutationType { name } types { name } } }`. It runs no resolvers and changes nothing.
 2. Warning: the response contains `data.__schema`. Only the number of types and whether mutations exist are reported.
-3. Pass: the answer is provably GraphQL and refuses: a GraphQL media type (`application/graphql-response+json`), or an error that names introspection, `__schema`, `__type`, "Cannot query field" or a `GRAPHQL_*` code. A generic JSON `{"errors": [...]}` proves nothing: it is manual when the status is not 404/405, and not applicable (no GraphQL endpoint) when it is.
+3. Pass: the answer is provably GraphQL and refuses: a GraphQL media type (`application/graphql-response+json`), or an error that names introspection, "Cannot query field" or a `GRAPHQL_*` code once the probe's own text is removed (an API that echoes the request body back proves nothing). A generic JSON `{"errors": [...]}` proves nothing: it is manual when the status is not 404/405, and not applicable (no GraphQL endpoint) when it is.
 
 ### Sources
 

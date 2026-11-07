@@ -171,7 +171,7 @@ Every cookie the app sets carries `Secure` in production and an explicit `SameSi
 
 1. The tool fetches the home page, following same-origin redirects, and every page the crawl reaches (up to `--max-pages`, default 25), and reads every `Set-Cookie`.
 2. On https, each cookie must have `Secure`.
-3. Cookies whose names look like sessions must have `HttpOnly`. A name counts when one of its words (split on punctuation and camelCase, after any `__Host-` or `__Secure-` prefix) is session, sess, sid, sessionid, auth, token, jwt, login, remember or refresh, so `author` or `consider` do not count. Double-submit CSRF cookies (`csrftoken`, `XSRF-TOKEN`, `_csrf`, `csrf_token`) are exempt: JavaScript must read them by design.
+3. Cookies whose names look like sessions must have `HttpOnly`. A name counts when one of its words (split on punctuation and camelCase, after any `__Host-` or `__Secure-` prefix) is session, sess, sid, sessionid, auth, token, jwt, login, remember or refresh, or starts with sess or ssess, contains session, or ends with auth or token (`.ASPXAUTH`, `ASPSESSIONID...`, Drupal `SESS...`, `MOODLESESSION`, `CFTOKEN`), so `author`, `authorized` or `consider` do not count. Double-submit CSRF cookies (`csrftoken`, `XSRF-TOKEN`, `_csrf`, `csrf_token`) are exempt: JavaScript must read them by design.
 4. Each cookie must have an explicit `SameSite` attribute.
 5. Pass: all rules hold. Fail: a Secure or HttpOnly rule is broken; the report names the cookie. A cookie with no `SameSite` is a warning, because browsers default it to Lax. No cookies on any crawled page is reported as not applicable; log in with a test account and repeat on the session cookie.
 
