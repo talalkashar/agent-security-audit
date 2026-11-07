@@ -109,6 +109,8 @@ TOOLS = [
                                                          "in the site's JavaScript)"},
                 "no_dns": {"type": "boolean", "default": False,
                            "description": "skip DNS and email checks (they query a public resolver)"},
+                "no_ports": {"type": "boolean", "default": False,
+                             "description": "skip the TCP connect checks on database and admin ports"},
                 "format": {"type": "string", "enum": ["json", "md", "html"], "default": "json",
                            "description": "the report format; a second text block always carries a short "
                                           "summary with the failed checks to fix first"},
@@ -184,12 +186,13 @@ def tool_build_rules(stack=None, area=None):
 
 def tool_run_scan(target, authorized=False, checks=None, areas=None, stacks=None, auto_only=True,
                   rate_limit_path=None, rate_limit_method=None, rate_limit_body=None, rate_limit_attempts=None,
-                  allow_supabase=False, supabase_tables=None, no_dns=False, format="json"):
+                  allow_supabase=False, supabase_tables=None, no_dns=False, no_ports=False, format="json"):
     options = {
         "rate_limit_path": rate_limit_path, "rate_limit_method": rate_limit_method or "POST",
         "rate_limit_body": rate_limit_body, "rate_limit_content_type": "application/json",
         "rate_limit_attempts": 30 if rate_limit_attempts is None else rate_limit_attempts,
-        "allow_supabase": bool(allow_supabase), "no_dns": bool(no_dns), "supabase_tables": supabase_tables or None,
+        "allow_supabase": bool(allow_supabase), "no_dns": bool(no_dns), "no_ports": bool(no_ports),
+        "supabase_tables": supabase_tables or None,
         "dns_resolver": None,
     }
     final, results = runner.run(target, authorized=bool(authorized), ids=checks or None, areas=areas or None,

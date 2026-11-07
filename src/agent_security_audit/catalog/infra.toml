@@ -29,8 +29,8 @@ risk = """An expired or mismatched certificate takes the site down and trains us
 build = """Keep DNS for every custom domain pointed at the host that renews its certificate. Add an external expiry monitor for every hostname that alerts at 14 days."""
 proof = """1. Open a TLS connection to <host>:443 with SNI set to <host> and verify the chain against the system trust store.
 2. Read the certificate's subjectAltName and notAfter.
-3. Pass: chain verifies, the hostname is in the SAN, and notAfter is more than 14 days away.
-4. Fail: verification error, hostname missing from the SAN, or 14 days or fewer left."""
+3. Pass: chain verifies, the hostname is in the SAN, and notAfter is 30 or more days away.
+4. Warn: fewer than 30 days left (renewal is due). Fail: verification error, hostname missing from the SAN, or 14 days or fewer left. For certificates shorter-lived than 90 days the thresholds shrink to a third and a sixth of the lifetime."""
 sources = [
   { title = "Vercel: Encryption and TLS", url = "https://vercel.com/docs/cdn-security/encryption" },
   { title = "TechCrunch: Microsoft Teams outage from expired certificate", url = "https://techcrunch.com/2020/02/03/microsoft-teams-has-been-down-this-morning/amp/" },
@@ -193,18 +193,18 @@ sources = [
 
 [[check]]
 id = "INFRA-11"
-title = "CAA records name only the CAs in use; DNSSEC considered"
+title = "CAA records name only the CAs in use"
 severity = "low"
 layer = 7
 cwe = ["CWE-295"]
-mode = "review"
+mode = "auto"
 stacks = ["any"]
-risk = """Without CAA any public CA may issue a certificate for the domain, so a mis-issuance or a takeover elsewhere yields a valid certificate. A CAA record that omits the CA the host uses (Let's Encrypt on Vercel) makes renewal fail. DNSSEC stops forged DNS answers, but a registrar mistake can take the whole domain offline."""
-build = """Publish `0 issue "letsencrypt.org"` plus any other CA actually in use, and `0 iodef "mailto:security@<domain>"`. Confirm every CA in use is listed before publishing. Enable DNSSEC only if the registrar and DNS host both support it with automatic key rollover."""
-proof = """1. Query CAA for the apex (`dig CAA <apex> +short`).
-2. Compare with the issuer of the current certificate from INFRA-02.
-3. Pass: at least one issue record, and it includes the current issuer.
-4. Fail: no CAA (low), or CAA that excludes the current issuer (high: renewal will fail). Record DNSSEC status from `dig DS <apex> +short` as information."""
+risk = """Without CAA any public CA may issue a certificate for the domain, so a mis-issuance or a takeover elsewhere yields a valid certificate. A CAA record that omits the CA the host uses (Let's Encrypt on Vercel) makes renewal fail. DNSSEC belongs to INFRA-27."""
+build = """Publish `0 issue "letsencrypt.org"` plus any other CA actually in use, and `0 iodef "mailto:security@<domain>"`. Confirm every CA in use is listed before publishing."""
+proof = """1. Query CAA for the site's hostname, climbing to the registered domain until a record set is found (RFC 8659), over DNS-over-HTTPS.
+2. Read the issuer of the current certificate (as in INFRA-02) and map it to its CAA domain (Let's Encrypt: letsencrypt.org, Google Trust Services: pki.goog, and so on). For a wildcard certificate, issuewild records apply when present.
+3. Pass: CAA records exist and allow the current issuer.
+4. Warn: no CAA records. Fail: CAA records that do not allow the current issuer, so its renewal will be refused. Manual: the issuer is not in the tool's table."""
 sources = [
   { title = "RFC 8659: DNS Certification Authority Authorization (CAA)", url = "https://www.rfc-editor.org/rfc/rfc8659" },
   { title = "Vercel: Encryption and TLS", url = "https://vercel.com/docs/cdn-security/encryption" },
@@ -216,16 +216,17 @@ title = "MTA-STS and TLS-RPT protect inbound mail"
 severity = "low"
 layer = 6
 cwe = ["CWE-319"]
-mode = "review"
+mode = "auto"
 stacks = ["any"]
 risk = """Server-to-server mail uses opportunistic STARTTLS, which an on-path attacker can downgrade to plaintext. MTA-STS tells senders to require TLS to the domain's MX hosts. Worth adding once DMARC is enforced."""
 build = """Publish `_mta-sts.<domain>` TXT (`v=STSv1; id=<n>`) and serve https://mta-sts.<domain>/.well-known/mta-sts.txt with mode: testing, then enforce, listing the real MX hosts. Add `_smtp._tls` TXT with an rua address."""
-proof = """1. Query TXT for _mta-sts.<domain> and MX for <domain>.
-2. GET the policy file over HTTPS.
-3. Pass: record present, policy served with a valid certificate, mode: enforce, and every MX host matches an mx: line.
-4. Fail: policy unreachable, mode: none, or an MX host not listed. Absent: informational."""
+proof = """1. Query MX for <domain> (the site's host without www), TXT for _mta-sts.<domain> and TXT for _smtp._tls.<domain> over DNS-over-HTTPS. No MX: skip, the domain receives no mail.
+2. When the record exists, GET https://mta-sts.<domain>/.well-known/mta-sts.txt with certificate verification and no redirects.
+3. Pass: mode: enforce, every MX host matches an mx: line, and a TLS-RPT record with rua= exists.
+4. Warn: no MTA-STS record, mode testing or none, or no TLS-RPT. Fail: policy file missing, invalid or behind a certificate that does not verify, or an MX host that no mx: line matches in enforce mode."""
 sources = [
   { title = "RFC 8461: SMTP MTA Strict Transport Security (MTA-STS)", url = "https://www.rfc-editor.org/rfc/rfc8461" },
+  { title = "RFC 8460: SMTP TLS Reporting", url = "https://www.rfc-editor.org/rfc/rfc8460" },
 ]
 
 [[check]]
@@ -442,4 +443,106 @@ sources = [
   { title = "NIST SP 800-111: Storage Encryption Technologies for End User Devices", url = "https://csrc.nist.gov/pubs/sp/800/111/final" },
   { title = "NIST SP 800-124 Rev. 2: Managing the Security of Mobile Devices", url = "https://csrc.nist.gov/pubs/sp/800/124/r2/final" },
   { title = "Apple: Protect data on your Mac with FileVault", url = "https://support.apple.com/guide/mac-help/protect-data-on-your-mac-with-filevault-mh11785/mac" },
+]
+
+[[check]]
+id = "INFRA-24"
+title = "Database, cache and container API ports closed to the internet"
+severity = "critical"
+layer = 4
+cwe = ["CWE-668", "CWE-306"]
+mode = "auto"
+probe = "active"
+stacks = ["any"]
+risk = """Redis, Memcached, Elasticsearch, MongoDB and the plain Docker API ship with no authentication or weak defaults, and Postgres, MySQL and SQL Server put only a password between the internet and the data. An open port on the site's address is found by internet-wide scanners within hours and is a common source of data dumps, ransom notes and cryptominers. An open Docker API is root on the host."""
+build = """Bind databases, caches and the Docker daemon to localhost or a private network. Put a firewall or security group in front of every server that allows only 80 and 443 from the internet, and reach the rest through a VPN, SSH tunnel or the provider's private networking. Managed databases: turn on network restrictions (INFRA-16). Never expose the Docker socket over TCP without TLS client certificates."""
+proof = """1. Resolve the site's hostname and take its first address.
+2. Open a TCP connection to 1433, 2375, 3306, 5432, 6379, 9200, 11211 and 27017 on that address, then close it at once. Nothing is sent, no banner is read, no login is tried. Each connection counts against the request budget; `--no-ports` turns the check off.
+3. If any port opens, also try port 1 (unused); if that opens too, the address accepts every port and the result is manual.
+4. Pass: none of the ports accept a connection. Fail: any of them does. Local development hosts are skipped. Behind a CDN this tests the edge, so also test the origin server's address."""
+sources = [
+  { title = "OWASP Top 10: A05 Security Misconfiguration", url = "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/" },
+  { title = "Redis: Security", url = "https://redis.io/docs/latest/operate/oss_and_stack/management/security/" },
+  { title = "MongoDB: Security Checklist", url = "https://www.mongodb.com/docs/manual/administration/security-checklist/" },
+  { title = "Docker: Protect the Docker daemon socket", url = "https://docs.docker.com/engine/security/protect-access/" },
+  { title = "NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy", url = "https://csrc.nist.gov/pubs/sp/800/41/r1/final" },
+]
+
+[[check]]
+id = "INFRA-25"
+title = "Remote administration ports closed to the internet"
+severity = "high"
+layer = 4
+cwe = ["CWE-668", "CWE-319"]
+mode = "auto"
+probe = "active"
+stacks = ["any"]
+risk = """Telnet and VNC send passwords in the clear, and an internet-facing Remote Desktop port is a leading entry point for ransomware through password guessing and unpatched flaws. SSH is safer but still draws constant password guessing; open to the whole internet it depends entirely on key-only logins and patching."""
+build = """Close Telnet, RDP and VNC to the internet; reach servers through a VPN, a bastion host or the provider's console. Limit SSH to known addresses or a VPN where possible, turn off password logins, and use keys."""
+proof = """1. Resolve the site's hostname and take its first address.
+2. Open a TCP connection to 22, 23, 3389 and 5900 on that address, then close it at once. Nothing is sent and no login is tried. Each connection counts against the request budget; `--no-ports` turns the check off.
+3. If any port opens, also try port 1 (unused); if that opens too, the address accepts every port and the result is manual.
+4. Pass: none accept a connection. Warn: only SSH (22) is open. Fail: Telnet, RDP or VNC is open. Local development hosts are skipped."""
+sources = [
+  { title = "NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy", url = "https://csrc.nist.gov/pubs/sp/800/41/r1/final" },
+  { title = "NIST IR 7966: Security of Interactive and Automated Access Management Using SSH", url = "https://csrc.nist.gov/pubs/ir/7966/final" },
+  { title = "CISA: Securing Network Infrastructure Devices", url = "https://www.cisa.gov/news-events/news/securing-network-infrastructure-devices" },
+]
+
+[[check]]
+id = "INFRA-26"
+title = "TLS 1.2 refuses broken and non-forward-secret cipher suites"
+severity = "medium"
+layer = 6
+cwe = ["CWE-327"]
+mode = "auto"
+stacks = ["any"]
+risk = """RC4, 3DES, DES, export-grade and NULL suites can be broken or carry no encryption at all. Suites with static RSA key exchange have no forward secrecy: anyone who records traffic today and obtains the private key later can decrypt all of it. Vercel and most CDNs refuse both, so a server that accepts them is usually self-managed."""
+build = """Use the Mozilla "intermediate" configuration: TLS 1.2 with ECDHE or DHE key exchange and AEAD ciphers (AES-GCM, ChaCha20-Poly1305), plus TLS 1.3. On a managed host or CDN pick its modern TLS policy."""
+proof = """1. Attempt a TLS 1.2 handshake offering only RC4, 3DES, DES, export and NULL suites.
+2. Attempt a TLS 1.2 handshake offering only static RSA key exchange suites.
+3. Pass: both handshakes fail. Warn: only static RSA is accepted. Fail: a broken suite is accepted. Skip when this machine's TLS library cannot offer the suites; plain HTTP and local hosts are skipped."""
+sources = [
+  { title = "Mozilla: Server Side TLS", url = "https://wiki.mozilla.org/Security/Server_Side_TLS" },
+  { title = "RFC 9325: Recommendations for Secure Use of TLS and DTLS", url = "https://www.rfc-editor.org/rfc/rfc9325" },
+  { title = "RFC 7465: Prohibiting RC4 Cipher Suites", url = "https://www.rfc-editor.org/rfc/rfc7465" },
+  { title = "OWASP Transport Layer Security Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/Transport_Layer_Security_Cheat_Sheet.html" },
+]
+
+[[check]]
+id = "INFRA-27"
+title = "DNSSEC signs the domain and validates"
+severity = "low"
+layer = 7
+cwe = ["CWE-345"]
+mode = "auto"
+stacks = ["any"]
+risk = """Without DNSSEC a resolver cannot tell a forged answer from a real one, so cache poisoning can send visitors and mail elsewhere. A broken DNSSEC setup is worse: validating resolvers, used by a large share of users, return SERVFAIL and the site disappears for them."""
+build = """Enable DNSSEC only when the registrar and DNS host both support it with automatic key rollover (most managed DNS providers do it in one click). When moving DNS providers, remove the DS record at the registrar first and add the new one after the move."""
+proof = """1. Query DS for the registered domain over DNS-over-HTTPS.
+2. Query A for the site's hostname through a validating resolver; on SERVFAIL, repeat with checking disabled (cd=1).
+3. Pass: a DS record exists and the answer carries the AD (validated) flag.
+4. Warn: no DS record (unsigned), or a DS record but no AD flag. Fail: SERVFAIL when validated but an answer with cd=1, which proves validation is broken. Shared platform domains (vercel.app and similar) are skipped."""
+sources = [
+  { title = "RFC 4033: DNS Security Introduction and Requirements", url = "https://www.rfc-editor.org/rfc/rfc4033" },
+  { title = "ICANN: DNSSEC - What Is It and Why Is It Important?", url = "https://www.icann.org/resources/pages/dnssec-what-is-it-why-important-2019-03-05-en" },
+]
+
+[[check]]
+id = "INFRA-28"
+title = "No dangling CNAME on the site's hostnames (subdomain takeover)"
+severity = "high"
+layer = 7
+cwe = ["CWE-672"]
+mode = "auto"
+stacks = ["any"]
+risk = """When a CNAME points at a cloud resource that was deleted (an Azure app, an Elastic Beanstalk environment, a GitHub Pages site, an S3 bucket), anyone can create a resource with that name and serve their own content, cookies and phishing pages on your domain."""
+build = """Delete the DNS record before, or together with, the cloud resource it points to. Keep an inventory of CNAMEs and review it when projects are retired. On Azure, use alias records where possible."""
+proof = """1. For the site's hostname and its www or apex twin, query A over DNS-over-HTTPS and read the CNAME chain.
+2. If the chain ends in NXDOMAIN, the record is dangling. For the site's own hostname, if the chain ends at github.io or amazonaws.com, also read the home page for the provider's unclaimed-site message.
+3. Pass: no dangling CNAME. Warn: a CNAME ends in NXDOMAIN at a provider not known to be claimable; remove it. Fail: NXDOMAIN at a provider where names can be claimed (Azure App Service, Cloud Services, Traffic Manager, Blob Storage, CDN, API Management, Front Door, Elastic Beanstalk), or the provider's unclaimed-site page."""
+sources = [
+  { title = "OWASP WSTG: Test for Subdomain Takeover", url = "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/10-Test_for_Subdomain_Takeover" },
+  { title = "Microsoft: Prevent dangling DNS entries and avoid subdomain takeover", url = "https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover" },
+  { title = "can-i-take-over-xyz", url = "https://github.com/EdOverflow/can-i-take-over-xyz" },
 ]

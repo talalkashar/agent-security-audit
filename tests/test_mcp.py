@@ -98,7 +98,7 @@ class McpServerTest(unittest.TestCase):
         scan = tools["run_scan"]["inputSchema"]
         self.assertEqual(scan["required"], ["target"])
         for key in ("authorized", "checks", "areas", "stacks", "auto_only", "rate_limit_path", "rate_limit_method",
-                    "rate_limit_body", "rate_limit_attempts", "allow_supabase", "supabase_tables", "no_dns",
+                    "rate_limit_body", "rate_limit_attempts", "allow_supabase", "supabase_tables", "no_dns", "no_ports",
                     "format"):
             self.assertIn(key, scan["properties"])
         self.assertEqual(scan["properties"]["format"]["enum"], ["json", "md", "html"])

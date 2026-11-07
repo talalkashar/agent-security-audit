@@ -127,6 +127,8 @@ def build_parser():
                     help="Supabase table to test (default: names from .from() calls in the site's JavaScript)")
     sc.add_argument("--dns-resolver", help="DNS-over-HTTPS JSON endpoint (default https://cloudflare-dns.com/dns-query)")
     sc.add_argument("--no-dns", action="store_true", help="skip DNS and email checks (they query a public resolver)")
+    sc.add_argument("--no-ports", action="store_true",
+                    help="skip the TCP connect checks on database and admin ports (INFRA-24, INFRA-25)")
     sc.add_argument("--insecure", action="store_true", help="accept self-signed TLS (local hosts only)")
     sc.add_argument("--budget", type=int, default=300, help="maximum requests to the target")
     sc.add_argument("--timeout", type=float, default=10.0)
@@ -190,7 +192,7 @@ def _main(argv=None):
             "rate_limit_path": args.rate_limit_path, "rate_limit_method": args.rate_limit_method,
             "rate_limit_body": args.rate_limit_body, "rate_limit_content_type": args.rate_limit_content_type,
             "rate_limit_attempts": args.rate_limit_attempts, "allow_supabase": args.allow_supabase,
-            "no_dns": args.no_dns, "supabase_tables": _csv(args.supabase_table), "dns_resolver": args.dns_resolver,
+            "no_dns": args.no_dns, "no_ports": args.no_ports, "supabase_tables": _csv(args.supabase_table), "dns_resolver": args.dns_resolver,
         }
         authorized = args.authorized
         show_progress = not args.quiet and _is_tty(sys.stderr)

@@ -2,7 +2,7 @@
 
 # infra: Transport, DNS, email and hosting
 
-23 checks. Read one in the terminal with `asa show <ID>`.
+28 checks. Read one in the terminal with `asa show <ID>`.
 
 | ID | Severity | Layer | Mode | Title |
 |---|---|---|---|---|
@@ -16,8 +16,8 @@
 | [INFRA-08](#infra-08-no-secrets-in-git-history-or-working-tree) | critical | L7 | review | No secrets in git history or working tree |
 | [INFRA-09](#infra-09-dkim-signing-passes-for-every-sending-service) | high | L7 | assisted | DKIM signing passes for every sending service |
 | [INFRA-10](#infra-10-no-dangling-dns-records-subdomain-takeover) | high | L7 | review | No dangling DNS records (subdomain takeover) |
-| [INFRA-11](#infra-11-caa-records-name-only-the-cas-in-use-dnssec-considered) | low | L7 | review | CAA records name only the CAs in use; DNSSEC considered |
-| [INFRA-12](#infra-12-mta-sts-and-tls-rpt-protect-inbound-mail) | low | L6 | review | MTA-STS and TLS-RPT protect inbound mail |
+| [INFRA-11](#infra-11-caa-records-name-only-the-cas-in-use) | low | L7 | auto | CAA records name only the CAs in use |
+| [INFRA-12](#infra-12-mta-sts-and-tls-rpt-protect-inbound-mail) | low | L6 | auto | MTA-STS and TLS-RPT protect inbound mail |
 | [INFRA-13](#infra-13-dependencies-locked-audited-and-install-scripts-restricted) | critical | L7 | review | Dependencies locked, audited and install scripts restricted |
 | [INFRA-14](#infra-14-new-dependencies-vetted-against-typosquats) | high | L7 | review | New dependencies vetted against typosquats |
 | [INFRA-15](#infra-15-github-actions-pinned-least-privilege-and-injection-safe) | high | L7 | review | GitHub Actions pinned, least-privilege and injection-safe |
@@ -29,6 +29,11 @@
 | [INFRA-21](#infra-21-deploys-and-dashboards-used-only-from-trusted-networks) | medium | L2 | review | Deploys and dashboards used only from trusted networks |
 | [INFRA-22](#infra-22-hosting-providers-hold-current-physical-security-attestations) | low | L1 | review | Hosting providers hold current physical-security attestations |
 | [INFRA-23](#infra-23-developer-devices-encrypted-and-locked) | high | L1 | review | Developer devices encrypted and locked |
+| [INFRA-24](#infra-24-database-cache-and-container-api-ports-closed-to-the-internet) | critical | L4 | auto | Database, cache and container API ports closed to the internet |
+| [INFRA-25](#infra-25-remote-administration-ports-closed-to-the-internet) | high | L4 | auto | Remote administration ports closed to the internet |
+| [INFRA-26](#infra-26-tls-12-refuses-broken-and-non-forward-secret-cipher-suites) | medium | L6 | auto | TLS 1.2 refuses broken and non-forward-secret cipher suites |
+| [INFRA-27](#infra-27-dnssec-signs-the-domain-and-validates) | low | L7 | auto | DNSSEC signs the domain and validates |
+| [INFRA-28](#infra-28-no-dangling-cname-on-the-sites-hostnames-subdomain-takeover) | high | L7 | auto | No dangling CNAME on the site's hostnames (subdomain takeover) |
 
 ## INFRA-01 HTTP redirects to HTTPS
 
@@ -68,8 +73,8 @@ Keep DNS for every custom domain pointed at the host that renews its certificate
 
 1. Open a TLS connection to <host>:443 with SNI set to <host> and verify the chain against the system trust store.
 2. Read the certificate's subjectAltName and notAfter.
-3. Pass: chain verifies, the hostname is in the SAN, and notAfter is more than 14 days away.
-4. Fail: verification error, hostname missing from the SAN, or 14 days or fewer left.
+3. Pass: chain verifies, the hostname is in the SAN, and notAfter is 30 or more days away.
+4. Warn: fewer than 30 days left (renewal is due). Fail: verification error, hostname missing from the SAN, or 14 days or fewer left. For certificates shorter-lived than 90 days the thresholds shrink to a third and a sixth of the lifetime.
 
 ### Sources
 
@@ -270,24 +275,24 @@ When deleting a Vercel project, Netlify site, S3 bucket or SaaS page, delete its
 - [Mozilla Bugzilla 1748078: unclaimed Vercel subdomain taken over](https://bugzilla.mozilla.org/show_bug.cgi?id=1748078)
 - [Kaspersky: SubdoMailing domain hijacking](https://www.kaspersky.com/blog/domain-hijacking-subdomailing/51097/)
 
-## INFRA-11 CAA records name only the CAs in use; DNSSEC considered
+## INFRA-11 CAA records name only the CAs in use
 
-Severity: low · OSI layer 7 (Application) · CWE-295 · Mode: review · Stacks: any
+Severity: low · OSI layer 7 (Application) · CWE-295 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
-Without CAA any public CA may issue a certificate for the domain, so a mis-issuance or a takeover elsewhere yields a valid certificate. A CAA record that omits the CA the host uses (Let's Encrypt on Vercel) makes renewal fail. DNSSEC stops forged DNS answers, but a registrar mistake can take the whole domain offline.
+Without CAA any public CA may issue a certificate for the domain, so a mis-issuance or a takeover elsewhere yields a valid certificate. A CAA record that omits the CA the host uses (Let's Encrypt on Vercel) makes renewal fail. DNSSEC belongs to INFRA-27.
 
 ### Build rule
 
-Publish `0 issue "letsencrypt.org"` plus any other CA actually in use, and `0 iodef "mailto:security@<domain>"`. Confirm every CA in use is listed before publishing. Enable DNSSEC only if the registrar and DNS host both support it with automatic key rollover.
+Publish `0 issue "letsencrypt.org"` plus any other CA actually in use, and `0 iodef "mailto:security@<domain>"`. Confirm every CA in use is listed before publishing.
 
 ### Proof test
 
-1. Query CAA for the apex (`dig CAA <apex> +short`).
-2. Compare with the issuer of the current certificate from INFRA-02.
-3. Pass: at least one issue record, and it includes the current issuer.
-4. Fail: no CAA (low), or CAA that excludes the current issuer (high: renewal will fail). Record DNSSEC status from `dig DS <apex> +short` as information.
+1. Query CAA for the site's hostname, climbing to the registered domain until a record set is found (RFC 8659), over DNS-over-HTTPS.
+2. Read the issuer of the current certificate (as in INFRA-02) and map it to its CAA domain (Let's Encrypt: letsencrypt.org, Google Trust Services: pki.goog, and so on). For a wildcard certificate, issuewild records apply when present.
+3. Pass: CAA records exist and allow the current issuer.
+4. Warn: no CAA records. Fail: CAA records that do not allow the current issuer, so its renewal will be refused. Manual: the issuer is not in the tool's table.
 
 ### Sources
 
@@ -296,7 +301,7 @@ Publish `0 issue "letsencrypt.org"` plus any other CA actually in use, and `0 io
 
 ## INFRA-12 MTA-STS and TLS-RPT protect inbound mail
 
-Severity: low · OSI layer 6 (Presentation) · CWE-319 · Mode: review · Stacks: any
+Severity: low · OSI layer 6 (Presentation) · CWE-319 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -308,14 +313,15 @@ Publish `_mta-sts.<domain>` TXT (`v=STSv1; id=<n>`) and serve https://mta-sts.<d
 
 ### Proof test
 
-1. Query TXT for _mta-sts.<domain> and MX for <domain>.
-2. GET the policy file over HTTPS.
-3. Pass: record present, policy served with a valid certificate, mode: enforce, and every MX host matches an mx: line.
-4. Fail: policy unreachable, mode: none, or an MX host not listed. Absent: informational.
+1. Query MX for <domain> (the site's host without www), TXT for _mta-sts.<domain> and TXT for _smtp._tls.<domain> over DNS-over-HTTPS. No MX: skip, the domain receives no mail.
+2. When the record exists, GET https://mta-sts.<domain>/.well-known/mta-sts.txt with certificate verification and no redirects.
+3. Pass: mode: enforce, every MX host matches an mx: line, and a TLS-RPT record with rua= exists.
+4. Warn: no MTA-STS record, mode testing or none, or no TLS-RPT. Fail: policy file missing, invalid or behind a certificate that does not verify, or an MX host that no mx: line matches in enforce mode.
 
 ### Sources
 
 - [RFC 8461: SMTP MTA Strict Transport Security (MTA-STS)](https://www.rfc-editor.org/rfc/rfc8461)
+- [RFC 8460: SMTP TLS Reporting](https://www.rfc-editor.org/rfc/rfc8460)
 
 ## INFRA-13 Dependencies locked, audited and install scripts restricted
 
@@ -587,3 +593,128 @@ Turn on full-disk encryption on every device that touches the code or dashboards
 - [NIST SP 800-111: Storage Encryption Technologies for End User Devices](https://csrc.nist.gov/pubs/sp/800/111/final)
 - [NIST SP 800-124 Rev. 2: Managing the Security of Mobile Devices](https://csrc.nist.gov/pubs/sp/800/124/r2/final)
 - [Apple: Protect data on your Mac with FileVault](https://support.apple.com/guide/mac-help/protect-data-on-your-mac-with-filevault-mh11785/mac)
+
+## INFRA-24 Database, cache and container API ports closed to the internet
+
+Severity: critical · OSI layer 4 (Transport) · CWE-668, CWE-306 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+Redis, Memcached, Elasticsearch, MongoDB and the plain Docker API ship with no authentication or weak defaults, and Postgres, MySQL and SQL Server put only a password between the internet and the data. An open port on the site's address is found by internet-wide scanners within hours and is a common source of data dumps, ransom notes and cryptominers. An open Docker API is root on the host.
+
+### Build rule
+
+Bind databases, caches and the Docker daemon to localhost or a private network. Put a firewall or security group in front of every server that allows only 80 and 443 from the internet, and reach the rest through a VPN, SSH tunnel or the provider's private networking. Managed databases: turn on network restrictions (INFRA-16). Never expose the Docker socket over TCP without TLS client certificates.
+
+### Proof test
+
+1. Resolve the site's hostname and take its first address.
+2. Open a TCP connection to 1433, 2375, 3306, 5432, 6379, 9200, 11211 and 27017 on that address, then close it at once. Nothing is sent, no banner is read, no login is tried. Each connection counts against the request budget; `--no-ports` turns the check off.
+3. If any port opens, also try port 1 (unused); if that opens too, the address accepts every port and the result is manual.
+4. Pass: none of the ports accept a connection. Fail: any of them does. Local development hosts are skipped. Behind a CDN this tests the edge, so also test the origin server's address.
+
+### Sources
+
+- [OWASP Top 10: A05 Security Misconfiguration](https://owasp.org/Top10/A05_2021-Security_Misconfiguration/)
+- [Redis: Security](https://redis.io/docs/latest/operate/oss_and_stack/management/security/)
+- [MongoDB: Security Checklist](https://www.mongodb.com/docs/manual/administration/security-checklist/)
+- [Docker: Protect the Docker daemon socket](https://docs.docker.com/engine/security/protect-access/)
+- [NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy](https://csrc.nist.gov/pubs/sp/800/41/r1/final)
+
+## INFRA-25 Remote administration ports closed to the internet
+
+Severity: high · OSI layer 4 (Transport) · CWE-668, CWE-319 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+Telnet and VNC send passwords in the clear, and an internet-facing Remote Desktop port is a leading entry point for ransomware through password guessing and unpatched flaws. SSH is safer but still draws constant password guessing; open to the whole internet it depends entirely on key-only logins and patching.
+
+### Build rule
+
+Close Telnet, RDP and VNC to the internet; reach servers through a VPN, a bastion host or the provider's console. Limit SSH to known addresses or a VPN where possible, turn off password logins, and use keys.
+
+### Proof test
+
+1. Resolve the site's hostname and take its first address.
+2. Open a TCP connection to 22, 23, 3389 and 5900 on that address, then close it at once. Nothing is sent and no login is tried. Each connection counts against the request budget; `--no-ports` turns the check off.
+3. If any port opens, also try port 1 (unused); if that opens too, the address accepts every port and the result is manual.
+4. Pass: none accept a connection. Warn: only SSH (22) is open. Fail: Telnet, RDP or VNC is open. Local development hosts are skipped.
+
+### Sources
+
+- [NIST SP 800-41 Rev. 1: Guidelines on Firewalls and Firewall Policy](https://csrc.nist.gov/pubs/sp/800/41/r1/final)
+- [NIST IR 7966: Security of Interactive and Automated Access Management Using SSH](https://csrc.nist.gov/pubs/ir/7966/final)
+- [CISA: Securing Network Infrastructure Devices](https://www.cisa.gov/news-events/news/securing-network-infrastructure-devices)
+
+## INFRA-26 TLS 1.2 refuses broken and non-forward-secret cipher suites
+
+Severity: medium · OSI layer 6 (Presentation) · CWE-327 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+RC4, 3DES, DES, export-grade and NULL suites can be broken or carry no encryption at all. Suites with static RSA key exchange have no forward secrecy: anyone who records traffic today and obtains the private key later can decrypt all of it. Vercel and most CDNs refuse both, so a server that accepts them is usually self-managed.
+
+### Build rule
+
+Use the Mozilla "intermediate" configuration: TLS 1.2 with ECDHE or DHE key exchange and AEAD ciphers (AES-GCM, ChaCha20-Poly1305), plus TLS 1.3. On a managed host or CDN pick its modern TLS policy.
+
+### Proof test
+
+1. Attempt a TLS 1.2 handshake offering only RC4, 3DES, DES, export and NULL suites.
+2. Attempt a TLS 1.2 handshake offering only static RSA key exchange suites.
+3. Pass: both handshakes fail. Warn: only static RSA is accepted. Fail: a broken suite is accepted. Skip when this machine's TLS library cannot offer the suites; plain HTTP and local hosts are skipped.
+
+### Sources
+
+- [Mozilla: Server Side TLS](https://wiki.mozilla.org/Security/Server_Side_TLS)
+- [RFC 9325: Recommendations for Secure Use of TLS and DTLS](https://www.rfc-editor.org/rfc/rfc9325)
+- [RFC 7465: Prohibiting RC4 Cipher Suites](https://www.rfc-editor.org/rfc/rfc7465)
+- [OWASP Transport Layer Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Transport_Layer_Security_Cheat_Sheet.html)
+
+## INFRA-27 DNSSEC signs the domain and validates
+
+Severity: low · OSI layer 7 (Application) · CWE-345 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+Without DNSSEC a resolver cannot tell a forged answer from a real one, so cache poisoning can send visitors and mail elsewhere. A broken DNSSEC setup is worse: validating resolvers, used by a large share of users, return SERVFAIL and the site disappears for them.
+
+### Build rule
+
+Enable DNSSEC only when the registrar and DNS host both support it with automatic key rollover (most managed DNS providers do it in one click). When moving DNS providers, remove the DS record at the registrar first and add the new one after the move.
+
+### Proof test
+
+1. Query DS for the registered domain over DNS-over-HTTPS.
+2. Query A for the site's hostname through a validating resolver; on SERVFAIL, repeat with checking disabled (cd=1).
+3. Pass: a DS record exists and the answer carries the AD (validated) flag.
+4. Warn: no DS record (unsigned), or a DS record but no AD flag. Fail: SERVFAIL when validated but an answer with cd=1, which proves validation is broken. Shared platform domains (vercel.app and similar) are skipped.
+
+### Sources
+
+- [RFC 4033: DNS Security Introduction and Requirements](https://www.rfc-editor.org/rfc/rfc4033)
+- [ICANN: DNSSEC - What Is It and Why Is It Important?](https://www.icann.org/resources/pages/dnssec-what-is-it-why-important-2019-03-05-en)
+
+## INFRA-28 No dangling CNAME on the site's hostnames (subdomain takeover)
+
+Severity: high · OSI layer 7 (Application) · CWE-672 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+When a CNAME points at a cloud resource that was deleted (an Azure app, an Elastic Beanstalk environment, a GitHub Pages site, an S3 bucket), anyone can create a resource with that name and serve their own content, cookies and phishing pages on your domain.
+
+### Build rule
+
+Delete the DNS record before, or together with, the cloud resource it points to. Keep an inventory of CNAMEs and review it when projects are retired. On Azure, use alias records where possible.
+
+### Proof test
+
+1. For the site's hostname and its www or apex twin, query A over DNS-over-HTTPS and read the CNAME chain.
+2. If the chain ends in NXDOMAIN, the record is dangling. For the site's own hostname, if the chain ends at github.io or amazonaws.com, also read the home page for the provider's unclaimed-site message.
+3. Pass: no dangling CNAME. Warn: a CNAME ends in NXDOMAIN at a provider not known to be claimable; remove it. Fail: NXDOMAIN at a provider where names can be claimed (Azure App Service, Cloud Services, Traffic Manager, Blob Storage, CDN, API Management, Front Door, Elastic Beanstalk), or the provider's unclaimed-site page.
+
+### Sources
+
+- [OWASP WSTG: Test for Subdomain Takeover](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/10-Test_for_Subdomain_Takeover)
+- [Microsoft: Prevent dangling DNS entries and avoid subdomain takeover](https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover)
+- [can-i-take-over-xyz](https://github.com/EdOverflow/can-i-take-over-xyz)
