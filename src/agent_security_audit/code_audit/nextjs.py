@@ -64,6 +64,10 @@ TEXT_HEADER = re.compile(r"""^\s*["']?(""" + "|".join(re.escape(n) for n in HEAD
 CHAIN = re.compile(r"\.(?:trim|replace|replaceAll)\((?:[^()]|\([^()]*\))*\)\s*$")
 JOINED = re.compile(r"""^\[([\s\S]*)\]\s*\.join\(\s*(['"])((?:(?!\2).)*)\2\s*\)$""")
 STRING = re.compile(r"""'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)\"""")
+# Where one route's header block starts: headers after it land on the same responses.
+ROUTE_START = {"js": re.compile(r"\bsource\s*:"), "toml": re.compile(r"^\s*\[\[headers\]\]", re.MULTILINE),
+               "_headers": re.compile(r"^(?![#\s])\S", re.MULTILINE)}
+MAX_COMBOS = 256
 
 
 def _code(project, rel):
@@ -103,9 +107,44 @@ DECL = re.compile(r"^(?:export\s+)?(?:async\s+)?(?:function\s*\*?\s*([A-Za-z_$][
                   r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=)", re.MULTILINE)
 
 
+def _depths(code):
+    """Brace depth at each offset, skipping strings and template text. An export always starts a top-level block,
+    so a miscount here cannot merge two exported handlers."""
+    out, depth, stack, i = [0] * (len(code) + 1), 0, [], 0
+    while i < len(code):
+        out[i] = depth
+        c = code[i]
+        if stack and stack[-1] in "'\"`":
+            if c == "\\":
+                out[i + 1:i + 2] = [depth] * len(out[i + 1:i + 2])
+                i += 2
+                continue
+            if c == stack[-1]:
+                stack.pop()
+            elif stack[-1] == "`" and code.startswith("${", i):
+                stack.append("{")
+                depth += 1
+                i += 1
+                out[i] = depth
+        elif c in "'\"`":
+            stack.append(c)
+        elif c == "{":
+            stack.append(c)
+            depth += 1
+        elif c == "}" and depth:
+            depth -= 1
+            if stack and stack[-1] == "{":
+                stack.pop()
+        i += 1
+    out[len(code)] = depth
+    return out
+
+
 def _blocks(code, rx):
     """[(name, start, end)] for each top-level declaration rx finds, ending where the next top-level one starts."""
-    tops = [m.start() for m in TOP_LEVEL.finditer(code)] + [len(code)]
+    depth = _depths(code)
+    tops = [m.start() for m in TOP_LEVEL.finditer(code)
+            if depth[m.start()] == 0 or code.startswith("export", m.start())] + [len(code)]
     out = []
     for m in rx.finditer(code):
         end = next(t for t in tops if t > m.start())
@@ -351,8 +390,7 @@ def next_config(project):
                         files.append(f)
                         break
         if not files:
-            out.append(make(cid, "warn", f"{label} is not set in the code or host config ({', '.join(header_files[:4])})"
-                            ". Set it there, or confirm that the host adds it.",
+            out.append(make(cid, "warn", _not_set(label, header_files),
                             [Finding(header_files[0], 1, f"no {label} header configured")]))
             continue
         out.append(_header_result(project, cid, label, names, check, files, texts, found))
@@ -425,33 +463,38 @@ def _importer(project, rel):
 
 
 def _headers_in(rel, text, project=None, loose=True):
-    """[(name, value or None, offset)] for the security headers a file sets. None means the value is built at
-    run time (or written in a way this reader does not follow)."""
+    """[(name, value or None, offset, route)] for the security headers a file sets. None means the value is built
+    at run time (or written in a way this reader does not follow). Headers with the same route come from one route
+    block (one source pattern), so they land on the same responses; other routes may not overlap."""
     out = []
     if rel.endswith(".json"):
         try:
             data = json.loads(text)
         except ValueError:
             data = None
-        stack = [data]
+        stack, routes = [(data, 0)], 0
         while stack:
-            node = stack.pop()
+            node, route = stack.pop()
             if isinstance(node, list):
-                stack.extend(reversed(node))
+                stack.extend((n, route) for n in reversed(node))
             elif isinstance(node, dict):
                 key, value = node.get("key"), node.get("value")
                 if isinstance(key, str) and key.lower() in HEADER_NAMES:
                     pos = text.find(key)
-                    out.append((key.lower(), value if isinstance(value, str) else None, max(pos, 0)))
-                stack.extend(node.values())
+                    out.append((key.lower(), value if isinstance(value, str) else None, max(pos, 0), route))
+                if isinstance(node.get("headers"), list):
+                    routes += 1
+                    route = routes
+                stack.extend((n, route) for n in node.values())
         return out
     if not re.search(EXT, rel):  # netlify.toml, _headers
+        starts = ROUTE_START["toml" if rel.endswith(".toml") else "_headers"]
         for m in TEXT_HEADER.finditer(text):
             value = m.group(2)
             if rel.endswith(".toml"):
                 sm = STRING.fullmatch(value)
                 value = _js_string(sm.group(1) if sm.group(1) is not None else sm.group(2)) if sm else None
-            out.append((m.group(1).lower(), value, m.start(1)))
+            out.append((m.group(1).lower(), value, m.start(1), _route(starts, text, m.start(1))))
         return out
     seen = set()
     imported = project and _importer(project, rel)
@@ -459,12 +502,19 @@ def _headers_in(rel, text, project=None, loose=True):
         name = next(g for g in (m.group(2), m.group(4), m.group(6)) if g)
         for expr in _branches(_arg(text, m.end(), 4000)):  # cond ? a : b sends a or b: judge both
             value = _static(text, expr, imported=imported)
-            out.append((name.lower(), None if value is None else " ".join(value.split()), m.start()))
+            out.append((name.lower(), None if value is None else " ".join(value.split()), m.start(),
+                        _route(ROUTE_START["js"], text, m.start())))
         seen.add(m.start(next(i for i in (2, 4, 6) if m.group(i))) - 1)
     for m in ANY_NAME.finditer(text) if loose else ():
         if m.start() not in seen:  # named, but not set in a way this reader follows
-            out.append((m.group(2).lower(), None, m.start()))
+            out.append((m.group(2).lower(), None, m.start(), _route(ROUTE_START["js"], text, m.start())))
     return out
+
+
+def _route(rx, text, offset):
+    """The offset of the route block a header at offset belongs to (-1 when the file has one block)."""
+    starts = [m.start() for m in rx.finditer(text, 0, offset)]
+    return starts[-1] if starts else -1
 
 
 class _Static:
@@ -490,30 +540,60 @@ def _header_result(project, cid, label, names, check, files, texts, found):
                 continue
         findings = [_at(project, f, texts[f], off, f"{name}: " + (redact(value, 120) if value is not None else
                                                                   "value built at run time"))
-                    for name, value, off in hits]
-        if any(v is None for _, v, _ in hits):
+                    for name, value, off, _ in hits]
+        if any(v is None for _, v, _, _ in hits):
             per_file.append(("manual", (f"{f} sets {label} from a value built at run time, so the code alone does "
                              "not show what browsers get. Confirm it on the live site."), findings))
             continue
-        # One header can be set to different values in one file (branches, routes): judge every combination.
-        values = {n: list(dict.fromkeys(v for m, v, _ in found[f] if m == n)) for n in names}
-        options = [[(n, v) for v in vs] for n, vs in values.items() if vs]
+        # Judge each route block on its own: headers set on different routes may never meet on one response.
+        routes = {}
+        for name, value, _, route in hits:
+            vals = routes.setdefault(route, {}).setdefault(name, [])
+            if value not in vals:
+                vals.append(value)
+        present = {n for own in routes.values() for n in own}
         judged = []
-        for combo in list(itertools.product(*options))[:16]:
-            r = check(Context("https://code-audit.invalid/", _Static(Response("https://code-audit.invalid/", 200,
-                                                                                "OK", list(combo)))))
-            judged.append((r.status if r.status in _RANK else "manual", f"{f}: {r.summary}"))
+        for route, own in routes.items():
+            status, summary = _judge(check, own)
+            if status != "pass" and set(own) < present:
+                others = {n: [v for r, o in routes.items() if r != route for v in o.get(n, ())]
+                          for n in present - set(own)}
+                if _judge(check, {**own, **others})[0] == "pass":
+                    status, summary = "manual", (f"sets {label} on different routes, so the code does not show "
+                                                 "one response that carries them together. Confirm it on the live "
+                                                 "site.")
+            judged.append((status, f"{f}: {summary}"))
         status, summary = min(judged, key=lambda x: _RANK[x[0]])
         per_file.append((status, summary, findings))
     if not per_file:
-        return make(cid, "warn", f"{label} is not set in the code or host config ({', '.join(files[:4])}). Set it "
-                    "there, or confirm that the host adds it.", [Finding(files[0], 1, f"no {label} header configured")])
+        return make(cid, "warn", _not_set(label, files), [Finding(files[0], 1, f"no {label} header configured")])
     per_file.sort(key=lambda x: _RANK[x[0]])
     status, summary, _ = per_file[0]
     findings = [fd for _, _, fds in per_file for fd in fds]
     if status == "pass":
         summary = f"{label} in the code: " + summary.split(": ", 1)[1]
     return make(cid, status, summary, findings)
+
+
+def _not_set(label, files):
+    both = " and " in label
+    return (f"{label} {'are' if both else 'is'} not set in the code or host config ({', '.join(files[:4])}). Set "
+            f"{'them' if both else 'it'} there, or confirm that the host adds {'them' if both else 'it'}.")
+
+
+def _judge(check, values):
+    """(status, summary) for the weakest combination of the values one route sets, run through the live check.
+    Too many combinations to judge them all: never a pass."""
+    judged = []
+    for i, combo in enumerate(itertools.product(*([(n, v) for v in vs] for n, vs in values.items()))):
+        if i == MAX_COMBOS:
+            if all(s == "pass" for s, _ in judged):
+                return "manual", "sets too many value combinations to judge them all. Confirm it on the live site."
+            break
+        r = check(Context("https://code-audit.invalid/", _Static(Response("https://code-audit.invalid/", 200, "OK",
+                                                                            list(combo)))))
+        judged.append((r.status if r.status in _RANK else "manual", r.summary))
+    return min(judged, key=lambda x: _RANK[x[0]])
 
 
 ANALYZERS = (route_handlers, server_actions, session_trust, secret_client, cron_secret, next_config)

@@ -156,6 +156,10 @@ def dependencies(project, osv=True, osv_query=None, timeout=20.0):
     all_pkgs = set().union(*locks.values())
     framework = {p for p in all_pkgs if p[0] == "npm" and p[1] in FRAMEWORK}
     has_next = any(p[1] == "next" for p in framework)
+    # package.json declares next, but no lockfile that was read lists it: say the versions went unchecked.
+    next_unread = [make("NEXT-04", "manual", "The Next.js, React and sharp versions were not checked: no lockfile "
+                        "that was read lists next." + (f" {gap}" if gap else ""), unchecked + unlocked)] \
+        if declares_next and not has_next else []
     note = f"Read {plural(len(all_pkgs), 'package version')} from {', '.join(sorted(locks))}."
     if not osv:
         out = [Result("INFRA-13", "manual", "Dependency vulnerability lookup skipped (--no-osv). " + note
@@ -163,12 +167,12 @@ def dependencies(project, osv=True, osv_query=None, timeout=20.0):
         if has_next:
             out.append(Result("NEXT-04", "manual", "Vulnerability lookup skipped (--no-osv): "
                               + ", ".join(sorted(f"{n} {v}" for _, n, v in framework))))
-        return out
+        return out + next_unread
     try:
         vulns = (osv_query or query_osv)(all_pkgs, timeout=timeout)
     except OsvError as exc:
         msg = f"Could not query the OSV vulnerability database ({exc}); dependencies were not checked."
-        return [Result("INFRA-13", "error", msg)] + ([Result("NEXT-04", "error", msg)] if has_next else [])
+        return [Result("INFRA-13", "error", msg)] + ([Result("NEXT-04", "error", msg)] if has_next else next_unread)
 
     def finding(pkg, ids):
         _, name, version = pkg
@@ -201,7 +205,7 @@ def dependencies(project, osv=True, osv_query=None, timeout=20.0):
                             "Upgrade to the latest patch release.", core))
         else:
             out.append(make("NEXT-04", "pass", f"No known vulnerabilities in OSV for {versions}."))
-    return out
+    return out + next_unread
 
 
 def _under(path, folder):

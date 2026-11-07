@@ -495,6 +495,73 @@ class AccuracyTest(unittest.TestCase):
         self.assertEqual(r["API-31"].status, "fail")
         self.assertEqual({loc["path"] for loc in r["API-31"].locations}, {"lib/a.js", "lib/b.ts"})
 
+    def test_headers_on_different_routes_are_not_one_response(self):
+        def cfg(*routes):
+            return ("module.exports = { async headers() { return [" + ", ".join(
+                f'{{ source: "{src}", headers: [' + ", ".join(f'{{ key: "{k}", value: "{v}" }}' for k, v in hs) + "] }"
+                for src, hs in routes) + "]; } };\n")
+        pp, coop = ("Permissions-Policy", "camera=()"), ("Cross-Origin-Opener-Policy", "same-origin")
+        r = audit_files({"next.config.js": cfg(("/a", [pp]), ("/b", [coop]))})
+        self.assertEqual(r["BROWSER-08"].status, "manual", r["BROWSER-08"].summary)
+        self.assertIn("different routes", r["BROWSER-08"].summary)
+        r = audit_files({"next.config.js": cfg(("/(.*)", [pp, coop]))})
+        self.assertEqual(r["BROWSER-08"].status, "pass")
+        vercel = json.dumps({"headers": [{"source": "/a", "headers": [{"key": pp[0], "value": pp[1]}]},
+                                         {"source": "/b", "headers": [{"key": coop[0], "value": coop[1]}]}]})
+        self.assertEqual(audit_files({"vercel.json": vercel})["BROWSER-08"].status, "manual")
+        headers = f"/a\n  {pp[0]}: {pp[1]}\n/b\n  {coop[0]}: {coop[1]}\n"
+        self.assertEqual(audit_files({"_headers": headers})["BROWSER-08"].status, "manual")
+        # A strong X-Frame-Options on one route does not cover a frame-ancestors * on another.
+        r = audit_files({"next.config.js": cfg(("/a", [("X-Frame-Options", "DENY")]),
+                                               ("/b", [("Content-Security-Policy", "frame-ancestors *")]))})
+        self.assertEqual(r["BROWSER-04"].status, "fail")
+        r = audit_files({"next.config.js": "module.exports = {};\n"})
+        self.assertIn("Cross-Origin-Opener-Policy are not set", r["BROWSER-08"].summary)
+        self.assertIn("Set them there", r["BROWSER-08"].summary)
+
+    def test_every_route_header_value_is_judged(self):
+        hsts = [(f"/r{i}", [("Strict-Transport-Security", f"max-age={63072000 + i}; includeSubDomains")])
+                for i in range(17)] + [("/z", [("Strict-Transport-Security", "max-age=0")])]
+        code = "module.exports = { async headers() { return [" + ", ".join(
+            f'{{ source: "{s}", headers: [{{ key: "{k}", value: "{v}" }}] }}' for s, [(k, v)] in hsts) + "]; } };\n"
+        self.assertEqual(audit_files({"next.config.js": code})["BROWSER-01"].status, "fail")
+        mw = "export function middleware() {\n  res.headers.set('Strict-Transport-Security', hsts);\n}\n"
+        with mock.patch("agent_security_audit.code_audit.nextjs._branches", lambda e: [
+                f'"max-age={63072000 + i}; includeSubDomains"' for i in range(300)]):
+            r = audit_files({"middleware.ts": mw})
+        self.assertEqual(r["BROWSER-01"].status, "manual")  # too many values to judge them all is never a pass
+
+    def test_shell_alias_with_named_import_and_inline_require(self):
+        r = audit_files({"a.js": "import child, { spawn } from 'child_process';\nchild.exec(`ls ${x}`);\n"})
+        self.assertEqual(r["API-31"].status, "fail")
+        r = audit_files({"b.js": "const run = promisify(require('child_process').exec);\nrun(`ls ${x}`);\n"})
+        self.assertEqual(r["API-31"].status, "fail")
+        r = audit_files({"c.js": "require('node:child_process').execSync('ls ' + dir);\n"})
+        self.assertEqual(r["API-31"].status, "fail")
+
+    def test_sanitizer_must_wrap_the_whole_value_and_be_real(self):
+        def html(value, head=""):
+            return audit_files({"a.jsx": head + "export const A = () => "
+                                f"<div dangerouslySetInnerHTML={{{{ __html: {value} }}}} />;\n"})["BROWSER-09"].status
+        self.assertEqual(html("DOMPurify.sanitize(x) + b"), "warn")
+        self.assertEqual(html("sanitize(x)", "const sanitize = (s) => s;\n"), "warn")
+        self.assertEqual(html("renderToString(x)"), "warn")
+        self.assertEqual(html("DOMPurify.sanitize(x)"), "pass")
+        self.assertEqual(html("sanitize(x, { allowedTags: [] })", "import sanitize from 'sanitize-html';\n"), "pass")
+        self.assertEqual(html("renderToString(x)", "import { renderToString } from 'react-dom/server';\n"), "pass")
+
+    def test_next04_manual_when_next_lockfile_unread(self):
+        r = audit_files({"package.json": json.dumps({"dependencies": {"next": "15.0.0"}}), "bun.lock": "{}",
+                         "py/poetry.lock": '[[package]]\nname = "requests"\nversion = "2.31.0"\n'})
+        self.assertEqual(r["NEXT-04"].status, "manual")
+        self.assertIn("bun.lock", r["NEXT-04"].summary)
+
+    def test_column_zero_statement_stays_in_its_handler(self):
+        code = ("import { db } from '@/db';\nexport async function GET(req) {\nconst id = req.nextUrl.searchParams;\n"
+                "const rows = await db.select().from(t);\nreturn Response.json(rows);\n}\n")
+        r = audit_files({"app/api/x/route.ts": code})
+        self.assertIn(r["NEXT-05"].status, ("fail", "warn"), r["NEXT-05"].summary)
+
     def test_route_helper_auth_counts_and_all_guarded_pass(self):
         code = ("async function requireOwner() { return supabase.auth.getUser(); }\n"
                 "export async function GET() {\n  await requireOwner();\n  return supabase.from('notes').select();\n}\n"

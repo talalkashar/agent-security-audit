@@ -12,9 +12,11 @@ DSIH = re.compile(r"dangerouslySetInnerHTML\s*=\s*\{\s*\{\s*__html\s*:\s*")
 INNER = re.compile(r"\.(?:innerHTML|outerHTML)\s*\+?=(?!=)\s*|\binsertAdjacentHTML\(\s*['\"]\w+['\"]\s*,\s*|"
                    r"\bdocument\.write(?:ln)?\(\s*")
 LITERAL = re.compile(r"""^\s*(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\$]|\\.|\$(?!\{))*`)\s*$""")
-# Calls that return HTML-safe text. Matched as calls, not as any name that contains "sanitize".
-SAFE_HTML = re.compile(r"\b(?:DOMPurify|\w*[pP]urif(?:y|ier))\.sanitize\(|(?<![\w$.])(?:sanitizeHtml|sanitize|xss|"
-                       r"filterXSS|escapeHtml|escapeHTML|renderToStaticMarkup|renderToString)\(")
+# Calls that return HTML-safe text. The whole value must be one such call; a bare function name counts only when
+# it is imported from a sanitizer package, since a local helper of the same name proves nothing.
+SAFE_HTML = re.compile(r"(?:DOMPurify|\w*[pP]urif(?:y|ier))\.sanitize\(|(?<![\w$.])(sanitizeHtml|sanitize|xss|"
+                       r"filterXSS|escapeHtml|escapeHTML|escape|renderToStaticMarkup|renderToString)\(")
+SANITIZER_PKG = r"""['"](?:(?:isomorphic-)?dompurify|sanitize-html|xss|escape-html|html-escaper|he|react-dom/server(?:\.\w+)?)['"]"""
 JSON_IN_HTML = re.compile(r"\bJSON\.stringify\(")
 # JSON.stringify output is safe in HTML only when "<" is escaped (or a serializer that escapes it is used).
 JSON_ESCAPED = re.compile(r"""\.replace(?:All)?\(\s*(?:/<\/g|['"]<['"])|\\u003c|\bserialize\(|\bhtmlescape\(|"""
@@ -25,12 +27,16 @@ CHILD = re.compile(r"""['"](?:node:)?child_process['"]|\bexeca\b|\bshelljs\b""")
 CHILD_MODULE = r"""['"](?:node:)?child_process['"]"""
 SHELL_FNS = ("exec", "execSync")
 # import cp from / import * as cp from / const cp = require(...)
-CHILD_NS = re.compile(r"""\bimport\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*""" + CHILD_MODULE + r"|"
+CHILD_NS = re.compile(r"""\bimport\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s*(?:,\s*\{[^}]*\}\s*)?from\s*"""
+                      + CHILD_MODULE + r"|"
                       r"""\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*""" + CHILD_MODULE)
 # import { exec as run } from / const { exec: run } = require(...)
 CHILD_NAMED = re.compile(r"""\bimport\s*(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*""" + CHILD_MODULE + r"|"
                          r"""\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*""" + CHILD_MODULE)
-PROMISIFY = re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:util\.)?promisify\(\s*([\w$.]+)\s*\)")
+# require('child_process').exec used without a name
+CHILD_REQUIRE = r"""require\(\s*""" + CHILD_MODULE + r"""\s*\)\s*\.\s*(?:exec|execSync)"""
+PROMISIFY = re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:util\.)?promisify\(\s*([\w$.]+|"
+                       + CHILD_REQUIRE + r")\s*\)")
 SHELL_TRUE = re.compile(r"\bshell\s*:\s*true\b")
 PY_SHELL = re.compile(r"\bos\.(?:system|popen)\(\s*(?:f['\"]|['\"][^'\"\n]*['\"]\s*(?:%|\+|\.format))|"
                       r"\bsubprocess\.\w+\((?:[^()]|\([^()]*\))*shell\s*=\s*True")
@@ -117,9 +123,24 @@ def _html_risk(code, start, arg):
         in_script = SCRIPT_TAG.search(code[max(0, start - 200):start]) or "<script" in value
         return ("JSON.stringify inside a <script> does not escape </script>" if in_script
                 else "JSON.stringify output is put into HTML without escaping <")
-    if SAFE_HTML.search(value) or (JSON_IN_HTML.search(value) and JSON_ESCAPED.search(value)):
+    if _sanitized(code, value) or (JSON_IN_HTML.search(value) and JSON_ESCAPED.search(value)):
         return None
     return "gets a dynamic value that is not visibly sanitized"
+
+
+def _sanitized(code, value):
+    """True when the whole value is one sanitizer call (nothing raw added around it)."""
+    v = value.strip()
+    m = SAFE_HTML.match(v)
+    if not m:
+        return False
+    name = m.group(1)
+    if name and not re.search(r"\bimport\s[^;]*?(?<![\w$])" + re.escape(name) + r"(?![\w$])[^;]*?\bfrom\s*"
+                              + SANITIZER_PKG + r"|(?<![\w$])" + re.escape(name) + r"(?![\w$])[^;=]*=\s*require\(\s*"
+                              + SANITIZER_PKG, code):
+        return False
+    inner = _arg(v, m.end(), len(v) + 1, "")
+    return v[m.end() + len(inner):].strip() == ")"
 
 
 def raw_html(project):
@@ -177,10 +198,10 @@ def _shell_call(code):
             if named and named.group(1) in SHELL_FNS:
                 names.add(named.group(2) or named.group(1))
     for m in PROMISIFY.finditer(code):
-        if m.group(2) in names:
+        if m.group(2) in names or re.fullmatch(CHILD_REQUIRE, m.group(2)):
             names.add(m.group(1))
     alts = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
-    return re.compile(r"(?<![\w.$])(?:" + alts + r")\(\s*")
+    return re.compile(r"(?<![\w.$])(?:" + alts + "|" + CHILD_REQUIRE + r")\(\s*")
 
 
 def shell_commands(project):
