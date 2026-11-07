@@ -1,8 +1,37 @@
 # agent-security-audit
 
-Security checks a coding agent builds into a website, then proves on the running site. It gives the agent build rules to follow while it writes the code, and proof tests that show each defense working, with evidence, before launch.
+[![CI](https://github.com/talalkashar/agent-security-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/talalkashar/agent-security-audit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)
 
-It works as a command line tool (`asa`), as an agent skill (Claude Code, Codex, Cursor, Gemini CLI, Windsurf and others) and as an MCP server. It is written in Python with no runtime dependencies. The first target stack is Next.js, Supabase and Vercel; most checks apply to any web app.
+**Your coding agent builds the site. This makes it prove the site is secure before you ship.**
+
+Point it at any website you own, local or live. It scans the running site, reads the code, and tells you every security flaw it finds, with the evidence and the fix. No accounts to create, no config, no setup.
+
+It works as a skill and an MCP server for Claude Code, Codex, Cursor, Gemini CLI, Windsurf and any agent that reads `AGENTS.md`, and as a plain command line tool (`asa`). 102 checks, mapped to OSI layers 1 to 7. Python, no runtime dependencies.
+
+```text
+$ asa scan https://your-site.com --authorized
+
+| fail | critical | INFRA-04  Sensitive files not served   | Sensitive files are downloadable: /.env, /.git/HEAD
+| fail | critical | NEXT-01   No secret keys in client JS  | Secret keys are shipped to every visitor's browser. Rotate them now.
+| fail | high     | API-01    Login endpoint rate limited  | 30 login attempts from one client were all processed.
+| fail | high     | BROWSER-07 CORS reflects any origin    | The site echoes untrusted origins with credentials.
+| fail | medium   | NEXT-02   No production source maps    | 1 source map is public: anyone can read your original source.
+...
+```
+
+*Output from the built-in practice site (`asa lab`), trimmed. Every fail comes with its fix.*
+
+### Start in three steps
+
+```sh
+pipx install git+https://github.com/talalkashar/agent-security-audit   # 1. install
+```
+
+2. Add the skill to your agent ([Claude Code](#claude-code), [Codex, Cursor and others](#codex-cursor-and-other-agents-that-read-agentsmd), [MCP](#install-as-an-mcp-server)).
+3. Ask your agent: **"Run a security audit on my site."** It scans, checks the code, fixes what failed and re-scans until it passes.
 
 ## How it differs from code-only audit skills
 
