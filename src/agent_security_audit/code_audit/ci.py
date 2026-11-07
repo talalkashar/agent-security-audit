@@ -60,11 +60,13 @@ def workflows(project):
         if not re.search(r"^\s*permissions\s*:", text, re.MULTILINE):
             weak.append(Finding(rel, 1, "no permissions: block, so the token gets the repository default"))
     if bad:
-        return [make("INFRA-15", "fail", f"{plural(len(bad), 'workflow step')} let pull request or issue text run as "
+        return [make("INFRA-15", "fail", f"{plural(len(bad), 'workflow step')} "
+                     f"{'lets' if len(bad) == 1 else 'let'} pull request or issue text run as "
                      "code in CI. Pass the value through env: and quote it, and never check out PR code under "
                      "pull_request_target.", bad + weak)]
     if weak:
-        return [make("INFRA-15", "warn", f"{plural(len(weak), 'workflow setting')} weaker than least privilege: "
+        return [make("INFRA-15", "warn", f"{plural(len(weak), 'workflow setting')} "
+                     f"{'is' if len(weak) == 1 else 'are'} weaker than least privilege: "
                      "unpinned third-party actions or no permissions block.", weak)]
     return [make("INFRA-15", "pass", f"{plural(len(files), 'workflow')}: no script injection, third-party actions "
                  "pinned to SHAs, permissions set.")]

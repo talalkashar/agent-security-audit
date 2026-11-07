@@ -1,0 +1,4 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": { "": { "dependencies": { "next": "15.0.0" } } }
+}

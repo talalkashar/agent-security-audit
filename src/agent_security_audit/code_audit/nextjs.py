@@ -4,11 +4,16 @@ next.config / header settings (NEXT-02, NEXT-03, NEXT-07, NEXT-11, BROWSER-01..0
 
 from __future__ import annotations
 
+import itertools
 import json
 import posixpath
 import re
 
+from ..checks import Context
+from ..checks import browser as live
+from ..http import Response
 from .base import SUSPECTED, make, plural
+from .patterns import _arg
 from .project import Finding, line_of, line_text, redact, strip_js_comments
 
 EXT = r"\.[cm]?[jt]sx?$"
@@ -37,16 +42,28 @@ EXPORT = re.compile(r"^export\s+(?:default\s+)?(?:async\s+function\*?\s*(\w*)|fu
 NEXT_CONFIG = re.compile(r"(^|/)next\.config\.(?:[cm]?js|[cm]?ts)$")
 HEADER_FILES = re.compile(r"(^|/)(next\.config\.(?:[cm]?js|[cm]?ts)|vercel\.json|netlify\.toml|_headers|"
                           r"(src/)?(middleware|proxy)" + EXT[:-1] + r")$")
+# Each header check is settled by the live check's own logic, run on the values the code sets.
 HEADERS = [
-    ("BROWSER-01", "Strict-Transport-Security", re.compile(r"strict-transport-security", re.IGNORECASE)),
-    ("BROWSER-02", "Content-Security-Policy", re.compile(r"content-security-policy(?!-report-only)", re.IGNORECASE)),
-    ("BROWSER-03", "X-Content-Type-Options", re.compile(r"x-content-type-options", re.IGNORECASE)),
-    ("BROWSER-04", "X-Frame-Options or frame-ancestors", re.compile(r"x-frame-options|frame-ancestors", re.IGNORECASE)),
-    ("BROWSER-05", "Referrer-Policy", re.compile(r"referrer-policy", re.IGNORECASE)),
-    ("BROWSER-08", "Permissions-Policy", re.compile(r"permissions-policy", re.IGNORECASE)),
+    ("BROWSER-01", "Strict-Transport-Security", ("strict-transport-security",), live.hsts),
+    ("BROWSER-02", "Content-Security-Policy", ("content-security-policy",), live.csp),
+    ("BROWSER-03", "X-Content-Type-Options", ("x-content-type-options",), live.nosniff),
+    ("BROWSER-04", "X-Frame-Options or frame-ancestors", ("x-frame-options", "content-security-policy"),
+     live.framing),
+    ("BROWSER-05", "Referrer-Policy", ("referrer-policy",), live.referrer),
+    ("BROWSER-08", "Permissions-Policy and Cross-Origin-Opener-Policy",
+     ("permissions-policy", "cross-origin-opener-policy"), live.isolation),
 ]
-UNSAFE_INLINE = re.compile(r"(?:script-src|default-src)[^;\n]*?'unsafe-inline'", re.IGNORECASE)
-NONCE = re.compile(r"'nonce-|'strict-dynamic'|'sha(?:256|384|512)-", re.IGNORECASE)
+HEADER_NAMES = sorted({n for _, _, names, _ in HEADERS for n in names}, key=len, reverse=True)
+QUOTED_NAME = r"""(['"`])(""" + "|".join(re.escape(n) for n in HEADER_NAMES) + r")\1"
+JS_HEADER = re.compile(r"\bkey\s*:\s*" + QUOTED_NAME + r"\s*,\s*value\s*:\s*|"
+                       r"\.(?:set|append)\(\s*" + QUOTED_NAME.replace("\\1", "\\3") + r"\s*,\s*|"
+                       + QUOTED_NAME.replace("\\1", "\\5") + r"\s*:\s*", re.IGNORECASE)
+ANY_NAME = re.compile(QUOTED_NAME, re.IGNORECASE)
+TEXT_HEADER = re.compile(r"""^\s*["']?(""" + "|".join(re.escape(n) for n in HEADER_NAMES)
+                         + r""")["']?\s*[:=]\s*(.*?)\s*$""", re.IGNORECASE | re.MULTILINE)
+CHAIN = re.compile(r"\.(?:trim|replace|replaceAll)\((?:[^()]|\([^()]*\))*\)\s*$")
+JOINED = re.compile(r"""^\[([\s\S]*)\]\s*\.join\(\s*(['"])((?:(?!\2).)*)\2\s*\)$""")
+STRING = re.compile(r"""'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)\"""")
 
 
 def _code(project, rel):
@@ -79,27 +96,77 @@ def _resolve(project, rel, spec):
     return None
 
 
+METHOD = re.compile(r"^export\s+(?:async\s+)?(?:function\s*\*?\s*|(?:const|let|var)\s+)"
+                    r"(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b", re.MULTILINE)
+TOP_LEVEL = re.compile(r"^(?:export|async|function|const|let|var|class|import)\b", re.MULTILINE)
+DECL = re.compile(r"^(?:export\s+)?(?:async\s+)?(?:function\s*\*?\s*([A-Za-z_$][\w$]*)|"
+                  r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=)", re.MULTILINE)
+
+
+def _blocks(code, rx):
+    """[(name, start, end)] for each top-level declaration rx finds, ending where the next top-level one starts."""
+    tops = [m.start() for m in TOP_LEVEL.finditer(code)] + [len(code)]
+    out = []
+    for m in rx.finditer(code):
+        end = next(t for t in tops if t > m.start())
+        out.append((next(g for g in m.groups() if g), m.start(), end))
+    return out
+
+
+def _route_methods(code):
+    """Judge each exported HTTP method on its own, so an auth call in POST does not cover GET. A method touches data
+    when it, or a helper in the file it calls, reaches the database; it is guarded when it, or such a helper, calls
+    an auth check. Returns ([(offset, note)] for unguarded methods, guarded count, data-touching count)."""
+    methods = _blocks(code, METHOD)
+    if not methods:  # pages/api default handler, or methods re-exported: judge the file as one handler
+        db = DB.search(code)
+        if not db:
+            return [], 0, 0
+        if AUTH.search(code):
+            return [], 1, 1
+        return [(db.start(), "touches data with no auth or session call in the handler")], 0, 1
+    helpers = {name: code[a:b] for name, a, b in _blocks(code, DECL) if (a, b) not in {(x, y) for _, x, y in methods}}
+    open_, guarded, touching = [], 0, 0
+    for name, a, b in methods:
+        seg = code[a:b]
+        called = [h for h in helpers if re.search(r"(?<![\w$.])" + re.escape(h) + r"\s*\(", seg)]
+        db = DB.search(seg)
+        if not db and not any(DB.search(helpers[h]) for h in called):
+            continue
+        touching += 1
+        if AUTH.search(seg) or any(AUTH.search(helpers[h]) for h in called):
+            guarded += 1
+        elif AUTH.search(code):
+            open_.append((a + (db.start() if db else 0), (f"{name} touches data; the file has an auth call, but not "
+                          f"in {name} or a helper it calls")))
+        else:
+            open_.append((a + (db.start() if db else 0), f"{name} touches data with no auth or session call"))
+    return open_, guarded, touching
+
+
 def route_handlers(project):
     routes = [f for f in project.code_files() if ROUTE.search(f)]
     if not routes:
         return []
-    open_routes, guarded = [], 0
+    open_routes, guarded, touching = [], 0, 0
     for rel in routes:
         code = _code(project, rel)
-        db = DB.search(code)
-        if not db:
-            continue
-        if AUTH.search(code):
-            guarded += 1
-        else:
-            open_routes.append(_at(project, rel, code, db.start(), "touches data with no auth or session call in "
-                                   "the handler"))
+        found, ok, n = _route_methods(code)
+        guarded += ok
+        touching += n
+        open_routes += [_at(project, rel, code, off, note) for off, note in found]
     if open_routes:
-        return [make("NEXT-05", "warn", SUSPECTED + f"{plural(len(open_routes), 'route handler')} read or write data "
-                     "without any auth, session or secret check in the file. Middleware alone does not protect them.",
-                     open_routes)]
-    return [make("NEXT-05", "pass", f"Every route handler that touches data ({guarded} of {len(routes)}) calls an "
-                 "auth, session or secret check. Presence only: confirm the check gates the action.")]
+        n = len(open_routes)
+        return [make("NEXT-05", "warn", SUSPECTED + f"{plural(n, 'route handler')} "
+                     f"{'reads or writes' if n == 1 else 'read or write'} data without an auth, session or secret "
+                     "check in that handler. Middleware alone does not protect a route handler.", open_routes)]
+    if not touching:  # nothing seen is not proof: data reached through imported modules is not traced
+        return [make("NEXT-05", "manual", f"No route handler in {plural(len(routes), 'route file')} reaches data "
+                     "directly in its file. Handlers that reach data through imported modules are not traced; "
+                     "confirm each one checks the caller.")]
+    return [make("NEXT-05", "pass", f"Every route handler that touches data ({guarded} of {touching}, in "
+                 f"{plural(len(routes), 'route file')}) calls an auth, session or secret check. Presence only: "
+                 "confirm the check gates the action.")]
 
 
 def server_actions(project):
@@ -128,8 +195,8 @@ def server_actions(project):
     out = []
     for cid in ("NEXT-06", "ACCESS-11"):
         if open_actions:
-            out.append(make(cid, "warn", SUSPECTED + f"{plural(len(open_actions), 'Server Action')} change or read "
-                            "data without an auth or session call. Every action is a public POST endpoint.",
+            out.append(make(cid, "warn", SUSPECTED + f"{plural(len(open_actions), 'Server Action')} "
+                            f"{'changes or reads' if len(open_actions) == 1 else 'change or read'} data without an auth or session call. Every action is a public POST endpoint.",
                             open_actions))
         else:
             out.append(make(cid, "pass", f"{plural(actions, 'Server Action')} found; every one that touches data "
@@ -159,11 +226,13 @@ def session_trust(project):
             flagged.append(_at(project, rel, code, has_get.start(), "server code reads the user from getSession() "
                                "with no getUser() or getClaims() in the file"))
     if flagged:
-        return [make("AUTH-01", "fail", f"{plural(len(flagged), 'server file')} trust getSession(), which reads the "
+        return [make("AUTH-01", "fail", f"{plural(len(flagged), 'server file')} "
+                     f"{'trusts' if len(flagged) == 1 else 'trust'} getSession(), which reads the "
                      "cookie without verifying it. Use getClaims() or getUser() for every server-side decision.",
                      flagged)]
     if verified:
-        return [make("AUTH-01", "pass", f"{plural(verified, 'server file')} use getUser() or getClaims(); no server "
+        return [make("AUTH-01", "pass", f"{plural(verified, 'server file')} "
+                     f"{'uses' if verified == 1 else 'use'} getUser() or getClaims(); no server "
                      "file relies on getSession() alone.")]
     if uses:
         return [make("AUTH-01", "skip", "Supabase auth is only used in client code.")]
@@ -225,7 +294,8 @@ def cron_secret(project):
         else:
             bad.append(Finding(files[0], 1, f"cron route {path} never checks CRON_SECRET"))
     if bad:
-        return [make("NEXT-15", "fail", f"{plural(len(bad), 'cron route')} run for anyone who calls the URL. Compare "
+        return [make("NEXT-15", "fail", f"{plural(len(bad), 'cron route')} "
+                     f"{'runs' if len(bad) == 1 else 'run'} for anyone who calls the URL. Compare "
                      "the Authorization header with Bearer ${CRON_SECRET}.", bad)]
     return [make("NEXT-15", "pass", f"Every cron route ({len(ok)}) checks CRON_SECRET.", evidence=ok)]
 
@@ -270,29 +340,180 @@ def next_config(project):
     if not header_files:
         return out
     texts = {f: (_code(project, f) if re.search(EXT, f) else project.text(f)) for f in header_files}
-    for cid, label, rx in HEADERS:
-        hit = next(((f, m) for f, t in texts.items() if (m := rx.search(t))), None)
-        if not hit:  # headers are often kept in a helper module that next.config or the proxy imports
+    found = {f: _headers_in(f, t, project) for f, t in texts.items()}
+    for cid, label, names, check in HEADERS:
+        files = [f for f in found if any(h[0] in names for h in found[f])]
+        if not files:  # headers are often kept in a helper module that next.config or the proxy imports
             for f in project.code_files():
-                if (m := rx.search(t := _code(project, f))) and re.search(r"['\"`](?:" + rx.pattern + ")", t, re.IGNORECASE):
-                    texts[f] = t
-                    hit = (f, m)
-                    break
-        if not hit:
+                if f not in found and ANY_NAME.search(t := _code(project, f)):
+                    texts[f], found[f] = t, _headers_in(f, t, project, loose=False)
+                    if any(h[0] in names for h in found[f]):
+                        files.append(f)
+                        break
+        if not files:
             out.append(make(cid, "warn", f"{label} is not set in the code or host config ({', '.join(header_files[:4])})"
                             ". Set it there, or confirm that the host adds it.",
                             [Finding(header_files[0], 1, f"no {label} header configured")]))
             continue
-        f, m = hit
-        if cid == "BROWSER-02":
-            unsafe = UNSAFE_INLINE.search(texts[f])
-            if unsafe and not NONCE.search(unsafe.group(0)):
-                out.append(make(cid, "warn", "The CSP in the code allows 'unsafe-inline' scripts without a nonce or "
-                                "hash.", [_at(project, f, texts[f], unsafe.start(), "script-src allows unsafe-inline")]))
-                continue
-        out.append(make(cid, "pass", f"{label} is set in the code.", [_at(project, f, texts[f], m.start(),
-                                                                          f"{label} configured")]))
+        out.append(_header_result(project, cid, label, names, check, files, texts, found))
     return out
+
+
+def _js_string(body):
+    return re.sub(r"\\(.)", r"\1", body)
+
+
+def _static(code, expr, depth=0, imported=None):
+    """The text a header value expression evaluates to, or None when it is only known at run time. A plain name is
+    followed to its const in the same file, or (through imported) to an exported const in an imported module."""
+    e, prev = expr.strip(), None
+    while e != prev:  # .replace(/\s{2,}/g, " ").trim() only tidies whitespace
+        prev, e = e, CHAIN.sub("", e).strip()
+    if m := STRING.fullmatch(e):
+        return _js_string(m.group(1) if m.group(1) is not None else m.group(2))
+    if e.startswith("`") and e.endswith("`") and len(e) > 1:
+        body = re.sub(r"'nonce-\$\{[^{}]*\}'", "'nonce-generated'", e[1:-1])  # a per-request nonce is still a nonce
+        return None if "${" in body else _js_string(body)
+    if m := JOINED.fullmatch(e):
+        items = list(STRING.finditer(m.group(1)))
+        if not items or STRING.sub("", m.group(1)).replace(",", "").strip():
+            return None
+        return m.group(3).join(_js_string(i.group(1) if i.group(1) is not None else i.group(2)) for i in items)
+    if depth < 3 and re.fullmatch(r"[A-Za-z_$][\w$]*", e):
+        m = re.search(r"\b(?:const|let|var)\s+" + re.escape(e) + r"\s*(?::\s*string\s*)?=\s*", code)
+        if m:
+            return _static(code, _arg(code, m.end(), 4000, ",;"), depth + 1, imported)
+        if imported and (other := imported(code, e)):
+            return _static(other, e, depth + 1)
+    return None
+
+
+def _branches(expr):
+    """[a, b] for a top-level `cond ? a : b`, else [expr]."""
+    depth, quote, q, i = 0, None, -1, 0
+    while i < len(expr):
+        c = expr[i]
+        if quote:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in "'\"`":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif depth == 0 and c == "?" and q < 0 and expr[i + 1:i + 2] not in ("?", "."):
+            q = i
+        elif depth == 0 and c == ":" and q >= 0:
+            return [expr[q + 1:i], expr[i + 1:]]
+        i += 1
+    return [expr]
+
+
+def _importer(project, rel):
+    """A function (code, name) -> the text of the module that `import { name } from "..."` in code points to."""
+    def find(code, name):
+        m = re.search(r"\bimport\s*\{[^}]*(?<![\w$])" + re.escape(name) + r"""(?![\w$])[^}]*\}\s*from\s*['"]"""
+                      r"""((?:\.{1,2}|@|~)/[^'"]+)['"]""", code)
+        if not m or re.search(r"\bas\s+" + re.escape(name) + r"\b", m.group(0)):
+            return None
+        target = _resolve(project, rel, m.group(1))
+        return _code(project, target) if target else None
+    return find
+
+
+def _headers_in(rel, text, project=None, loose=True):
+    """[(name, value or None, offset)] for the security headers a file sets. None means the value is built at
+    run time (or written in a way this reader does not follow)."""
+    out = []
+    if rel.endswith(".json"):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        stack = [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, list):
+                stack.extend(reversed(node))
+            elif isinstance(node, dict):
+                key, value = node.get("key"), node.get("value")
+                if isinstance(key, str) and key.lower() in HEADER_NAMES:
+                    pos = text.find(key)
+                    out.append((key.lower(), value if isinstance(value, str) else None, max(pos, 0)))
+                stack.extend(node.values())
+        return out
+    if not re.search(EXT, rel):  # netlify.toml, _headers
+        for m in TEXT_HEADER.finditer(text):
+            value = m.group(2)
+            if rel.endswith(".toml"):
+                sm = STRING.fullmatch(value)
+                value = _js_string(sm.group(1) if sm.group(1) is not None else sm.group(2)) if sm else None
+            out.append((m.group(1).lower(), value, m.start(1)))
+        return out
+    seen = set()
+    imported = project and _importer(project, rel)
+    for m in JS_HEADER.finditer(text):
+        name = next(g for g in (m.group(2), m.group(4), m.group(6)) if g)
+        for expr in _branches(_arg(text, m.end(), 4000)):  # cond ? a : b sends a or b: judge both
+            value = _static(text, expr, imported=imported)
+            out.append((name.lower(), None if value is None else " ".join(value.split()), m.start()))
+        seen.add(m.start(next(i for i in (2, 4, 6) if m.group(i))) - 1)
+    for m in ANY_NAME.finditer(text) if loose else ():
+        if m.start() not in seen:  # named, but not set in a way this reader follows
+            out.append((m.group(2).lower(), None, m.start()))
+    return out
+
+
+class _Static:
+    def __init__(self, resp):
+        self.resp = resp
+
+    def home(self):
+        return self.resp
+
+
+_RANK = {"fail": 0, "warn": 1, "manual": 2, "pass": 3}
+
+
+def _header_result(project, cid, label, names, check, files, texts, found):
+    """Judge each file's header values with the live check; the weakest file decides."""
+    per_file = []
+    for f in files:
+        hits = [h for h in found[f] if h[0] in names]
+        if cid == "BROWSER-04":  # a CSP only matters here when it may hold frame-ancestors
+            hits = [h for h in hits if h[0] != "content-security-policy" or h[1] is None
+                    or "frame-ancestors" in h[1].lower()]
+            if not hits:
+                continue
+        findings = [_at(project, f, texts[f], off, f"{name}: " + (redact(value, 120) if value is not None else
+                                                                  "value built at run time"))
+                    for name, value, off in hits]
+        if any(v is None for _, v, _ in hits):
+            per_file.append(("manual", (f"{f} sets {label} from a value built at run time, so the code alone does "
+                             "not show what browsers get. Confirm it on the live site."), findings))
+            continue
+        # One header can be set to different values in one file (branches, routes): judge every combination.
+        values = {n: list(dict.fromkeys(v for m, v, _ in found[f] if m == n)) for n in names}
+        options = [[(n, v) for v in vs] for n, vs in values.items() if vs]
+        judged = []
+        for combo in list(itertools.product(*options))[:16]:
+            r = check(Context("https://code-audit.invalid/", _Static(Response("https://code-audit.invalid/", 200,
+                                                                                "OK", list(combo)))))
+            judged.append((r.status if r.status in _RANK else "manual", f"{f}: {r.summary}"))
+        status, summary = min(judged, key=lambda x: _RANK[x[0]])
+        per_file.append((status, summary, findings))
+    if not per_file:
+        return make(cid, "warn", f"{label} is not set in the code or host config ({', '.join(files[:4])}). Set it "
+                    "there, or confirm that the host adds it.", [Finding(files[0], 1, f"no {label} header configured")])
+    per_file.sort(key=lambda x: _RANK[x[0]])
+    status, summary, _ = per_file[0]
+    findings = [fd for _, _, fds in per_file for fd in fds]
+    if status == "pass":
+        summary = f"{label} in the code: " + summary.split(": ", 1)[1]
+    return make(cid, status, summary, findings)
 
 
 ANALYZERS = (route_handlers, server_actions, session_trust, secret_client, cron_secret, next_config)

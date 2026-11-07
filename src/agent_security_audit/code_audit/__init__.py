@@ -25,15 +25,19 @@ def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=Non
     results = []
     for mod in MODULES:
         for fn in mod.ANALYZERS:
+            project.unread = []
             try:
-                results += fn(project)
+                results += _unread(fn(project), project)
             except Exception as exc:  # noqa: BLE001 - one broken analyzer must not stop the audit
                 cid = mod.CHECKS[0]
                 results.append(errored(cid, f"code analyzer {fn.__name__} failed: {type(exc).__name__}: {exc}"))
+    project.unread = []
     try:
-        results += deps.dependencies(project, osv=osv, osv_query=osv_query, timeout=timeout)
+        results += _unread(deps.dependencies(project, osv=osv, osv_query=osv_query, timeout=timeout), project)
     except Exception as exc:  # noqa: BLE001
         results.append(errored("INFRA-13", f"dependency analyzer failed: {type(exc).__name__}: {exc}"))
+    if gap := project.coverage_gap():
+        results = _not_proven(results, f"The audit did not cover the whole project: {gap}.")
     known = catalog.by_id()
     wanted = {i.upper() for i in ids} if ids else None
     out = [r for r in results if r.check_id in known and (wanted is None or r.check_id in wanted)
@@ -42,6 +46,26 @@ def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=Non
         if r.status in ("fail", "warn") and not r.fix:
             r.fix = known[r.check_id].build
     return str(project.root), out
+
+
+def _not_proven(results, note):
+    """A pass that needed every file is not proven when some were not read: it becomes manual, with the reason."""
+    out = []
+    for r in results:
+        if r.status == "pass":
+            r = Result(r.check_id, "manual", f"Not proven: {note} {r.summary}", r.evidence + [note], r.fix,
+                       r.locations)
+        out.append(r)
+    return out
+
+
+def _unread(results, project):
+    files = sorted(set(project.unread))
+    if not files:
+        return results
+    shown = ", ".join(files[:5]) + (f" and {len(files) - 5} more" if len(files) > 5 else "")
+    return _not_proven(results, f"{len(files)} file{'' if len(files) == 1 else 's'} over the size cap "
+                                f"{'was' if len(files) == 1 else 'were'} not read ({shown}).")
 
 
 # Lower is stronger evidence of a flaw when merging a code result with a live one.

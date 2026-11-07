@@ -1,12 +1,15 @@
 """The files of one project: which ones to read, how to read them, and how to quote them safely.
 
-Nothing here runs project code or git. Tracked files come from parsing `.git/index` directly; without a git
-index, the tree is walked and `.gitignore` files are honoured. Only files under the project root are read.
+Nothing here runs project code or git. Tracked files come from parsing `.git/index` directly, and untracked files
+that `.gitignore` does not exclude are added from a walk of the tree; without a git index, only the walk is used.
+Only files under the project root are read. When a cap stops the read (file count or file size), the project
+records it so results that need full coverage can say so instead of passing.
 """
 
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import struct
 from dataclasses import dataclass
@@ -21,7 +24,9 @@ SKIP_DIRS = {"node_modules", ".next", ".git", "dist", "build", "out", ".vercel",
 LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock",
              "poetry.lock", "Pipfile.lock", "Cargo.lock", "composer.lock", "go.sum", "Gemfile.lock", "uv.lock"}
 MAX_BYTES = 2_000_000
+MAX_LOCK_BYTES = 30_000_000  # lockfiles of large projects pass 2 MB; they are parsed, not quoted
 MAX_FILES = 20_000
+WALK_LIMIT = 100_000  # the tree walk stops here, so pointing the audit at a home folder still ends
 JS_EXT = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".svelte", ".vue", ".astro")
 
 
@@ -169,6 +174,11 @@ class Project:
             raise ValueError(f"{root} is not a directory")
         self._text = {}
         self.source = ""
+        self.tracked = set()
+        self.omitted = 0  # files left out because MAX_FILES was reached
+        self.walk_stopped = False  # the walk hit WALK_LIMIT, so omitted is a lower bound
+        self.oversized = set()  # text files over the size cap, so never read
+        self.unread = []  # oversized files asked for since the last reset (run() attributes them to an analyzer)
         self.files = self._list_files()
 
     def _inside(self, path):
@@ -183,12 +193,29 @@ class Project:
         if index.is_file():
             try:
                 paths = read_git_index(index.read_bytes())
-                self.source = "git index (tracked files)"
-                return sorted(p for p in paths if self._keep(p))[:MAX_FILES]
             except (ValueError, IndexError, struct.error, OSError):
-                pass
+                paths = None
+            if paths is not None:
+                self.tracked = {p for p in paths if self._keep(p)}
+                exclude = self.root / ".git" / "info" / "exclude"
+                untracked = [p for p in self._walk(exclude) if p not in self.tracked]
+                self.source = (f"git index (tracked files) plus {len(untracked)} untracked file"
+                               f"{'' if len(untracked) == 1 else 's'} not ignored")
+                return self._cap(sorted(self.tracked | set(untracked)))
         self.source = "file walk (.gitignore respected)"
+        return self._cap(self._walk(None))
+
+    def _cap(self, files):
+        self.omitted = max(0, len(files) - MAX_FILES)
+        return files[:MAX_FILES]
+
+    def _walk(self, exclude):
         ignore, out = GitIgnore(), []
+        if exclude is not None and exclude.is_file():
+            try:
+                ignore.add("", exclude.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                pass
         for dirpath, dirnames, filenames in os.walk(self.root):
             rel_dir = os.path.relpath(dirpath, self.root).replace(os.sep, "/")
             rel_dir = "" if rel_dir == "." else rel_dir
@@ -208,7 +235,8 @@ class Project:
                 rel = f"{rel_dir}/{f}" if rel_dir else f
                 if not ignore.ignored(rel, False) and self._keep(rel):
                     out.append(rel)
-                    if len(out) >= MAX_FILES:
+                    if len(out) >= WALK_LIMIT:
+                        self.walk_stopped = True
                         return out
         return out
 
@@ -220,17 +248,34 @@ class Project:
         return full.is_file() and not full.is_symlink() and self._inside(full)
 
     def text(self, rel):
-        """File text, or "" for binary, oversized or unreadable files."""
+        """File text, or "" for binary, oversized or unreadable files. Oversized text files are recorded."""
         if rel not in self._text:
             full = self.root / rel
+            limit = MAX_LOCK_BYTES if posixpath.basename(rel) in LOCKFILES else MAX_BYTES
             try:
-                if not self._inside(full) or full.stat().st_size > MAX_BYTES:
+                if not self._inside(full):
+                    raise OSError
+                if full.stat().st_size > limit:
+                    with open(full, "rb") as fh:
+                        if b"\0" not in fh.read(8192):
+                            self.oversized.add(rel)
                     raise OSError
                 data = full.read_bytes()
                 self._text[rel] = "" if b"\0" in data[:8192] else data.decode("utf-8", "replace")
             except OSError:
                 self._text[rel] = ""
+        if rel in self.oversized:
+            self.unread.append(rel)
         return self._text[rel]
+
+    def coverage_gap(self):
+        """A sentence saying which files a cap left out, or "" when every listed file was read in full."""
+        parts = []
+        if self.omitted or self.walk_stopped:
+            more = "more than " if self.walk_stopped else ""
+            parts.append(f"only the first {len(self.files)} of {more}{len(self.files) + self.omitted} files were "
+                         f"read (cap {MAX_FILES})")
+        return "; ".join(parts)
 
     def extra_text(self, rel):
         """Read a file under the root that is not in the file list (for example a gitignored .env.local)."""

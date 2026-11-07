@@ -13,7 +13,7 @@ ENV_FILE = re.compile(r"^\.env(\.[\w.-]+)?$")
 ENV_TEMPLATE = re.compile(r"(example|sample|template|dist|defaults?|schema)$", re.IGNORECASE)
 LOCAL_ENV = (".env", ".env.local", ".env.development", ".env.development.local", ".env.production",
              ".env.production.local")
-ENV_ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", re.MULTILINE)
+ENV_ASSIGN = re.compile(r"^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(.*)$", re.MULTILINE)
 PUBLIC_VAR = re.compile(r"\b(NEXT_PUBLIC_|EXPO_PUBLIC_|NUXT_PUBLIC_|REACT_APP_|GATSBY_|VITE_|PUBLIC_)([A-Z0-9_]+)")
 SECRET_NAME = re.compile(r"SERVICE_?ROLE|SECRET|PRIVATE|PASSWORD|PASSWD|DATABASE_URL|DB_URL|ADMIN_KEY|SIGNING_KEY")
 
@@ -37,7 +37,7 @@ def secret_hits(text):
 
 
 def committed_secrets(project):
-    findings, env_files = [], []
+    findings, env_files, tracked_env = [], [], False
     for rel in project.files:
         base = posixpath.basename(rel)
         if base in LOCKFILES or rel.endswith(".map"):
@@ -45,28 +45,28 @@ def committed_secrets(project):
         text = project.text(rel)
         if ENV_FILE.match(base) and not ENV_TEMPLATE.search(base):
             names = [m.group(1) for m in ENV_ASSIGN.finditer(text) if m.group(2).strip().strip("\"'")]
-            where = "tracked in git" if tracked(project) else "not covered by .gitignore"
+            is_tracked = rel in project.tracked
+            tracked_env = tracked_env or is_tracked
+            where = "tracked in git" if is_tracked else "not covered by .gitignore"
             env_files.append(Finding(rel, 1, f"environment file is {where} ({plural(len(names), 'variable')} with values: "
                                      + ", ".join(names[:8]) + (", ..." if len(names) > 8 else "") + "; values not shown)"))
         for offset, kind, masked in secret_hits(text):
             findings.append(Finding(rel, line_of(text, offset), kind, masked))
     note = f"Files read from the {project.source}; git history was not read."
     if findings:
-        return [make("INFRA-08", "fail", f"{plural(len(findings), 'secret key')} committed in the working tree. Treat "
+        return [make("INFRA-08", "fail", f"{plural(len(findings), 'secret key')} in files git tracks or would commit. Treat "
                      "each one as leaked: rotate it, then move it to the host's environment settings.",
                      findings + env_files, [note])]
     if env_files:
-        status = "fail" if tracked(project) else "warn"
+        status = "fail" if tracked_env else "warn"
         return [make("INFRA-08", status, f"{plural(len(env_files), '.env file')} "
-                     + ("tracked in git" if tracked(project) else "not covered by .gitignore")
+                     + ("tracked in git" if tracked_env else "not covered by .gitignore")
                      + ". Remove them from the repository, add .env* to .gitignore and rotate the values.",
                      env_files, [note])]
-    return [make("INFRA-08", "pass", f"No secret key formats or .env files in {plural(len(project.files), 'file')}.",
-                 evidence=[note])]
-
-
-def tracked(project):
-    return project.source.startswith("git index")
+    # The check covers git history too, which a static read of the files cannot see: never a pass from here.
+    return [make("INFRA-08", "manual", f"No secret key formats or .env files in {plural(len(project.files), 'file')} "
+                 "of the working tree. Git history was not read, so a secret committed and later deleted would not "
+                 "show; scan the history with a tool such as gitleaks or trufflehog.", evidence=[note])]
 
 
 def public_env(project):
@@ -106,7 +106,7 @@ def public_env(project):
                      fails + warns)]
     if warns:
         return [make("NEXT-01", "warn", SUSPECTED + f"{plural(len(warns), 'public environment variable')} "
-                     "with secret-looking names. Anything with a public prefix ships to the browser.", warns)]
+                     f"with {'a secret-looking name' if len(warns) == 1 else 'secret-looking names'}. Anything with a public prefix ships to the browser.", warns)]
     if any_public or "package.json" in project.files:
         return [make("NEXT-01", "pass", "No public (NEXT_PUBLIC_, VITE_, PUBLIC_ ...) environment variable holds a "
                      "secret key or has a secret-looking name.")]
