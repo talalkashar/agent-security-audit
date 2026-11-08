@@ -503,6 +503,13 @@ class AccuracyTest(unittest.TestCase):
         r = audit_files({"middleware.ts": cases["early return"].replace(pp, pp + "  " + hsts)})
         self.assertEqual(r["BROWSER-01"].status, "manual")
 
+    def test_sanitized_html_count_agrees(self):
+        one = audit_files({"a.jsx": "export const A = () => <div dangerouslySetInnerHTML={{ __html: '<b>x</b>' }} />;\n"})
+        self.assertIn("(1 literal or sanitized use)", one["BROWSER-09"].summary)
+        two = audit_files({"a.jsx": "export const A = () => <div dangerouslySetInnerHTML={{ __html: '<b>x</b>' }} />;\n"
+                                    "export const B = () => <p dangerouslySetInnerHTML={{ __html: '<i>y</i>' }} />;\n"})
+        self.assertIn("(2 literal or sanitized uses)", two["BROWSER-09"].summary)
+
     def test_middleware_headers_on_every_path_still_pass(self):
         # A helper with its own early return, a nonce template and a final return do not make the sets conditional.
         mw = ("function pick(x) {\n  if (!x) return 'a';\n  return x;\n}\n"

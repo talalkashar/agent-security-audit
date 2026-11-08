@@ -643,6 +643,36 @@ class VerbAgreementTest(unittest.TestCase):
             with self.subTest(summary=summary):
                 self.assertNotIn("(s)", summary)
 
+    def test_no_placeholder_plural_in_any_check_string(self):
+        import pathlib
+        import tokenize
+        root = pathlib.Path(webapp.__file__).resolve().parent.parent
+        for path in sorted([*(root / "checks").glob("*.py"), *(root / "code_audit").glob("*.py")]):
+            with path.open("rb") as fh:
+                for tok in tokenize.tokenize(fh.readline):
+                    if tok.type == tokenize.STRING or tok.type == getattr(tokenize, "FSTRING_MIDDLE", -1):
+                        with self.subTest(file=path.name, line=tok.start[0]):
+                            self.assertNotIn("(s)", tok.string)
+
+    def rate_limit(self, answer, attempts=30):
+        c = ctx({"/api/login": lambda m, u, h, b, n={"i": 0}: (n.__setitem__("i", n["i"] + 1), answer(n["i"]))[1]},
+                rate_limit_path="/api/login", rate_limit_attempts=attempts)
+        return ratelimit.login_rate_limit(c)
+
+    def test_rate_limit_counts_agree_at_one_and_two(self):
+        r = self.rate_limit(lambda i: resp(429 if i > 1 else 401, [("Retry-After", "60")], "x"))
+        self.assertIn("after 1 attempt (429", r.summary)
+        self.assertIn("1 attempt accepted", r.evidence[0])
+        r = self.rate_limit(lambda i: resp(429 if i > 2 else 401, [("Retry-After", "60")], "x"))
+        self.assertIn("after 2 attempts (429", r.summary)
+        r = self.rate_limit(lambda i: resp(423 if i > 1 else 401, [], "x"))
+        self.assertIn("Throttled after 1 attempt:", r.summary)
+        self.assertIn(": attempt 1 -> 401", r.evidence[0])
+        r = self.rate_limit(lambda i: resp(423 if i > 2 else 401, [], "x"))
+        self.assertIn("Throttled after 2 attempts:", r.summary)
+        self.assertIn("No limit seen within 1 attempt,", self.rate_limit(lambda i: resp(401, [], "x"), 1).summary)
+        self.assertIn("No limit seen within 2 attempts,", self.rate_limit(lambda i: resp(401, [], "x"), 2).summary)
+
 
 if __name__ == "__main__":
     unittest.main()

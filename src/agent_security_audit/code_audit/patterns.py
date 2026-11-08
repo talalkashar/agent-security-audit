@@ -235,7 +235,7 @@ def raw_html(project):
                      "any of it can come from a user, it is stored XSS.", risky)]
     if files:
         return [make("BROWSER-09", "pass", "No dangerouslySetInnerHTML, innerHTML or document.write with an "
-                     f"unsanitized dynamic value ({safe} literal or sanitized use(s)).")]
+                     f"unsanitized dynamic value ({plural(safe, 'literal or sanitized use')}).")]
     return []
 
 

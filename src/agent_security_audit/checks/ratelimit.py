@@ -89,20 +89,21 @@ def login_rate_limit(ctx):
             base_status, base_words = resp.status, _limit_words(resp)
         if resp.status == 429:
             retry = resp.get("retry-after")
-            ev = [f"{method} {path}: {i - 1} attempts accepted, attempt {i} got 429",
+            ev = [f"{method} {path}: {count(i - 1, 'attempt')} accepted, attempt {i} got 429",
                   f"retry-after: {retry or '(not set)'}", source]
             if not retry:
-                return warned("API-01", f"Rate limited after {i - 1} attempts, but no Retry-After header.", ev)
-            return passed("API-01", f"Rate limited after {i - 1} attempts (429, Retry-After {retry}).", ev)
+                return warned("API-01", f"Rate limited after {count(i - 1, 'attempt')}, but no Retry-After header.", ev)
+            return passed("API-01", f"Rate limited after {count(i - 1, 'attempt')} (429, Retry-After {retry}).", ev)
         # Limit or lockout words the first answer did not have, or a change to 423 Locked, is throttling.
         words = sorted(_limit_words(resp) - base_words)
         changed = i > 1 and resp.status != base_status
         if words or (changed and resp.status in THROTTLE_STATUSES):
             start = i - 1
             why = f"{resp.status}" + (f" saying \"{words[0]}\"" if words else "")
-            return warned("API-01", f"Throttled after {start} attempts: attempt {i} got {why} instead of "
+            return warned("API-01", f"Throttled after {count(start, 'attempt')}: attempt {i} got {why} instead of "
                           f"{base_status}. Clients and monitoring expect 429 with Retry-After.",
-                          [f"{method} {path}: attempts 1-{start} -> {base_status}, attempt {i} -> {resp.status}", source])
+                          [f"{method} {path}: " + ("attempt 1" if start == 1 else f"attempts 1-{start}")
+                           + f" -> {base_status}, attempt {i} -> {resp.status}", source])
     summary = ", ".join(f"{s}x{statuses.count(s)}" for s in sorted(set(statuses)))
     ev = [f"{method} {path} x{attempts}: {summary}", source]
     errors = sum(s >= 500 for s in statuses)
@@ -112,7 +113,7 @@ def login_rate_limit(ctx):
                       "attempts, with no 429, 423 or limit wording. Check the server logs and confirm the limit in "
                       "code.", ev)
     if attempts < MIN_VERDICT:
-        return warned("API-01", f"No limit seen within {attempts} attempts, which is too few to judge; use at least "
+        return warned("API-01", f"No limit seen within {count(attempts, 'attempt')}, which is too few to judge; use at least "
                       f"{MIN_VERDICT} (default 30).", ev)
     same = "every answer was the same" if len(set(statuses)) == 1 else "no answer changed in a way that shows a limit"
     return warned("API-01", f"No limit observed up to {attempts} login attempts from one client: {same}. A limit may "
