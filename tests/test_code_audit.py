@@ -503,6 +503,25 @@ class AccuracyTest(unittest.TestCase):
         r = audit_files({"middleware.ts": cases["early return"].replace(pp, pp + "  " + hsts)})
         self.assertEqual(r["BROWSER-01"].status, "manual")
 
+    def test_semicolon_free_middleware_sets_after_a_braceless_if_pass(self):
+        # A brace-less if guards one statement; in code without semicolons later sets still run on every request.
+        xfo = "  response.headers.set('X-Frame-Options', 'DENY')\n  response.headers.set('X-Content-Type-Options', 'nosniff')\n"
+        for guard in ("  if (process.env.DEBUG) console.log(request.url)\n",
+                      "  if (isProtectedRoute(req)) await auth.protect()\n",
+                      "  if (process.env.DEBUG)\n    console.log(request.url)\n"):
+            with self.subTest(guard=guard):
+                mw = ("export default function middleware(request) {\n" + guard
+                      + "  const response = NextResponse.next()\n" + xfo + "  return response\n}\n")
+                r = audit_files({"middleware.ts": mw})
+                self.assertEqual(r["BROWSER-03"].status, "pass", r["BROWSER-03"].summary)
+                self.assertEqual(r["BROWSER-04"].status, "pass", r["BROWSER-04"].summary)
+        # The set that is the guarded statement, on the same or the next line, is still conditional.
+        for guard in ("  if (prod) ", "  if (prod)\n    ", "  if (a) foo()\n  else "):
+            with self.subTest(guard=guard):
+                mw = ("export default function middleware(request) {\n  const response = NextResponse.next()\n"
+                      + guard + "response.headers.set('X-Frame-Options', 'DENY')\n  return response\n}\n")
+                self.assertEqual(audit_files({"middleware.ts": mw})["BROWSER-04"].status, "manual")
+
     def test_sanitized_html_count_agrees(self):
         one = audit_files({"a.jsx": "export const A = () => <div dangerouslySetInnerHTML={{ __html: '<b>x</b>' }} />;\n"})
         self.assertIn("(1 literal or sanitized use)", one["BROWSER-09"].summary)

@@ -553,7 +553,8 @@ _RANK = {"fail": 0, "warn": 1, "manual": 2, "pass": 3}
 # A block opened by if, else, switch, case, try, catch or finally runs on some requests only.
 COND_OPEN = re.compile(r"(?:\b(?:if|switch|catch)\s*\([^{};]*\)|\belse|\btry|\bfinally|\bcase\b[^{};:]*:|"
                        r"\bdefault\s*:)\s*$")
-BRACELESS_IF = re.compile(r"\bif\s*\(|^\s*else\b")
+BRACELESS_IF = re.compile(r"\bif\s*\(|\belse\b")
+STATEMENT = re.compile(r"\s*[^;\n]*")  # one statement: up to the next ; or line break
 
 
 def _conditional(text, offsets):
@@ -562,27 +563,45 @@ def _conditional(text, offsets):
     clean = STRING_OR_COMMENT.sub(lambda m: " " * len(m.group()), text)
 
     def braceless(pos):
-        start = max(clean.rfind(c, 0, pos) for c in ";{}") + 1
-        return bool(BRACELESS_IF.search(clean[start:pos]))
+        """True when pos is the body of a brace-less if or else in the same statement run. Code without
+        semicolons ends a statement at the line break, so an earlier brace-less if guards its own line only.
+        Looks back 400 characters and at the last three keywords, which keeps the scan linear on any input."""
+        start = max(clean.rfind(c, max(0, pos - 400), pos) for c in ";{}") + 1 or max(0, pos - 400)
+        for m in list(BRACELESS_IF.finditer(clean, start, pos))[-3:]:
+            body, depth = m.end(), 0
+            if clean[body - 1] == "(":  # skip the condition to its closing parenthesis
+                depth = 1
+                while body < pos and depth:
+                    depth += {"(": 1, ")": -1}.get(clean[body], 0)
+                    body += 1
+            if not depth and STATEMENT.match(clean, body, pos).end() >= pos:
+                return True
+        return False
 
-    stack, ids, returns, out = [], 0, [], set()
+    # Each open block is [conditional, holds a conditional return]; the counts keep every event O(1).
+    stack, plain, ncond, nreturn, out = [], [], 0, 0, set()
     events = sorted([(m.start(), m.group()) for m in re.finditer(r"[{}]|\breturn\b", clean)]
                     + [(o, "set") for o in offsets])
     for pos, kind in events:
         if kind == "{":
-            ids += 1
-            stack.append((ids, bool(COND_OPEN.search(clean[max(0, pos - 300):pos]))))
+            cond = bool(COND_OPEN.search(clean[max(0, pos - 300):pos]))
+            ncond += cond
+            if not cond:
+                plain.append(len(stack))
+            stack.append([cond, False])
         elif kind == "}":
             if stack:
-                stack.pop()
+                cond, returned = stack.pop()
+                ncond -= cond
+                nreturn -= returned
+                if not cond:
+                    plain.pop()
         elif kind == "return":
-            scope = next((i for i, cond in reversed(stack) if not cond), None)
-            if scope is not None and (any(cond for _, cond in stack) or braceless(pos)):
-                returns.append(scope)
-        else:
-            here = {i for i, _ in stack}
-            if any(cond for _, cond in stack) or braceless(pos) or any(r in here for r in returns):
-                out.add(pos)
+            if plain and not stack[plain[-1]][1] and (ncond or braceless(pos)):
+                stack[plain[-1]][1] = True  # later sets in this function run on some requests only
+                nreturn += 1
+        elif ncond or nreturn or braceless(pos):
+            out.add(pos)
     return out
 
 
