@@ -475,7 +475,7 @@ def _graphql_refusal(resp, data):
 
 @auto("API-23")
 def graphql_introspection(ctx):
-    open_, closed, unclear, ev = [], [], [], []
+    open_, closed, unclear, hidden, ev = [], [], [], [], []
     for path in GRAPHQL_PATHS:
         resp = ctx.client.request("POST", path, body=INTROSPECTION, headers={"Content-Type": "application/json"})
         try:
@@ -498,6 +498,10 @@ def graphql_introspection(ctx):
             ev.append(f"POST {path} -> {resp.status}, JSON errors, but " + (
                 "an auth, throttle, gateway or firewall answer" if resp.status in GRAPHQL_NOT_SERVER or challenge_of(resp)
                 else "no GraphQL media type or GraphQL error message"))
+        elif resp.status in GRAPHQL_NOT_SERVER or challenge_of(resp):
+            hidden.append(f"{path} ({resp.status})")
+            ev.append(f"POST {path} -> {resp.status}, an auth, throttle, gateway or firewall answer without GraphQL "
+                      "errors; whether GraphQL is behind it is not known")
         else:
             ev.append(f"POST {path} -> {resp.status}, not a GraphQL endpoint")
     if open_:
@@ -509,6 +513,10 @@ def graphql_introspection(ctx):
     if unclear:
         return Result("API-23", "manual", f"{', '.join(unclear)} answered the introspection query with errors, but "
                       "nothing shows it is GraphQL. If it is, confirm by hand that introspection is refused.", ev)
+    if hidden:  # nothing shows GraphQL, but these answers came before any app could, so absence is not shown either
+        return skipped("API-23", f"No GraphQL answer at /graphql or /api/graphql; {', '.join(hidden)} answered with "
+                       "an auth, throttle, gateway or firewall status, which hides whether an endpoint is there. "
+                       "If the site runs GraphQL, check introspection by hand with access.")
     return skipped("API-23", "No GraphQL endpoint at /graphql or /api/graphql.")
 
 

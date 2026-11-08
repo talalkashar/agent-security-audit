@@ -103,6 +103,18 @@ class GraphqlProofTest(unittest.TestCase):
                 self.assertEqual(self.run_check(status, {"errors": [{"message": "GraphQL introspection is not allowed"}]})
                                  .status, "manual")
 
+    def test_auth_or_throttle_answer_without_graphql_errors_names_the_status(self):
+        # A plain 401, 429 or firewall page proves neither an endpoint nor its absence: skip, but say so.
+        answers = [resp(401, [("Content-Type", "application/json")], json.dumps({"error": "unauthorized"})),
+                   resp(429, [("Content-Type", "text/plain")], "slow down"),
+                   resp(403, [("Content-Type", "text/html"), ("cf-mitigated", "challenge")], "<html>challenge</html>")]
+        for r in answers:
+            with self.subTest(status=r.status):
+                out = webapp.graphql_introspection(ctx({"/graphql": r, "/api/graphql": r}))
+                self.assertEqual(out.status, "skip")
+                self.assertIn(f"/graphql ({r.status})", out.summary)
+                self.assertNotIn("No GraphQL endpoint", out.summary)
+
     def test_challenge_answer_is_manual(self):
         r = resp(400, [("Content-Type", "application/graphql-response+json"), ("cf-mitigated", "challenge")],
                  json.dumps({"errors": [{"message": "x"}]}))
