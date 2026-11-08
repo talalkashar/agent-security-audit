@@ -221,7 +221,7 @@ def source_maps(ctx):
     found = [(label, text) for label, text in scripts(ctx) if label.startswith("/")]
     if not found:
         return skipped("NEXT-02", "No same-origin script files found on the crawled pages.")
-    exposed, ev, tried = [], [], 0
+    exposed, ev, tried, probed = [], [], 0, 0
     for label, text in found:
         m = SOURCEMAP.search(text[-2000:])
         candidates = []
@@ -234,13 +234,19 @@ def source_maps(ctx):
             if not same_origin(ctx.target, url):
                 continue
             resp = ctx.client.get(url)
+            probed += 1
             if resp.status == 200 and b'"mappings"' in resp.body[:500000]:
                 exposed.append(urlsplit(url).path)
                 ev.append(f"GET {urlsplit(url).path} -> 200 (source map)")
     if exposed:
         return failed("NEXT-02", f"{count(len(exposed), 'source map')} {are(len(exposed))} public, so anyone can read the original source "
                       "code, comments and internal paths.", ev)
-    return passed("NEXT-02", f"No source maps served for {count(len(found), 'script')}.")
+    if not probed:
+        return Result("NEXT-02", "manual", f"None of {count(len(found), 'same-origin script')} could be probed for a "
+                      "source map. Open each script's URL with .map appended.")
+    return passed("NEXT-02", f"No source map served: {count(probed, 'map URL')} probed for "
+                  f"{count(len(found), 'same-origin script')} (each script that names a map, plus .map guesses for "
+                  f"{count(tried, 'script')}).", ev)
 
 
 @auto("NEXT-03")
