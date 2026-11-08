@@ -550,6 +550,40 @@ def _route(rx, text, offset):
 
 
 _RANK = {"fail": 0, "warn": 1, "manual": 2, "pass": 3}
+# A block opened by if, else, switch, case, try, catch or finally runs on some requests only.
+COND_OPEN = re.compile(r"(?:\b(?:if|switch|catch)\s*\([^{};]*\)|\belse|\btry|\bfinally|\bcase\b[^{};:]*:|"
+                       r"\bdefault\s*:)\s*$")
+BRACELESS_IF = re.compile(r"\bif\s*\(|^\s*else\b")
+
+
+def _conditional(text, offsets):
+    """The offsets (header sets in a middleware or proxy file) that do not run on every request: inside an if, else,
+    switch or try block, after a brace-less if, or after a conditional early return in the same function."""
+    clean = STRING_OR_COMMENT.sub(lambda m: " " * len(m.group()), text)
+
+    def braceless(pos):
+        start = max(clean.rfind(c, 0, pos) for c in ";{}") + 1
+        return bool(BRACELESS_IF.search(clean[start:pos]))
+
+    stack, ids, returns, out = [], 0, [], set()
+    events = sorted([(m.start(), m.group()) for m in re.finditer(r"[{}]|\breturn\b", clean)]
+                    + [(o, "set") for o in offsets])
+    for pos, kind in events:
+        if kind == "{":
+            ids += 1
+            stack.append((ids, bool(COND_OPEN.search(clean[max(0, pos - 300):pos]))))
+        elif kind == "}":
+            if stack:
+                stack.pop()
+        elif kind == "return":
+            scope = next((i for i, cond in reversed(stack) if not cond), None)
+            if scope is not None and (any(cond for _, cond in stack) or braceless(pos)):
+                returns.append(scope)
+        else:
+            here = {i for i, _ in stack}
+            if any(cond for _, cond in stack) or braceless(pos) or any(r in here for r in returns):
+                out.add(pos)
+    return out
 
 
 def _header_result(project, cid, label, names, check, files, texts, found):
@@ -588,6 +622,10 @@ def _header_result(project, cid, label, names, check, files, texts, found):
                                                  "site.")
             judged.append((status, f"{f}: {summary}"))
         status, summary = min(judged, key=lambda x: _RANK[x[0]])
+        if status == "pass" and MIDDLEWARE.search(f) and _conditional(texts[f], [off for _, _, off, _ in hits]):
+            status, summary = "manual", (f"{f} sets {label} only in some branches (if/else, switch or after an early "
+                                         "return), so the code does not show that every response carries it. Confirm "
+                                         "it on the live site.")
         per_file.append((status, summary, findings))
     if not per_file:
         return make(cid, "warn", _not_set(label, files), [Finding(files[0], 1, f"no {label} header configured")])
