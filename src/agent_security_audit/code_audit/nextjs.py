@@ -560,7 +560,8 @@ STATEMENT = re.compile(r"\s*[^;\n]*")  # one statement: up to the next ; or line
 
 def _conditional(text, offsets):
     """The offsets (header sets in a middleware or proxy file) that do not run on every request: inside an if, else,
-    switch or try block, after a brace-less if, or after a conditional early return in the same function."""
+    switch, try or loop block, as the body of a brace-less if, else or for, or after a conditional early return in
+    the same function."""
     clean = STRING_OR_COMMENT.sub(lambda m: " " * len(m.group()), text)
 
     def braceless(pos):
