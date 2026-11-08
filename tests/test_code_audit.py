@@ -522,6 +522,22 @@ class AccuracyTest(unittest.TestCase):
                       + guard + "response.headers.set('X-Frame-Options', 'DENY')\n  return response\n}\n")
                 self.assertEqual(audit_files({"middleware.ts": mw})["BROWSER-04"].status, "manual")
 
+    def test_middleware_early_return_inside_a_loop_is_manual(self):
+        xfo = "  res.headers.set('X-Frame-Options', 'DENY')\n  res.headers.set('X-Content-Type-Options', 'nosniff')\n"
+        loops = {
+            "for of": "  for (const p of SKIP) {\n    if (path.startsWith(p)) return NextResponse.next()\n  }\n",
+            "classic for": "  for (let i = 0; i < SKIP.length; i++) {\n    if (path.startsWith(SKIP[i])) return NextResponse.next();\n  }\n",
+            "while": "  while (i < n) {\n    if (skip(i)) return NextResponse.next()\n    i++\n  }\n",
+            "brace-less for": "  for (const p of SKIP) if (path.startsWith(p)) return NextResponse.next()\n",
+        }
+        for name, loop in loops.items():
+            with self.subTest(name=name):
+                mw = ("export function middleware(req) {\n  const path = req.nextUrl.pathname\n" + loop
+                      + "  const res = NextResponse.next()\n" + xfo + "  return res\n}\n")
+                r = audit_files({"middleware.ts": mw})
+                self.assertEqual(r["BROWSER-03"].status, "manual", r["BROWSER-03"].summary)
+                self.assertEqual(r["BROWSER-04"].status, "manual", r["BROWSER-04"].summary)
+
     def test_sanitized_html_count_agrees(self):
         one = audit_files({"a.jsx": "export const A = () => <div dangerouslySetInnerHTML={{ __html: '<b>x</b>' }} />;\n"})
         self.assertIn("(1 literal or sanitized use)", one["BROWSER-09"].summary)

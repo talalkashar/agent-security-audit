@@ -550,10 +550,11 @@ def _route(rx, text, offset):
 
 
 _RANK = {"fail": 0, "warn": 1, "manual": 2, "pass": 3}
-# A block opened by if, else, switch, case, try, catch or finally runs on some requests only.
-COND_OPEN = re.compile(r"(?:\b(?:if|switch|catch)\s*\([^{};]*\)|\belse|\btry|\bfinally|\bcase\b[^{};:]*:|"
-                       r"\bdefault\s*:)\s*$")
-BRACELESS_IF = re.compile(r"\bif\s*\(|\belse\b")
+# A block opened by if, else, switch, case, try, catch, finally or a loop runs on some requests only (a loop body
+# may run zero times, and a return inside it leaves the whole function).
+COND_OPEN = re.compile(r"(?:\b(?:if|switch|catch|while)\s*\([^{};]*\)|\bfor\s*(?:await\s*)?\([^{}]*\)|"
+                       r"\belse|\btry|\bfinally|\bdo|\bcase\b[^{};:]*:|\bdefault\s*:)\s*$")
+BRACELESS_IF = re.compile(r"\b(?:if|for)\s*\(|\belse\b")
 STATEMENT = re.compile(r"\s*[^;\n]*")  # one statement: up to the next ; or line break
 
 
@@ -563,7 +564,7 @@ def _conditional(text, offsets):
     clean = STRING_OR_COMMENT.sub(lambda m: " " * len(m.group()), text)
 
     def braceless(pos):
-        """True when pos is the body of a brace-less if or else in the same statement run. Code without
+        """True when pos is the body of a brace-less if, else or for in the same statement run. Code without
         semicolons ends a statement at the line break, so an earlier brace-less if guards its own line only.
         Looks back 400 characters and at the last three keywords, which keeps the scan linear on any input."""
         start = max(clean.rfind(c, max(0, pos - 400), pos) for c in ";{}") + 1 or max(0, pos - 400)
