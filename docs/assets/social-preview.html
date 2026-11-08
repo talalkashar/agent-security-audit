@@ -7,7 +7,7 @@
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
     --screenshot=docs/assets/social-preview.png --window-size=1280,640 --hide-scrollbars \
     file://$PWD/docs/assets/social-preview.html
-  Facts come from `asa list` (120 checks, OSI layers 1-7); the terminal lines are a real
+  Facts come from `asa list` (126 checks, OSI layers 1-7); the terminal lines are a real
   `asa scan` of the built-in practice site (`asa lab`). -->
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -50,13 +50,13 @@
   <div class="name mono"><span>&gt;</span> agent-security-audit</div>
   <div class="tag">Your coding agent builds the site. This makes it prove the defenses work before you ship.</div>
   <div class="facts">
-    <div class="fact"><b>120</b> checks</div>
+    <div class="fact"><b>126</b> checks</div>
     <div class="fact">OSI layers <b>1-7</b></div>
     <div class="fact"><b>CLI</b> + <b>skill</b> + <b>MCP</b></div>
   </div>
   <div class="term mono">
     <div><span class="prompt">$</span> asa scan http://127.0.0.1:8651</div>
-    <div class="dim">16 failed · 6 warnings · 0 could not run · 83 to check in code · 0 passed · 15 not applicable</div>
+    <div class="dim">18 failed · 5 warnings · 0 could not run · 86 to check in code · 0 passed · 17 not applicable</div>
     <div> 1. <span class="crit">[critical]</span> INFRA-04 Sensitive files not served (.env, .git, backups, .DS_Store): Sensitive files are downloadable: /.env (environment file), /.git/HEAD (git metadata).</div>
   </div>
   <div class="url mono">github.com/talalkashar/agent-security-audit</div>
