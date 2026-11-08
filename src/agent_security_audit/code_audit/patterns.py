@@ -12,11 +12,79 @@ DSIH = re.compile(r"dangerouslySetInnerHTML\s*=\s*\{\s*\{\s*__html\s*:\s*")
 INNER = re.compile(r"\.(?:innerHTML|outerHTML)\s*\+?=(?!=)\s*|\binsertAdjacentHTML\(\s*['\"]\w+['\"]\s*,\s*|"
                    r"\bdocument\.write(?:ln)?\(\s*")
 LITERAL = re.compile(r"""^\s*(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\$]|\\.|\$(?!\{))*`)\s*$""")
-# Calls that return HTML-safe text. The whole value must be one such call; a bare function name counts only when
-# it is imported from a sanitizer package, since a local helper of the same name proves nothing.
-SAFE_HTML = re.compile(r"(?:DOMPurify|\w*[pP]urif(?:y|ier))\.sanitize\(|(?<![\w$.])(sanitizeHtml|sanitize|xss|"
-                       r"filterXSS|escapeHtml|escapeHTML|escape|renderToStaticMarkup|renderToString)\(")
-SANITIZER_PKG = r"""['"](?:(?:isomorphic-)?dompurify|sanitize-html|xss|escape-html|html-escaper|he|react-dom/server(?:\.\w+)?)['"]"""
+# Calls that return HTML-safe text. The whole value must be one such call, and the name (or the receiver of a method
+# call) must be bound by an import or require of a sanitizer package to one of its sanitizing exports: a local helper
+# of the same name, or another export such as he.decode, proves nothing.
+SAFE_CALL = re.compile(r"([A-Za-z_$][\w$]{0,100})(?:\s*\.\s*([A-Za-z_$][\w$]{0,100}))?\s*\(")
+# {package: (exports that are a sanitizing function, methods of the default or namespace import that sanitize)}
+SANITIZERS = {
+    "dompurify": ({"sanitize"}, {"sanitize"}),
+    "isomorphic-dompurify": ({"sanitize"}, {"sanitize"}),
+    "sanitize-html": ({"default"}, set()),
+    "xss": ({"default", "filterXSS"}, {"filterXSS"}),
+    "escape-html": ({"default"}, set()),
+    "html-escaper": ({"escape"}, {"escape"}),
+    "he": ({"escape", "encode"}, {"escape", "encode"}),
+    "react-dom/server": ({"renderToStaticMarkup", "renderToString"}, {"renderToStaticMarkup", "renderToString"}),
+}
+# Bounded, one statement at a time: no pattern here can backtrack across the file.
+IMPORT_FROM = re.compile(r"""\bimport\s([^'";]{0,500})\bfrom\s*['"]([^'"]{1,200})['"]""")
+REQUIRE_BIND = re.compile(r"""\b(?:const|let|var)\s+([A-Za-z_$][\w$]{0,100}|\{[^}]{0,500}\})\s*=\s*"""
+                          r"""require\(\s*['"]([^'"]{1,200})['"]\s*\)(?:\s*\.\s*([A-Za-z_$][\w$]{0,100}))?""")
+
+
+def _package(spec):
+    spec = spec.strip()
+    return spec if spec in SANITIZERS else ("react-dom/server" if spec.startswith("react-dom/server.") else None)
+
+
+def _named(inner, sep):
+    """{local: exported} for 'a as b, c' (sep 'as') or 'a: b, c' (sep ':')."""
+    out = {}
+    for part in inner.split(","):
+        bits = [b.strip() for b in part.split(sep)]
+        if bits[0]:
+            out[bits[-1]] = bits[0]
+    return out
+
+
+def _bindings(code):
+    """{local name: (package, export)} for imports and requires of sanitizer packages ("default" and "*" mark the
+    default and namespace imports)."""
+    out = {}
+    for m in IMPORT_FROM.finditer(code):
+        pkg = _package(m.group(2))
+        if not pkg:
+            continue
+        clause = m.group(1).strip()
+        braces = re.search(r"\{([^}]*)\}", clause)
+        if braces:
+            out.update({k: (pkg, v) for k, v in _named(braces.group(1), " as ").items()})
+            clause = clause[:braces.start()] + clause[braces.end():]
+        star = re.search(r"\*\s*as\s+([A-Za-z_$][\w$]*)", clause)
+        if star:
+            out[star.group(1)] = (pkg, "*")
+            clause = clause[:star.start()] + clause[star.end():]
+        default = re.match(r"\s*([A-Za-z_$][\w$]*)", clause)
+        if default and default.group(1) != "type":
+            out[default.group(1)] = (pkg, "default")
+    for m in REQUIRE_BIND.finditer(code):
+        pkg = _package(m.group(2))
+        if not pkg:
+            continue
+        if m.group(1).startswith("{"):
+            out.update({k: (pkg, v) for k, v in _named(m.group(1)[1:-1], ":").items()})
+        else:
+            out[m.group(1)] = (pkg, m.group(3) or "default")
+    return out
+
+
+def _declared_locally(code, name):
+    n = re.escape(name)
+    return bool(re.search(r"\bfunction\s*\*?\s*" + n + r"(?![\w$])|\bclass\s+" + n + r"(?![\w$])|"
+                          r"\b(?:const|let|var)\s+" + n + r"\s*=(?!\s*require\()", code))
+
+
 JSON_IN_HTML = re.compile(r"\bJSON\.stringify\(")
 # JSON.stringify output is safe in HTML only when "<" is escaped (or a serializer that escapes it is used).
 JSON_ESCAPED = re.compile(r"""\.replace(?:All)?\(\s*(?:/<\/g|['"]<['"])|\\u003c|\bserialize\(|\bhtmlescape\(|"""
@@ -131,13 +199,19 @@ def _html_risk(code, start, arg):
 def _sanitized(code, value):
     """True when the whole value is one sanitizer call (nothing raw added around it)."""
     v = value.strip()
-    m = SAFE_HTML.match(v)
+    m = SAFE_CALL.match(v)
     if not m:
         return False
-    name = m.group(1)
-    if name and not re.search(r"\bimport\s[^;]*?(?<![\w$])" + re.escape(name) + r"(?![\w$])[^;]*?\bfrom\s*"
-                              + SANITIZER_PKG + r"|(?<![\w$])" + re.escape(name) + r"(?![\w$])[^;=]*=\s*require\(\s*"
-                              + SANITIZER_PKG, code):
+    name, method = m.group(1), m.group(2)
+    bound = _bindings(code).get(name)
+    if not bound or _declared_locally(code, name):
+        return False
+    pkg, export = bound
+    functions, methods = SANITIZERS[pkg]
+    if method:  # DOMPurify.sanitize(x): the receiver is the default or namespace import, the method a sanitizer
+        if export not in ("default", "*") or method not in methods:
+            return False
+    elif export not in functions:
         return False
     inner = _arg(v, m.end(), len(v) + 1, "")
     return v[m.end() + len(inner):].strip() == ")"

@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -546,9 +547,29 @@ class AccuracyTest(unittest.TestCase):
         self.assertEqual(html("DOMPurify.sanitize(x) + b"), "warn")
         self.assertEqual(html("sanitize(x)", "const sanitize = (s) => s;\n"), "warn")
         self.assertEqual(html("renderToString(x)"), "warn")
-        self.assertEqual(html("DOMPurify.sanitize(x)"), "pass")
+        # A receiver that is not imported from a sanitizer package proves nothing (a global or local object).
+        self.assertEqual(html("DOMPurify.sanitize(x)"), "warn")
+        self.assertEqual(html("DOMPurify.sanitize(x)", "import DOMPurify from 'dompurify';\n"), "pass")
+        self.assertEqual(html("he.decode(x)", "import he from 'he';\n"), "warn")
+        self.assertEqual(html("he.encode(x)", "import he from 'he';\n"), "pass")
+        self.assertEqual(html("escape(x)", "const { escape } = require('html-escaper');\n"), "pass")
+        self.assertEqual(html("decode(x)", "import { decode as escape2, decode } from 'he';\n"), "warn")
+        self.assertEqual(html("sanitize(x)", "import sanitize from 'sanitize-html';\nfunction sanitize(s) { return s; }\n"),
+                         "warn")
+        self.assertEqual(html("xss(x)", "import { sanitize } from 'other';\nimport xss from 'xss';\n"), "pass")
+        # The old cross-statement regex let a name in one statement pair with a package in a later one.
+        self.assertEqual(html("sanitize(x)", "import { sanitize } from './local';\nimport x from 'dompurify';\n"), "warn")
         self.assertEqual(html("sanitize(x, { allowedTags: [] })", "import sanitize from 'sanitize-html';\n"), "pass")
         self.assertEqual(html("renderToString(x)", "import { renderToString } from 'react-dom/server';\n"), "pass")
+
+    def test_sanitizer_import_scan_is_linear(self):
+        from agent_security_audit.code_audit import patterns
+        for code in ["import " + "a," * 25000, "import x " + " " * 50000 + "from", "const " + "{" * 50000,
+                     "const a = require(" + "'" * 50000, "import {" + "a as b," * 7000]:
+            start = time.monotonic()
+            patterns._bindings(code + "\n" + "sanitize")
+            patterns._sanitized(code, "sanitize(x)")
+            self.assertLess(time.monotonic() - start, 1.0)
 
     def test_next04_manual_when_next_lockfile_unread(self):
         r = audit_files({"package.json": json.dumps({"dependencies": {"next": "15.0.0"}}), "bun.lock": "{}",
