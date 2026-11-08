@@ -24,11 +24,16 @@ DB = re.compile(r"(?<!Array)(?<!Buffer)(?<!Object)\.from\(\s*['\"`][\w.-]+['\"`]
                 r"\bdb\.(?:select|insert|update|delete|query|execute|transaction)\b|\b(?:pool|client|knex)\.query\(|"
                 r"\bsql`|\.collection\(|createAdminClient|createServiceRoleClient|SERVICE_ROLE|service_role|"
                 r"SUPABASE_SECRET_KEY|\bsupabaseAdmin\b")
-AUTH = re.compile(r"\.auth\.(?:getUser|getClaims|getSession)\(|getServerSession\(|\bauth\(\s*\)|\bcurrentUser\(|"
-                  r"\bgetAuth\(|\bauth\.protect\(|\b(?:require|ensure|assert|verify|check|get|validate|with)\w*"
-                  r"(?:User|Auth|Session|Admin|Role|Owner|Permission|Signature|Secret|Token|Claims)\w*\s*\(|"
-                  r"CRON_SECRET|constructEvent\(|timingSafeEqual|jwtVerify\(|jwt\.verify\(",
-                  re.IGNORECASE)
+# A gate stops an unauthorised caller by itself (it throws, redirects or wraps the handler), so calling it is enough.
+GUARD_WORDS = r"(?:User|Auth|Session|Admin|Role|Owner|Permission|Signature|Secret|Token|Claims)"
+GATE = re.compile(r"\bauth\.protect\(|\bjwtVerify\(|\bjwt\.verify\(|\bconstructEvent\(|"
+                  r"\b(?:require|ensure|assert|with)(?:[A-Z_][\w$]*?)?" + GUARD_WORDS + r"[\w$]*\s*\(")
+# A verifier only returns who the caller is (or whether a secret matched): it guards nothing unless its result is
+# checked. getUserById(id) or getUsers() look a user up; they are not authentication and do not match.
+VERIFIER = re.compile(r"\.auth\.(?:getUser|getClaims|getSession)\(|\bgetServerSession\(|\bauth\(\s*\)|"
+                      r"\bcurrentUser\(\s*\)|\bgetAuth\(|\bget(?:Current)?(?:User|Session|Claims|AuthUser)\(\s*\)|"
+                      r"\b(?:verify|check|validate)(?:[A-Z_][\w$]*?)?" + GUARD_WORDS + r"[\w$]*\s*\(|"
+                      r"\btimingSafeEqual\(|\bCRON_SECRET\b")
 # Reading the Authorization header counts as a guard; the word inside a message ("authorization required") does not.
 AUTH_HEADER = re.compile(r"""(?:\.get|getHeader|header)\(\s*(['"`])authorization\1|"""
                          r"""headers\s*(?:\.\s*authorization\b|\[\s*(['"`])authorization\2\s*\])""", re.IGNORECASE)
@@ -65,10 +70,71 @@ def _blank_strings(code):
 
 
 def _has_auth(code):
-    """An auth, session or secret call in code, not counting words inside string literals or comments."""
-    if AUTH_HEADER.search(code):
+    """A guard in code, not counting words inside string literals or comments: a gate call, or a verifier call (or a
+    read of the Authorization header) whose result reaches a condition. `await auth()` whose result is never
+    checked guards nothing."""
+    return _guard_at(code) is not None
+
+
+def _guard_at(code):
+    """Offset of the first guard in code (see _has_auth), or None."""
+    blank = _blank_strings(code)
+    found = [m.start() for m in GATE.finditer(blank) if not DECLARED.search(blank, max(0, m.start() - 40), m.start())][:1]
+    found += [m.start() for m in itertools.chain(VERIFIER.finditer(blank), AUTH_HEADER.finditer(code))
+              if _checked(blank, m.start(), m.end())][:1]
+    return min(found) if found else None
+
+
+DECLARED = re.compile(r"\bfunction\s*\*?\s*$")  # `function requireUser(` declares a gate, it does not call it
+CHECK_WINDOW = 2000  # a guard checks the verifier's result within this many characters of the call
+COND_HEAD = re.compile(r"\b(?:if|while)\s*\(")
+COMPARE = r"(?:[!=]==?|&&|\|\||\?\?)"
+ASSIGN = re.compile(r"(?:\b(?:const|let|var)\s+([\[{][^;]*?[\]}]|[A-Za-z_$][\w$]*)|(?:^|[;{}\n(])\s*([A-Za-z_$][\w$]*))"
+                    r"\s*=\s*(?:await\s+)?(?:\(\s*)?$")
+
+
+def _checked(blank, start, end):
+    """Whether the verifier expression at blank[start:end] gates something: it sits inside an if/while condition or a
+    comparison, or it is assigned to names that a condition or comparison reads within CHECK_WINDOW."""
+    depth = blank[start:end].count("(") - blank[start:end].count(")")
+    while depth > 0 and end < len(blank):
+        depth += {"(": 1, ")": -1}.get(blank[end], 0)
+        end += 1
+    while start > 0 and (blank[start - 1].isalnum() or blank[start - 1] in "_$."):
+        start -= 1
+    stmt = blank[max(0, start - 300):start]
+    stmt = stmt[max(stmt.rfind(";"), stmt.rfind("{"), stmt.rfind("}")) + 1:]
+    heads = list(COND_HEAD.finditer(stmt))
+    if heads and stmt[heads[-1].end():].count("(") >= stmt[heads[-1].end():].count(")"):
         return True
-    return bool(AUTH.search(_blank_strings(code)))
+    if re.search(COMPARE + r"|!\s*(?:\(\s*)?(?:await\s+)?$", stmt) or \
+            re.match(r"[\s)]*(?:" + COMPARE + r"|\?(?![.?]))", blank[end:end + 80]):
+        return True
+    m = ASSIGN.search(blank[max(0, start - 300):start])
+    if not m:
+        return False
+    lhs = m.group(1) or m.group(2)
+    names = set(re.findall(r"[A-Za-z_$][\w$]*(?![\w$]|\s*:)", lhs)) - {"await"}
+    after = blank[end:end + CHECK_WINDOW]
+    conds = [_paren(after, h.end()) for h in COND_HEAD.finditer(after)]
+    for name in names:
+        word = r"(?<![\w$.])" + re.escape(name) + r"(?![\w$])"
+        if any(re.search(word, c) for c in conds) or \
+                re.search(r"(?:!|" + COMPARE + r")\s*" + word, after) or \
+                re.search(word + r"(?:\s*\??\.\s*[\w$]+)*\s*(?:" + COMPARE + r"|\?(?![.?]))", after):
+            return True
+    return False
+
+
+def _paren(text, i):
+    """The text from i up to the ) that closes the ( just before i."""
+    depth, j = 1, i
+    while j < len(text) and depth:
+        depth += {"(": 1, ")": -1}.get(text[j], 0)
+        j += 1
+    return text[i:j - 1]
+
+
 SERVICE = re.compile(r"SERVICE_ROLE|service_role|SUPABASE_SECRET_KEY|\bsb_secret_|createAdminClient|"
                      r"createServiceRoleClient|\bsupabaseAdmin\b")
 SERVER_ONLY = re.compile(r"""import\s+['"]server-only['"]""")
@@ -238,12 +304,14 @@ def route_handlers(project):
     routes = [f for f in project.code_files() if ROUTE.search(f)]
     if not routes:
         return []
-    open_routes, guarded, touching, unsure = [], 0, 0, []
+    open_routes, guarded, touching, unsure, guards = [], 0, 0, [], []
     for rel in routes:
         code = _code(project, rel)
         found, ok, n, maybe = _route_methods(code)
         guarded += ok
         touching += n
+        if ok and (at := _guard_at(code)) is not None:
+            guards.append(_at(project, rel, code, at, "auth check found; confirm it gates the response"))
         if maybe:
             unsure.append(rel)
         open_routes += [_at(project, rel, code, off, note) for off, note in found]
@@ -261,13 +329,15 @@ def route_handlers(project):
         return [make("NEXT-05", "manual", f"No route handler in {plural(len(routes), 'route file')} reaches data "
                      "directly in its file. Handlers that reach data through imported modules are not traced; "
                      "confirm each one checks the caller.")]
-    return [make("NEXT-05", "pass", f"Every route handler that touches data ({guarded} of {touching}, in "
-                 f"{plural(len(routes), 'route file')}) calls an auth, session or secret check. Presence only: "
-                 "confirm the check gates the action.")]
+    # A guard found by pattern is not proof that it gates the response, so this stays manual (never pass).
+    return [make("NEXT-05", "manual", f"Not proven: every route handler that touches data ({guarded} of {touching}, "
+                 f"in {plural(len(routes), 'route file')}) calls an auth, session or secret check whose result is "
+                 "checked. A static read cannot prove the check gates the response; confirm each handler refuses a "
+                 "caller who is not signed in or does not own the data.", guards)]
 
 
 def server_actions(project):
-    actions, open_actions = 0, []
+    actions, open_actions, guards = 0, [], []
     for rel in project.code_files():
         code = _code(project, rel)
         if _directive(code) == "server":
@@ -277,16 +347,22 @@ def server_actions(project):
                 segment = code[m.start():end]
                 actions += 1
                 db = DB.search(segment)
-                if db and not _has_auth(segment):
-                    name = next((g for g in m.groups() if g), "default")
+                name = next((g for g in m.groups() if g), "default")
+                if db and (at := _guard_at(segment)) is None:
                     open_actions.append(_at(project, rel, code, m.start() + db.start(),
                                             f"Server Action {name} touches data with no auth or session call"))
+                elif db:
+                    guards.append(_at(project, rel, code, m.start() + at, f"Server Action {name}: auth check "
+                                      "found; confirm it gates the action"))
         elif INLINE_SERVER.search(code) and _directive(code) != "client":
             actions += 1
             db = DB.search(code)
-            if db and not _has_auth(code):
+            if db and (at := _guard_at(code)) is None:
                 open_actions.append(_at(project, rel, code, db.start(), "inline Server Action file touches data with "
                                         "no auth or session call"))
+            elif db:
+                guards.append(_at(project, rel, code, at, "inline Server Action: auth check found; confirm it gates "
+                                  "the action"))
     if not actions:
         return []
     out = []
@@ -296,8 +372,10 @@ def server_actions(project):
                             f"{'changes or reads' if len(open_actions) == 1 else 'change or read'} data without an auth or session call. Every action is a public POST endpoint.",
                             open_actions))
         else:
-            out.append(make(cid, "pass", f"{plural(actions, 'Server Action')} found; every one that touches data "
-                            "calls an auth or session check. Presence only: confirm it also checks ownership."))
+            out.append(make(cid, "manual", f"Not proven: {plural(actions, 'Server Action')} found; every one that "
+                            "touches data calls an auth or session check whose result is checked. A static read "
+                            "cannot prove the check gates the action; confirm each one refuses other users and "
+                            "checks ownership.", guards))
     return out
 
 
@@ -310,7 +388,7 @@ def _server_file(rel, code):
 
 
 def session_trust(project):
-    flagged, verified, uses = [], 0, False
+    flagged, verified, uses, verified_at = [], 0, False, []
     for rel in project.code_files():
         code = _code(project, rel)
         has_get, has_verified = GET_SESSION.search(code), VERIFIED.search(code)
@@ -319,6 +397,8 @@ def session_trust(project):
             continue
         if has_verified:
             verified += 1
+            verified_at.append(_at(project, rel, code, has_verified.start(), "verified user read here; confirm "
+                                   "server-side decisions use it"))
         elif has_get:
             flagged.append(_at(project, rel, code, has_get.start(), "server code reads the user from getSession() "
                                "with no getUser() or getClaims() in the file"))
@@ -328,9 +408,10 @@ def session_trust(project):
                      "cookie without verifying it. Use getClaims() or getUser() for every server-side decision.",
                      flagged)]
     if verified:
-        return [make("AUTH-01", "pass", f"{plural(verified, 'server file')} "
-                     f"{'uses' if verified == 1 else 'use'} getUser() or getClaims(); no server "
-                     "file relies on getSession() alone.")]
+        return [make("AUTH-01", "manual", f"Not proven: {plural(verified, 'server file')} "
+                     f"{'calls' if verified == 1 else 'call'} getUser() or getClaims() and no server file calls "
+                     "getSession() alone. A static read cannot prove every server-side decision uses the verified "
+                     "user; confirm a forged or expired session cookie is refused.", verified_at)]
     if uses:
         return [make("AUTH-01", "skip", "Supabase auth is only used in client code.")]
     return []
@@ -377,7 +458,7 @@ def cron_secret(project):
         if isinstance(config, dict) else []
     if not crons:
         return []
-    bad, ok = [], []
+    bad, ok, unsure = [], [], []
     for path in crons:
         segs = [re.escape(s) for s in path.split("?")[0].strip("/").split("/") if s]
         group = r"(?:/\([^/]+\))*"
@@ -386,15 +467,56 @@ def cron_secret(project):
         files = [f for f in project.files if rx.search(f)]
         if not files:
             bad.append(Finding("vercel.json", 1, f"cron path {path} has no route file in the project"))
-        elif "CRON_SECRET" in project.text(files[0]):
-            ok.append(files[0])
         else:
-            bad.append(Finding(files[0], 1, f"cron route {path} never checks CRON_SECRET"))
+            rel = files[0]
+            code = _code(project, rel)
+            if (at := _cron_check(code)) is not None:
+                ok.append(_at(project, rel, code, at, f"cron route {path} compares CRON_SECRET with the request "
+                              "and rejects a mismatch here"))
+            elif (at := code.find("CRON_SECRET")) >= 0 or (at := _guard_at(code)) is not None:
+                unsure.append(_at(project, rel, code, at, f"cron route {path} has a secret or auth reference, but "
+                                  "no condition that compares CRON_SECRET with the request and rejects it"))
+            else:
+                bad.append(Finding(rel, 1, f"cron route {path} never checks CRON_SECRET"))
     if bad:
         return [make("NEXT-15", "fail", f"{plural(len(bad), 'cron route')} "
                      f"{'runs' if len(bad) == 1 else 'run'} for anyone who calls the URL. Compare "
-                     "the Authorization header with Bearer ${CRON_SECRET}.", bad)]
-    return [make("NEXT-15", "pass", f"Every cron route ({len(ok)}) checks CRON_SECRET.", evidence=ok)]
+                     "the Authorization header with Bearer ${CRON_SECRET}.", bad + unsure + ok)]
+    if unsure:
+        return [make("NEXT-15", "manual", f"Not proven: {plural(len(unsure), 'cron route')} "
+                     f"{'mentions' if len(unsure) == 1 else 'mention'} a secret or auth check, but the read found no "
+                     "condition that compares CRON_SECRET with the Authorization header and rejects the request. "
+                     "Confirm a call without the secret gets 401.", unsure + ok)]
+    # Never a pass: if CRON_SECRET is unset in the deployment, the comparison can match "Bearer undefined".
+    return [make("NEXT-15", "manual", f"Not proven: every cron route ({len(ok)}) compares CRON_SECRET with the "
+                 "request and rejects a mismatch. Confirm CRON_SECRET is set in the deployment and a call without "
+                 "it gets 401.", ok)]
+
+
+CRON_ASSIGN = re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]*)")
+REQUEST_VALUE = r"\b(?:headers|authorization|searchParams|query)\b"
+REJECTS = re.compile(r"!==?|!\s*(?:await\s+)?[\w$.]*(?:timingSafeEqual|[Ee]qual|[Cc]ompare)[\w$]*\s*\(")
+
+
+def _cron_check(code):
+    """Offset of an if whose condition compares CRON_SECRET (or a name holding it) with a request value (the
+    Authorization header, another header, the query, or a name holding one) on the mismatch side and whose body
+    returns or throws, or None."""
+    secret, request = [r"\bCRON_SECRET\b"], [REQUEST_VALUE]
+    for m in CRON_ASSIGN.finditer(code):
+        if "CRON_SECRET" in m.group(2):
+            secret.append(r"(?<![\w$.])" + re.escape(m.group(1)) + r"(?![\w$])")
+        if re.search(REQUEST_VALUE, m.group(2)):
+            request.append(r"(?<![\w$.])" + re.escape(m.group(1)) + r"(?![\w$])")
+    secret_rx = re.compile("|".join(secret))
+    request_rx = re.compile("|".join(request))
+    for h in COND_HEAD.finditer(code):
+        cond = _paren(code, h.end())
+        body = code[h.end() + len(cond) + 1:h.end() + len(cond) + 200]
+        if secret_rx.search(cond) and request_rx.search(cond) and REJECTS.search(cond) and \
+                re.match(r"\s*\{?\s*(?:return|throw)\b", body):
+            return h.start()
+    return None
 
 
 def next_config(project):
