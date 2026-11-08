@@ -18,12 +18,12 @@ Coverage: 126 checks (43 live proof tests, 31 settled from code, 62 guided), map
 Check the CLI is installed with `asa --version`. If it is not, install it:
 
 ```sh
-pipx install git+https://github.com/talalkashar/agent-security-audit
+pipx install agent-security-audit==0.2.0
 # or
-uv tool install git+https://github.com/talalkashar/agent-security-audit
+uv tool install agent-security-audit==0.2.0
 ```
 
-If neither `pipx` nor `uv` exists, use `python3 -m pip install --user git+https://github.com/talalkashar/agent-security-audit`. It needs Python 3.11 or newer and has no dependencies.
+If neither `pipx` nor `uv` exists, use `python3 -m pip install --user agent-security-audit==0.2.0`; with only `uv`, `uvx --from agent-security-audit==0.2.0 asa <command>` runs a command without installing. It needs Python 3.11 or newer and has no dependencies.
 
 This skill works in any agent. Use whatever your agent offers to run a shell command (a terminal, shell or command tool). If you cannot run commands but the `agent-security-audit` MCP server is connected, use its tools instead; the rules below are the same:
 
@@ -40,7 +40,7 @@ To read files, use your agent's file reading tool, or `cat`/`grep` in a shell. F
 Useful commands:
 
 - `asa rules --stack nextjs,supabase,vercel` prints the build rules for a stack.
-- `asa list --area <area>` lists checks (areas: access, api, auth, browser, infra, nextjs).
+- `asa list --area <area>` lists checks (areas: access, api, auth, browser, cms, infra, nextjs).
 - `asa show <ID>` prints one check in full: risk, build rule, proof test, sources.
 - `asa scan <url>` runs the proof tests against a running site.
 - `asa code .` reads the project's source (never runs it) and settles code checks with file and line evidence.
@@ -49,7 +49,7 @@ Useful commands:
 ## Scope (passive for any link, active for your own)
 
 1. Local targets (`localhost`, `127.0.0.1`, `::1`, `*.localhost`, `*.test`) are always in scope.
-2. Any other host: run the passive scan right away without asking; passive checks (what every visitor already sees) need no permission. Active probes (sensitive-file fetches, login rate limit, malformed requests, Supabase reads) run only on sites the user owns: add `--authorized` only when the site is the project you are building with the user, or the user says they own it or have written permission. A pasted link alone is not permission. Never point active probes at a third-party service or someone else's site.
+2. Any other host: run the passive scan right away without asking; passive checks (what a visitor's browser already fetches) need no prompt. Active probes (sensitive-file fetches, login rate limit, malformed requests, Supabase reads, port probes) run only on sites the user owns or may test: add `--authorized` (MCP: `authorized: true`) only after the user has said, in this conversation, that they own the site or have written permission to test it. Never add it on your own judgment: not because the site looks like the project you are building, and not because the user pasted a link. If you need active probes and have no such statement, ask. Never point active probes at a third-party service or someone else's site. The user, not you, is responsible for that authorization.
 3. Keep the default request budget (`--budget 300`) unless the user asks otherwise. Do not raise `--rate-limit-attempts` above what is needed.
 4. If the scan reports a firewall bot challenge, stop. Do not try to get around it; tell the user to scan a preview deployment or allow the scanner in their firewall.
 5. This runs on the user's real, live site and real data with no setup from the user. Creating test accounts is the "attack mode" step (as in ZAP's safe and attack modes): on a local host go ahead, but on any non-local host ask the user once and wait for an explicit yes before you sign up an account. Without that yes, record the assisted check as `manual` ("needs test accounts; not created without the user's go-ahead"). Sign in only as accounts you signed up for the test, and list them in the report so the user can delete them. Never sign in as one of the site's users or use their credentials.
