@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import unicodedata
 from datetime import UTC, datetime
 from urllib.parse import quote
 
@@ -77,10 +78,22 @@ MD_SPECIAL = re.compile(r"([\\`*_\[\]<>#|!])")
 MAX_TEXT = 1000
 
 
+BREAKS = ("Cc", "Zl", "Zp")       # control characters and Unicode line or paragraph separators: become one space
+INVISIBLE = ("Cf", "Co", "Cs")    # format (zero-width, bidi overrides, tag characters), private use, surrogates
+
+
+def strip_invisible(text):
+    """Text with every Cc, Zl and Zp character turned into a line break and every Cf, Co and Cs character dropped,
+    so a value the target chose cannot hide or reorder text (bidi overrides, U+E0000 tags, zero-width)."""
+    return "".join("\n" if cat in BREAKS else "" if cat in INVISIBLE else ch
+                   for ch, cat in ((c, unicodedata.category(c)) for c in str(text)))
+
+
 def _clean(text, limit=MAX_TEXT):
-    """Collapse control characters (line breaks included) to one space and cap the length. Summaries and evidence
-    carry values the scanned site chose, so they must not be able to start new Markdown lines."""
-    text = CONTROL.sub(" ", str(text)).strip()
+    """Collapse control characters (line breaks included) to one space, drop invisible format characters, and cap
+    the length. Summaries and evidence carry values the scanned site chose, so they must not be able to start new
+    Markdown lines or hide text."""
+    text = CONTROL.sub(" ", strip_invisible(text)).strip()
     return text if len(text) <= limit else text[:limit] + "..."
 
 

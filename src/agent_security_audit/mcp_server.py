@@ -228,8 +228,9 @@ def _compact(data):
 
 
 def _data(text, limit):
-    """Text quoted from the target: control characters (C0, DEL, C1) collapsed to one space, length capped."""
-    text = CONTROL.sub(" ", str(text)).strip()
+    """Text quoted from the target: control characters (C0, DEL, C1, line and paragraph separators) collapsed to one
+    space, invisible format and private-use characters dropped, then length capped."""
+    text = CONTROL.sub(" ", report.strip_invisible(text)).strip()
     return text if len(text) <= limit else text[:limit] + "... (cut)"
 
 
