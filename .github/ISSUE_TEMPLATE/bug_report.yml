@@ -1,0 +1,52 @@
+name: Bug report
+description: asa crashed, gave wrong output, or did not do what the docs say.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a check that reported the wrong result, use the **False positive or false negative** form instead.
+        Security problems in the tool go through a private report (see SECURITY.md), not here.
+        Never paste secrets, tokens, cookies or personal data.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `asa --version`.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, and how you run it (CLI, MCP server, skill, agent name).
+      placeholder: macOS 15, Python 3.12, CLI via pipx
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or MCP call
+      description: The exact command or tool call. Replace hosts you do not want to share with `example.test`.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Output or traceback, with secrets removed.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Against the local lab (`asa lab`) if you can.

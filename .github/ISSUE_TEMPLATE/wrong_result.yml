@@ -1,0 +1,65 @@
+name: False positive or false negative
+description: A check failed a site that has the defense, or passed one that does not.
+labels: ["check-accuracy"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Only report results from sites you own or have written permission to test.
+        Never paste secrets, tokens, cookies or personal data. Write "contents not shown" in their place.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - False positive (reported fail or warn, but the defense is in place)
+        - False negative (reported pass or not applicable, but the flaw is there)
+        - Wrong status (should be skip or manual)
+    validations:
+      required: true
+  - type: input
+    id: check_id
+    attributes:
+      label: Check ID
+      placeholder: INFRA-04
+    validations:
+      required: true
+  - type: dropdown
+    id: target_type
+    attributes:
+      label: Target type
+      options:
+        - Live site (asa scan)
+        - Local dev server (asa scan on localhost)
+        - Source code (asa code)
+        - Built-in lab (asa lab)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: stack
+    attributes:
+      label: Stack and host
+      description: Framework, version and hosting, for example Next.js 15 on Vercel with Supabase.
+  - type: input
+    id: version
+    attributes:
+      label: asa version
+      description: Output of `asa --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence from the report
+      description: The evidence line asa printed (request, status, header, or file and line), with secrets removed.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: reality
+    attributes:
+      label: What is actually true
+      description: How you know the result is wrong, for example the response header, the config, or the code that has the defense.
+    validations:
+      required: true
