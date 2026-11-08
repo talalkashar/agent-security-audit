@@ -1,6 +1,7 @@
 """A local practice site in two modes, used by the tests and by `asa lab`.
 
-`vulnerable` makes every automated check fail; `fixed` makes every one pass (or skip where it needs HTTPS or DNS).
+`vulnerable` makes every automated check fail (or warn where warn is its ceiling); `fixed` makes every one pass
+(or skip where it needs HTTPS or DNS). tests/test_lab_e2e.py lists the exact expected status of each check.
 All "secrets" here are built at runtime from fake parts and are not valid credentials anywhere.
 It listens on 127.0.0.1 only.
 """
@@ -147,7 +148,7 @@ class LabHandler(BaseHTTPRequestHandler):
     def _security_headers(self):
         origin = self.headers.get("Origin")
         if self.mode == "vulnerable":
-            out = [("X-Powered-By", "Next.js")]
+            out = [("X-Powered-By", "Next.js"), ("Referrer-Policy", "unsafe-url")]
             if origin:
                 out += [("Access-Control-Allow-Origin", origin), ("Access-Control-Allow-Credentials", "true")]
             return out
