@@ -101,7 +101,7 @@ URL = re.compile(r"(?i)(?:\b(?:https?|wss?)|\{\})://([^/\s\"'`<>()\\?#]+)")
 LABEL = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
 HOSTNAME = re.compile(rf"(?i)^\.?{LABEL}(?:\.{LABEL})*\.[a-z][a-z0-9-]*[a-z0-9]\.?$")
 # Bare names that look like hosts but are file names or library names.
-NOT_A_HOST = re.compile(r"(?i)(^\.env\b|\.(json|lock|lockb|yaml|yml|txt|toml|js|ts|sum|md|py|exe)$)")
+NOT_A_HOST = re.compile(r"(?i)(^\.env\b|\.(json|lock|lockb|yaml|yml|txt|toml|js|ts|sum|md|py|exe|cfg)$)")
 
 
 def _strings(tree):

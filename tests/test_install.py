@@ -12,7 +12,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from agent_security_audit import cli, install
+from agent_security_audit import __version__, cli, install
 
 ROOT = Path(__file__).resolve().parent.parent
 SKILL = ROOT / "skills" / "agent-security-audit" / "SKILL.md"
@@ -418,7 +418,7 @@ class InstallTest(unittest.TestCase):
         data = tomllib.loads(text)
         self.assertEqual(data["mcp_servers"]["other"], {"command": "o"})
         self.assertEqual(data["mcp_servers"]["agent-security-audit"],
-                         {"command": "uvx", "args": ["--from", f"git+{install.REPO}", "asa-mcp"]})
+                         {"command": "uvx", "args": ["--from", f"agent-security-audit=={__version__}", "asa-mcp"]})
         self.assertEqual((path.parent / "config.toml.bak").read_text(), original)
         self.asa("codex", "--yes")
         self.assertEqual(path.read_text(), text)  # already there: untouched
@@ -474,6 +474,51 @@ class InstallTest(unittest.TestCase):
             with mock.patch.object(install.shutil, "which", lambda name, p=path: p):
                 self.assertEqual(install.server_command()[0], "uvx", path)
         self.assertEqual(install.server_command(), (FAKE_MCP, []))
+
+    def test_uvx_fallback_is_the_pinned_pypi_release_not_git_head(self):
+        with mock.patch.object(install.shutil, "which", lambda name: None), \
+                mock.patch.object(install.sys, "argv", [str(self.home / "nowhere" / "asa")]):
+            command, args, reason = install.server_choice()
+        self.assertEqual((command, args), ("uvx", ["--from", f"agent-security-audit=={__version__}", "asa-mcp"]))
+        self.assertIn("pinned", reason)
+        self.assertFalse(any("git+" in a for a in args))
+
+    def test_project_virtualenv_asa_mcp_is_not_written_into_configs(self):
+        # A project venv can be deleted at any time; the pinned uvx command is written instead.
+        root = Path(tempfile.mkdtemp(dir=self.home))
+        venv = root / "proj" / ".venv"
+        (venv / "bin").mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        entry = str(venv / "bin" / "asa-mcp")
+        with mock.patch.object(install.shutil, "which", lambda name: entry), \
+                mock.patch.object(install, "_ephemeral", lambda path: False):
+            command, _, reason = install.server_choice()
+            self.assertEqual(command, "uvx")
+            self.assertIn("virtual environment", reason)
+            code, out = self.asa("cursor")
+            written = install.plan("cursor", self.home, self.cwd)[0].new_text
+        self.assertEqual(code, 0)
+        self.assertIn(f"Server command: uvx --from agent-security-audit=={__version__} asa-mcp", out)
+        self.assertIn("virtual environment", out)
+        self.assertNotIn(entry, written)
+        self.assertEqual(json.loads(written)["mcpServers"]["agent-security-audit"]["command"], "uvx")
+
+    def test_pipx_and_uv_tool_environments_are_stable(self):
+        root = Path(tempfile.mkdtemp(dir=self.home))
+        for managed in (root / "pipx" / "venvs" / "agent-security-audit",
+                        root / "uv" / "tools" / "agent-security-audit"):
+            (managed / "bin").mkdir(parents=True)
+            (managed / "pyvenv.cfg").write_text("home = /usr/bin\n")
+            entry = str(managed / "bin" / "asa-mcp")
+            with mock.patch.object(install.shutil, "which", lambda name, e=entry: e), \
+                    mock.patch.object(install, "_ephemeral", lambda path: False):
+                self.assertEqual(install.server_command(), (entry, []), entry)
+
+    def test_dry_run_explains_the_server_command(self):
+        code, out = self.asa("cursor")
+        self.assertEqual(code, 0)
+        self.assertIn(f"Server command: {FAKE_MCP}", out)
+        self.assertIn("installed asa-mcp", out)
 
     def test_packaged_skill_matches_repo_skill(self):
         self.assertEqual(install.skill_text(), SKILL.read_text(encoding="utf-8"))

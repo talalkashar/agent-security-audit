@@ -12,6 +12,7 @@ a symlink. A home config may follow a symlink only when the real file stays insi
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -26,8 +27,14 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
+from . import __version__
+
 NAME = "agent-security-audit"
 REPO = "https://github.com/talalkashar/agent-security-audit"
+# The PyPI release this code belongs to. Configs that run through uvx pin it, so an agent never runs a newer build
+# than the one the user installed and reviewed.
+PINNED = f"{NAME}=={__version__}"
+UVX_ARGS = ["--from", PINNED, "asa-mcp"]
 AGENTS = ("claude-code", "claude-desktop", "cursor", "vscode", "windsurf", "codex", "gemini", "antigravity")
 INLINE_SERVERS = re.compile(r"^\s*mcp_servers\s*=", re.MULTILINE)
 
@@ -53,15 +60,47 @@ _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
 def server_command(uvx=False):
-    """The command and args the agent runs: the installed asa-mcp by absolute path, else uvx from the repository."""
-    if not uvx:
-        found = shutil.which("asa-mcp")
-        if not found:
-            beside = Path(sys.argv[0]).resolve().parent / ("asa-mcp.exe" if os.name == "nt" else "asa-mcp")
-            found = str(beside) if beside.is_file() else None
-        if found and not _ephemeral(found):
-            return found, []
-    return "uvx", ["--from", f"git+{REPO}", "asa-mcp"]
+    """The command and args the agent runs (see `server_choice`)."""
+    command, args, _ = server_choice(uvx)
+    return command, args
+
+
+def server_choice(uvx=False):
+    """(command, args, reason). A stable installed asa-mcp (pipx, uv tool, a system or user install) is written by
+    the path it has on PATH. An asa-mcp inside a throwaway environment (a uvx cache, a temp folder, a project
+    virtualenv) is not, because the agent's config would break when that folder goes away; the pinned
+    `uvx --from agent-security-audit==<version> asa-mcp` is written instead."""
+    if uvx:
+        return "uvx", list(UVX_ARGS), f"--uvx was given: uvx runs the pinned PyPI release {PINNED}"
+    found = shutil.which("asa-mcp")
+    if not found:
+        beside = Path(sys.argv[0]).resolve().parent / ("asa-mcp.exe" if os.name == "nt" else "asa-mcp")
+        found = str(beside) if beside.is_file() else None
+    if not found:
+        return "uvx", list(UVX_ARGS), f"no asa-mcp on PATH, so uvx runs the pinned PyPI release {PINNED}"
+    if _ephemeral(found):
+        return "uvx", list(UVX_ARGS), (f"the asa-mcp found ({found}) is in a temporary environment that may "
+                                       f"vanish, so uvx runs the pinned PyPI release {PINNED} instead")
+    venv = _virtualenv(found)
+    if venv is not None:
+        return "uvx", list(UVX_ARGS), (f"the asa-mcp found ({found}) is inside the virtual environment {venv}, "
+                                       f"which may be deleted, so uvx runs the pinned PyPI release {PINNED} instead "
+                                       "(install the CLI with `pipx install agent-security-audit` or "
+                                       "`uv tool install agent-security-audit` to use a stable asa-mcp)")
+    return found, [], f"the installed asa-mcp at {found}, outside any temporary or project environment"
+
+
+def _virtualenv(path):
+    """The project virtualenv folder an asa-mcp lives in, or None. pipx and `uv tool` environments count as stable:
+    they are managed installs that survive upgrades, and their PATH entry (~/.local/bin) is outside the venv."""
+    entry = Path(os.path.abspath(path))
+    root = entry.parent.parent  # <venv>/bin/asa-mcp or <venv>\Scripts\asa-mcp.exe
+    if not (root / "pyvenv.cfg").is_file():
+        return None
+    parts = [p.lower() for p in root.parts]
+    pairs = set(itertools.pairwise(parts))
+    managed = ("pipx", "venvs") in pairs or ("uv", "tools") in pairs
+    return None if managed else root
 
 
 def _ephemeral(path):
@@ -424,6 +463,8 @@ def run(agent, yes=False, uvx=False, home=None, cwd=None, out=None):
     pending = any(c.action in ("create", "update") for c in changes)
     if yes and pending:
         apply(changes)
+    command, args, reason = server_choice(uvx)
+    print(f"Server command: {' '.join([command, *args])}\n    ({reason})", file=out)
     print(describe(changes, wrote=yes), file=out)
     if pending and not yes:
         print(f"Dry run: nothing was written. Run `asa install {agent} --yes` to write it "
@@ -432,7 +473,6 @@ def run(agent, yes=False, uvx=False, home=None, cwd=None, out=None):
         print(f"Done. Restart {agent} so it loads the server.", file=out)
     else:
         print("Nothing to change.", file=out)
-    command, _ = server_command(uvx)
     if command == "uvx" and not shutil.which("uvx"):
         print("Note: the server runs through uvx, which is not on PATH; install uv (https://docs.astral.sh/uv/).",
               file=out)
