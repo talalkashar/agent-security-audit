@@ -58,6 +58,8 @@ def show_markdown(c):
 def _owasp(values):
     """--owasp values, checked against the OWASP ids so a typo is an error, not an empty list."""
     queries = _csv(values)
+    if values and not queries:
+        raise ValueError("--owasp needs a category such as A01, API1 or A03:2021")
     bad = [q for q in queries or [] if not catalog.owasp_query_valid(q)]
     if bad:
         raise ValueError(f"unknown OWASP category {', '.join(bad)}; use A01 to A10, API1 to API10, or a full id "

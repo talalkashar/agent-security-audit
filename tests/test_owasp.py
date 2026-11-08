@@ -82,6 +82,14 @@ class OwaspFilterTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("unknown OWASP category", err)
 
+    def test_cli_filter_rejects_empty_value(self):
+        for value in ("", " , "):
+            with self.subTest(value=value):
+                code, out, err = call("list", "--owasp", value)
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                self.assertIn("--owasp needs a category", err)
+
     def test_show_names_owasp(self):
         _, out, _ = call("show", "API-08")
         self.assertIn("OWASP A10:2021", out)
