@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agent-security-audit social preview</title>
+<!-- Source for docs/assets/social-preview.png (1280x640). Render:
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+    --screenshot=docs/assets/social-preview.png --window-size=1280,640 --hide-scrollbars \
+    file://$PWD/docs/assets/social-preview.html
+  Facts come from `asa list` (120 checks, OSI layers 1-7); the terminal lines are a real
+  `asa scan` of the built-in practice site (`asa lab`). -->
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    background: #0b0d10;
+    background-image:
+      radial-gradient(900px 500px at 100% 0%, rgba(46, 160, 67, 0.10), transparent 60%),
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: auto, 32px 32px, 32px 32px;
+    color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    padding: 64px 72px;
+    display: flex; flex-direction: column;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .name { font-size: 64px; font-weight: 700; letter-spacing: -1.5px; }
+  .name span { color: #3fb950; }
+  .tag { margin-top: 18px; font-size: 28px; line-height: 1.35; color: #9da7b3; max-width: 1080px; }
+  .facts { margin-top: 34px; display: flex; gap: 14px; }
+  .fact {
+    border: 1px solid #2a313a; background: rgba(22, 27, 34, 0.85); border-radius: 8px;
+    padding: 10px 18px; font-size: 20px; color: #c9d1d9;
+  }
+  .fact b { color: #e6edf3; font-weight: 600; }
+  .term {
+    margin-top: 34px; border: 1px solid #2a313a; border-radius: 10px; background: #010409;
+    padding: 18px 22px; font-size: 17px; line-height: 1.6; color: #c9d1d9;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .term div { overflow: hidden; text-overflow: ellipsis; }
+  .prompt { color: #6e7681; }
+  .crit { color: #f85149; font-weight: 600; }
+  .dim { color: #8b949e; }
+  .url { margin-top: auto; font-size: 20px; color: #8b949e; }
+</style>
+</head>
+<body>
+  <div class="name mono"><span>&gt;</span> agent-security-audit</div>
+  <div class="tag">Your coding agent builds the site. This makes it prove the defenses work before you ship.</div>
+  <div class="facts">
+    <div class="fact"><b>120</b> checks</div>
+    <div class="fact">OSI layers <b>1-7</b></div>
+    <div class="fact"><b>CLI</b> + <b>skill</b> + <b>MCP</b></div>
+  </div>
+  <div class="term mono">
+    <div><span class="prompt">$</span> asa scan http://127.0.0.1:8651</div>
+    <div class="dim">16 failed · 6 warnings · 0 could not run · 83 to check in code · 0 passed · 15 not applicable</div>
+    <div> 1. <span class="crit">[critical]</span> INFRA-04 Sensitive files not served (.env, .git, backups, .DS_Store): Sensitive files are downloadable: /.env (environment file), /.git/HEAD (git metadata).</div>
+  </div>
+  <div class="url mono">github.com/talalkashar/agent-security-audit</div>
+</body>
+</html>
