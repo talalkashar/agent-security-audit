@@ -49,7 +49,7 @@ Install the latest security patches on a currently supported minor release. The 
 ### Proof test
 
 1. Use an unambiguous numeric generator version from the existing crawl; never infer a version from Drupal.settings or asset query parameters.
-2. Compare only explicit known minor ranges against the static vendor snapshot dated 2026-11-07. Fail: a generator reports a known vendor-ended line (Drupal 7–9, Drupal 10.0–10.5 or 11.0–11.2, Joomla 3/4 or superseded Joomla 5/6 minors). Warn: an older known line (WordPress 3–6 or 7.0, Drupal 10.6, Joomla 5.4). Pass: the reported minor was supported at the snapshot date; patch currency is not proved.
+2. Compare only explicit known minor ranges against the static vendor snapshot dated 2026-11-07. Fail: a generator reports a known vendor-ended line (Drupal 7–9, Drupal 10.0–10.5 or 11.0–11.2, Joomla 3/4 or superseded Joomla 5/6 minors). Warn: an older known line (WordPress 3–6 or 7.0, Drupal 10.6, Joomla 5.4). Warn also: a supported line below its latest known patch (WordPress 7.1.0 when 7.1.4 is known; a bare `7.1` counts as 7.1.0). Pass: the reported version is the latest known patch of a line supported at the snapshot date. Manual: once the snapshot is more than 90 days old ("support data stale"), except that a vendor-ended line still fails.
 3. Manual: missing, conflicting, prerelease, major-only or unknown versions, unknown patch numbers, newer lines, or parsing limits. Patch bounds are recorded for WordPress 6.9/7.0/7.1, Drupal 10.6/11.3/11.4 and Joomla 5.4/6.2; other historical nonzero patch numbers require review. Skip: no self-hosted CMS marker. Confirm the installed version and current vendor guidance in the admin dashboard.
 
 ### Sources

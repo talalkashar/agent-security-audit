@@ -99,8 +99,8 @@ Allow only TLS 1.2 and 1.3 on every hostname. On self-managed servers set the mi
 
 1. Attempt a handshake to <host>:443 limited to TLS 1.1, then to TLS 1.0.
 2. Attempt a handshake limited to TLS 1.2.
-3. Pass: both legacy handshakes fail and TLS 1.2 succeeds.
-4. Fail: either legacy handshake succeeds.
+3. Pass: the server refuses both legacy handshakes with a protocol-version alert and TLS 1.2 succeeds.
+4. Fail: either legacy handshake succeeds. Manual: a legacy handshake fails for another reason (handshake failure, reset, closed connection), which does not prove the version is refused.
 
 ### Sources
 
@@ -121,7 +121,7 @@ Never put secrets, .git, dumps (*.sql, *.dump), archives (*.zip, *.tar.gz), *.ba
 ### Proof test
 
 1. GET a fixed short list of paths on each production and preview host: /.env, /.env.local, /.env.production, /.git/HEAD, /.git/config, /backup.zip, /db.sql, /dump.sql, /.DS_Store. No crawling or fuzzing.
-2. Count a path as exposed only if it returns 200 and the body looks like the real file: KEY=VALUE lines for .env, "ref: refs/" for .git/HEAD, "[core]" for .git/config, SQL statements for dumps, the .DS_Store file signature. A 200 HTML page from an SPA catch-all route is not a finding.
+2. Count a path as exposed only if it returns 200 and the body looks like the real file: KEY=VALUE lines for .env (one line is enough, keys in any case, and most of the non-comment lines must be KEY=VALUE), "ref: refs/" for .git/HEAD, "[core]" for .git/config, SQL statements for dumps, the .DS_Store file signature. A 200 HTML page from an SPA catch-all route is not a finding.
 3. Pass: no path exposed.
 4. Fail: any exposed path. Stop reading at the marker match, report it, and rotate every secret the file could contain.
 
@@ -611,10 +611,10 @@ Bind databases, caches and the Docker daemon to localhost or a private network. 
 
 ### Proof test
 
-1. Resolve the site's hostname and take its first address.
+1. Resolve the site's hostname and take its first address (moving to the next one if this machine has no route to it, as an HTTPS connection would).
 2. Open a TCP connection to 1433, 2375, 3306, 5432, 6379, 9200, 11211 and 27017 on that address, then close it at once. Nothing is sent, no banner is read, no login is tried. Each connection counts against the request budget; `--no-ports` turns the check off.
 3. If any port opens, also try port 1 (unused); if that opens too, the address accepts every port and the result is manual.
-4. Pass: none of the ports accept a connection. Fail: any of them does. Local development hosts are skipped. Behind a CDN this tests the edge, so also test the origin server's address.
+4. Pass: none of the ports accept a connection and at least one refused it. Fail: any of them does. Manual: every probe timed out, so egress filtering on the scanning network cannot be ruled out. Error: this machine could not reach the address (no route, for example IPv6 without an IPv6 route, or a local firewall). Local development hosts are skipped. Behind a CDN this tests the edge, so also test the origin server's address.
 
 ### Sources
 
@@ -638,10 +638,10 @@ Close Telnet, RDP and VNC to the internet; reach servers through a VPN, a bastio
 
 ### Proof test
 
-1. Resolve the site's hostname and take its first address.
+1. Resolve the site's hostname and take its first address (moving to the next one if this machine has no route to it, as an HTTPS connection would).
 2. Open a TCP connection to 22, 23, 3389 and 5900 on that address, then close it at once. Nothing is sent and no login is tried. Each connection counts against the request budget; `--no-ports` turns the check off.
 3. If any port opens, also try port 1 (unused); if that opens too, the address accepts every port and the result is manual.
-4. Pass: none accept a connection. Warn: only SSH (22) is open. Fail: Telnet, RDP or VNC is open. Local development hosts are skipped.
+4. Pass: none accept a connection and at least one refused it. Manual: every probe timed out. Error: this machine could not reach the address. Warn: only SSH (22) is open. Fail: Telnet, RDP or VNC is open. Local development hosts are skipped.
 
 ### Sources
 
@@ -663,9 +663,9 @@ Use the Mozilla "intermediate" configuration: TLS 1.2 with ECDHE or DHE key exch
 
 ### Proof test
 
-1. Attempt a TLS 1.2 handshake offering only RC4, 3DES, DES, export and NULL suites.
+1. Attempt a TLS 1.2 handshake for each broken family on its own: RC4, 3DES, DES, export and NULL suites.
 2. Attempt a TLS 1.2 handshake offering only static RSA key exchange suites.
-3. Pass: both handshakes fail. Warn: only static RSA is accepted. Fail: a broken suite is accepted. Skip when this machine's TLS library cannot offer the suites; plain HTTP and local hosts are skipped.
+3. Pass: every handshake is refused with a handshake-failure alert. Warn: only static RSA is accepted. Fail: a broken suite is accepted. Manual: a handshake fails another way (reset, closed connection). Skip when this machine's TLS library cannot offer one of the families; plain HTTP and local hosts are skipped.
 
 ### Sources
 

@@ -69,9 +69,14 @@ def _ports_result(ctx, check_id, ports, names, warn_ports=()):
     why = _port_skip(ctx)
     if why:
         return skipped(check_id, why)
-    address = ctx.client.target_address()
     states = _probe(ctx, ports)
+    address = ctx.client.target_address()  # after probing: an address this machine cannot reach is skipped
     ev = _port_lines(address, states, names)
+    unreachable = [p for p, s in states.items() if s == "unreachable"]
+    if unreachable:
+        return Result(check_id, "error", f"This machine could not reach {address} on {count(len(unreachable), 'port')} "
+                       "(no route to the address, or a local firewall refused the connection), so those ports were "
+                       "not tested. Run the scan from a network that can reach the server.", ev)
     opened = [p for p, s in states.items() if s == "open"]
     if opened and _accepts_everything(ctx):
         return Result(check_id, "manual", f"{address} accepts a connection on every port, including unused port "
@@ -85,6 +90,10 @@ def _ports_result(ctx, check_id, ports, names, warn_ports=()):
         listed = ", ".join(f"{p} ({names[p]})" for p in opened)
         return warned(check_id, f"{address} accepts connections on {listed}. Limit it to known addresses or a VPN.",
                       ev)
+    if all(s == "filtered" for s in states.values()):
+        return Result(check_id, "manual", f"No port answered at all on {address}: every probe timed out. That fits a "
+                      "firewall that drops traffic, but egress filtering on this machine's network cannot be ruled "
+                      f"out, so the ports are not proven closed. Re-run from another network. {NOTE_CDN}", ev)
     return passed(check_id, f"None of the {len(ports)} ports accept a connection from this machine. {NOTE_CDN}", ev)
 
 
@@ -101,15 +110,22 @@ def admin_ports(ctx):
 
 # --- TLS 1.2 cipher suites (layer 6) -----------------------------------------------------------------------------
 
-# Broken: RC4 (RFC 7465), 3DES and DES (64-bit blocks), export grade and NULL encryption.
+# Broken: RC4 (RFC 7465), 3DES and DES (64-bit blocks), export grade and NULL encryption. Each family is offered on
+# its own, so a family this machine cannot offer is reported untested instead of hiding behind one it can.
+BROKEN_FAMILIES = (("RC4", "RC4:@SECLEVEL=0"), ("3DES", "3DES:@SECLEVEL=0"), ("DES", "DES:!3DES:@SECLEVEL=0"),
+                   ("export", "EXPORT:@SECLEVEL=0"), ("NULL", "eNULL:@SECLEVEL=0"))
 BROKEN_CIPHERS = "RC4:3DES:DES:EXPORT:eNULL:@SECLEVEL=0"
 # Static RSA key exchange: works, but a later key leak decrypts every recorded session (no forward secrecy).
 STATIC_RSA = "kRSA:!RC4:!3DES:!DES:!EXPORT:!eNULL:!aNULL:@SECLEVEL=0"
+# The server's answer when it shares no offered suite. Anything else (a reset, a closed connection, a version alert)
+# does not prove the suites are refused.
+CIPHER_REFUSALS = ("HANDSHAKE_FAILURE", "HANDSHAKE FAILURE", "NO_SHARED_CIPHER", "NO SHARED CIPHER",
+                   "INSUFFICIENT_SECURITY", "INSUFFICIENT SECURITY")
 
 
 def _try_ciphers(client, ciphers):
-    """Return the negotiated suite, None if the server refused, 'client' if this machine cannot offer any of them,
-    or 'cert' if the certificate did not verify."""
+    """Return the negotiated suite, None if the server refused (handshake failure alert), 'client' if this machine
+    cannot offer any of them, 'cert' if the certificate did not verify, or ('inconclusive', reason)."""
     context = ssl.create_default_context()
     try:
         context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -124,8 +140,21 @@ def _try_ciphers(client, ciphers):
             return tls.cipher()[0]
     except ssl.SSLCertVerificationError:
         return "cert"
-    except (ssl.SSLError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
-        return None
+    except ssl.SSLError as exc:
+        text = f"{getattr(exc, 'reason', '') or ''} {exc}".upper()
+        if any(r in text for r in CIPHER_REFUSALS):
+            return None
+        return ("inconclusive", getattr(exc, "reason", None) or type(exc).__name__)
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
+        return ("inconclusive", type(exc).__name__)
+
+
+def _cipher_line(what, value):
+    if value == "client":
+        return f"TLS 1.2 offering only {what}: this machine's OpenSSL cannot offer them"
+    if isinstance(value, tuple):
+        return f"TLS 1.2 offering only {what}: handshake failed without a cipher refusal ({str(value[1])[:80]})"
+    return f"TLS 1.2 offering only {what}: " + (f"accepted ({value})" if value else "refused")
 
 
 @auto("INFRA-26")
@@ -135,22 +164,29 @@ def weak_ciphers(ctx):
     if is_local_host(urlsplit(ctx.target).hostname or ""):
         return skipped("INFRA-26", "Local development host; cipher suites are tested on the deployed site.")
     got = {}
-    for label, ciphers in (("broken", BROKEN_CIPHERS), ("static RSA", STATIC_RSA)):
+    for label, ciphers in (*BROKEN_FAMILIES, ("static RSA", STATIC_RSA)):
         got[label] = _try_ciphers(ctx.client, ciphers)
         if got[label] == "cert":
             return errored("INFRA-26", "The certificate did not verify; fix INFRA-02 first.")
-    ev = []
-    for label, what in (("broken", "RC4, 3DES, DES, export or NULL suites"), ("static RSA", "static RSA key exchange")):
-        value = got[label]
-        ev.append(f"TLS 1.2 offering only {what}: " + ("this machine's OpenSSL cannot offer them" if value == "client"
-                                                       else f"accepted ({value})" if value else "refused"))
-    if got["broken"] not in (None, "client"):
-        return failed("INFRA-26", f"The server accepts a broken TLS 1.2 cipher suite ({got['broken']}).", ev)
-    if got["static RSA"] not in (None, "client"):
+    ev = [_cipher_line(f"{label} suites" if label != "static RSA" else "static RSA key exchange", value)
+          for label, value in got.items()]
+
+    def accepted(value):
+        return isinstance(value, str) and value != "client"
+    broken = [(label, got[label]) for label, _ in BROKEN_FAMILIES if accepted(got[label])]
+    if broken:
+        return failed("INFRA-26", f"The server accepts a broken TLS 1.2 cipher suite ({broken[0][1]}).", ev)
+    if accepted(got["static RSA"]):
         return warned("INFRA-26", f"The server accepts {got['static RSA']}, a suite without forward secrecy.", ev)
-    if "client" in got.values():
-        return skipped("INFRA-26", "This machine's TLS library cannot offer some of the weak suites, so they were not "
-                       "all tested. Run `testssl.sh` or an online TLS test instead.")
+    unclear = [label for label, value in got.items() if isinstance(value, tuple)]
+    if unclear:
+        return Result("INFRA-26", "manual", f"The handshake offering only {', '.join(unclear)} suites failed for a "
+                      "reason other than a cipher refusal, so it is not proven that the server refuses them. Run "
+                      "`testssl.sh` or an online TLS test.", ev)
+    untested = [label for label, value in got.items() if value == "client"]
+    if untested:
+        return skipped("INFRA-26", f"This machine's TLS library cannot offer {', '.join(untested)} suites, so they "
+                       "were not all tested. Run `testssl.sh` or an online TLS test instead.")
     return passed("INFRA-26", "TLS 1.2 refuses broken and non-forward-secret cipher suites.", ev)
 
 

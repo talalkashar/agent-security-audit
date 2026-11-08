@@ -10,9 +10,11 @@ import ipaddress
 import re
 from urllib.parse import urlsplit
 
-from ..crawl import crawl, is_html
+from ..crawl import SKIP_LINK, crawl, is_html
 from ..model import Result, failed, passed, skipped, warned
+from ..scope import same_origin
 from . import auto, count
+from .ratelimit import login_endpoint
 
 ONE_YEAR = 31536000
 PROBE_ORIGIN = "https://asa-origin-probe.invalid"
@@ -120,20 +122,44 @@ def _any_host(source):
     return host == "*" or (host.startswith("*.") and "." not in host[2:])
 
 
+def _sources(policy, *names):
+    """The first directive present among names (CSP fallback order), lowercased; None when none is set."""
+    for name in names:
+        if name in policy:
+            return [s.lower() for s in policy[name]]
+    return None
+
+
+def _allows_inline(sources):
+    # A nonce or hash in the list makes CSP3 browsers ignore 'unsafe-inline' (for elements and attributes alike).
+    return sources is None or ("'unsafe-inline'" in sources and not any(s.startswith(NONCE_OR_HASH) for s in sources))
+
+
 def _script_problems(policy):
-    """Problems with one policy's script directive, as a set of keys."""
-    script = policy.get("script-src", policy.get("default-src"))
-    lowered = [s.lower() for s in script]
-    has_nonce_or_hash = any(s.startswith(NONCE_OR_HASH) for s in lowered)
+    """Problems with one policy's script directives, as a set of keys. <script> elements follow script-src-elem,
+    inline event handlers follow script-src-attr, each falling back to script-src and then default-src (CSP3)."""
+    elem = _sources(policy, "script-src-elem", "script-src", "default-src")
+    attr = _sources(policy, "script-src-attr", "script-src", "default-src")
+    script = _sources(policy, "script-src", "default-src")
     out = set()
-    if "'unsafe-inline'" in lowered and not has_nonce_or_hash:
+    if _allows_inline(elem):
         out.add("inline")
+    if _allows_inline(attr):
+        out.add("inline-attr")
     # 'strict-dynamic' with a nonce or hash makes CSP3 browsers ignore host and scheme sources.
-    if any(_any_host(s) for s in lowered) and not ("'strict-dynamic'" in lowered and has_nonce_or_hash):
+    if elem is None or (any(_any_host(s) for s in elem)
+                        and not ("'strict-dynamic'" in elem and any(s.startswith(NONCE_OR_HASH) for s in elem))):
         out.add("any-host")
-    if "'unsafe-eval'" in lowered:
+    if script is None or "'unsafe-eval'" in script:
         out.add("eval")
     return out
+
+
+NONCE = re.compile(r"'nonce-([^']+)'", re.IGNORECASE)
+
+
+def _nonces(resp):
+    return {n for p in _merged_csp(resp) for v in p.values() for s in v for n in NONCE.findall(s)}
 
 
 @auto("BROWSER-01")
@@ -148,9 +174,11 @@ def _hsts(resp):
     ev = [_hdr(resp, "strict-transport-security")]
     if not value:
         return failed("BROWSER-01", "No Strict-Transport-Security header, so a first visit can be downgraded to HTTP.", ev)
-    max_age, subdomains = None, False
+    max_age, subdomains, names = None, False, []
     for part in value.split(";"):
         k, _, v = part.strip().partition("=")
+        if k.strip():
+            names.append(k.strip().lower())
         if k.strip().lower() == "max-age":
             try:
                 max_age = int(v.strip().strip('"'))
@@ -158,6 +186,10 @@ def _hsts(resp):
                 max_age = None
         elif k.strip().lower() == "includesubdomains":
             subdomains = True
+    repeated = sorted({n for n in names if names.count(n) > 1})
+    if repeated:  # RFC 6797 section 6.1: each directive at most once; browsers ignore a header that breaks this
+        return failed("BROWSER-01", f"HSTS header repeats {', '.join(repeated)}, which makes it invalid, so browsers "
+                      "ignore it. Send each directive once.", ev)
     if max_age is None:
         return failed("BROWSER-01", "HSTS header has no valid max-age, so browsers ignore it.", ev)
     if max_age == 0:
@@ -172,7 +204,22 @@ def _hsts(resp):
 
 @auto("BROWSER-02")
 def csp(ctx):
-    return per_page(ctx, _csp)
+    result = per_page(ctx, _csp)
+    if result.status not in ("pass", "warn"):
+        return result
+    # A nonce only works if it is new on every response. Fetch the home page once more (uncached) and compare.
+    home = ctx.client.home()
+    first = _nonces(home)
+    if not first:
+        return result
+    again = ctx.client.get(home.url)
+    repeated = first & _nonces(again)
+    if again.status == home.status and repeated:
+        return failed("BROWSER-02", "CSP does not stop injected scripts: the script nonce is the same on two loads "
+                      "of the home page, so an attacker can copy it into an injected script. Generate a new random "
+                      "nonce for every response.",
+                      [*result.evidence, f"GET {_page_path(home)} twice: same nonce both times (value not shown)"])
+    return result
 
 
 def _csp(resp):
@@ -184,7 +231,7 @@ def _csp(resp):
             return failed("BROWSER-02", "CSP is report-only, so it blocks nothing yet.",
                           ev + [f"content-security-policy-report-only: {ro}"])
         return failed("BROWSER-02", "No Content-Security-Policy (header or meta tag); injected scripts would run.", ev)
-    scripted = [p for p in policies if "script-src" in p or "default-src" in p]
+    scripted = [p for p in policies if {"script-src", "script-src-elem", "script-src-attr", "default-src"} & p.keys()]
     if not scripted:
         return failed("BROWSER-02", "CSP does not stop injected scripts: no script-src or default-src directive, so "
                       "scripts are unrestricted.", ev)
@@ -192,10 +239,14 @@ def _csp(resp):
     common = set.intersection(*(_script_problems(p) for p in scripted))
     problems = []
     if "inline" in common:
-        problems.append("script-src allows 'unsafe-inline' without a nonce or hash")
+        problems.append("the script policy for <script> elements (script-src-elem, else script-src) allows "
+                        "'unsafe-inline' without a nonce or hash, or is not restricted")
+    if "inline-attr" in common:
+        problems.append("the script policy for inline event handlers (script-src-attr, else script-src) allows "
+                        "'unsafe-inline' without a nonce or hash, or is not restricted")
     if "any-host" in common:
-        problems.append("script-src allows scripts from any host (*, a bare scheme such as https: or data:, or a "
-                        "wildcard host)")
+        problems.append("script-src (or script-src-elem) allows scripts from any host (*, a bare scheme such as "
+                        "https: or data:, or a wildcard host)")
     if problems:
         return failed("BROWSER-02", "CSP does not stop injected scripts: " + "; ".join(problems) + ".", ev)
     notes = []
@@ -309,7 +360,7 @@ def cookies(ctx):
     if not raw:
         return skipped("BROWSER-06", f"None of the {count(len(responses), 'crawled page')} set a cookie. Log in with a test "
                        "account and re-check the session cookie (see the proof steps).")
-    fails, warns, ev = [], [], []
+    fails, warns, ev, sessions = [], [], [], []
     for value in raw:
         name, attrs = parse_set_cookie(value)
         flags = [k for k in ("secure", "httponly") if k in attrs]
@@ -318,6 +369,8 @@ def cookies(ctx):
                   + (f", SameSite={same}" if same else ", no SameSite")
                   + (" (CSRF cookie, readable by JavaScript by design)" if is_csrf_cookie(name) else ""))
         session = _looks_like_session(name)
+        if session:
+            sessions.append(name)
         if ctx.https and "secure" not in attrs:
             fails.append(f"{name} lacks Secure")
         if same.lower() == "none" and "secure" not in attrs:
@@ -334,8 +387,16 @@ def cookies(ctx):
         return failed("BROWSER-06", "Cookie flags are missing: " + "; ".join(fails) + ".", ev)
     if warns:
         return warned("BROWSER-06", "Cookies are mostly safe: " + "; ".join(warns) + ".", ev)
+    if not sessions:
+        return Result("BROWSER-06", "manual", f"No session cookie was observed: {count(len(raw), 'cookie')} set on "
+                      f"{count(len(responses), 'crawled page')} {'has' if len(raw) == 1 else 'have'} safe flags, but "
+                      "none is named like a session cookie, and the session cookie (set at login) is the one this "
+                      "check is for. Log in with a test account and check its flags (see the proof steps).", ev)
     return passed("BROWSER-06", f"{'The' if len(raw) == 1 else 'All'} {count(len(raw), 'cookie')} set on "
-                  f"{count(len(responses), 'crawled page')} {'has' if len(raw) == 1 else 'have'} safe flags.", ev)
+                  f"{count(len(responses), 'crawled page')} {'has' if len(raw) == 1 else 'have'} safe flags, "
+                  f"including {count(len(sessions), 'session cookie')} ({', '.join(sessions[:3])}). Session cookies "
+                  "are recognised by name, so a session cookie with an unusual name is judged like any other "
+                  "cookie.", ev)
 
 
 def cors_origins(target):
@@ -354,31 +415,67 @@ def cors_origins(target):
     return out
 
 
+# CORS is usually set on API routes, not on the HTML home page, so API-looking same-origin URLs the crawl found
+# (links, form actions, the login endpoint, string literals in inline scripts) are probed too, up to MAX_CORS_APIS.
+API_PATH = re.compile(r"(?i)^/(?:[\w.-]+/)*(?:api|graphql|gql|trpc|rest)(?:/|$|\.)")
+API_LITERAL = re.compile(r"""["'`](/(?:api|graphql|gql|trpc|rest)(?:/[\w\-./]{0,120})?)["'`?]""", re.IGNORECASE)
+MAX_CORS_APIS = 3
+
+
+def api_paths(ctx):
+    """Same-origin API-looking paths found by the crawl, at most MAX_CORS_APIS, in the order found."""
+    site = crawl(ctx)
+    found = [urlsplit(u).path for u in site.links] + [urlsplit(f.action).path for f in site.forms
+                                                       if same_origin(ctx.target, f.action)]
+    login = login_endpoint(ctx)
+    if login and not login.get("refused"):
+        found.append(urlsplit(login["path"]).path)
+    for _, text in site.inline:
+        found += API_LITERAL.findall(text[:200_000])
+    out = []
+    for path in found:
+        if path and path not in out and API_PATH.match(path) and not SKIP_LINK.search(path):
+            out.append(path)
+    return out[:MAX_CORS_APIS]
+
+
 @auto("BROWSER-07")
 def cors(ctx):
     findings, ev = [], []
-    for kind, origin in cors_origins(ctx.target):
-        resp = ctx.client.get("/", headers={"Origin": origin})
-        acao = resp.get("access-control-allow-origin")
-        acac = (resp.get("access-control-allow-credentials") or "").strip().lower() == "true"
-        ev.append(f"Origin: {origin} ({kind}) -> access-control-allow-origin: {acao or '(not set)'}, "
-                  f"allow-credentials: {'true' if acac else 'no'}")
-        if acao and acao.strip().lower() == origin.lower():
-            findings.append((kind, origin, acac))
-    untrusted = [(o, c) for k, o, c in findings if k != "subdomain"]
-    subdomain = [o for k, o, c in findings if k == "subdomain" and c]
-    if any(c for _, c in untrusted):
-        bad = ", ".join(o for o, c in untrusted if c)
+    apis = api_paths(ctx)
+    tested_apis = []
+    for path in ["/"] + apis:
+        answered = False
+        for kind, origin in cors_origins(ctx.target):
+            resp = ctx.client.get(path, headers={"Origin": origin})
+            answered = answered or resp.status not in (404, 405)
+            acao = resp.get("access-control-allow-origin")
+            acac = (resp.get("access-control-allow-credentials") or "").strip().lower() == "true"
+            ev.append(f"{path} with Origin: {origin} ({kind}) -> {resp.status}, access-control-allow-origin: "
+                      f"{acao or '(not set)'}, allow-credentials: {'true' if acac else 'no'}")
+            if acao and acao.strip().lower() == origin.lower():
+                findings.append((kind, origin, acac, path))
+        if path != "/" and answered:
+            tested_apis.append(path)
+    untrusted = [(o, c, p) for k, o, c, p in findings if k != "subdomain"]
+    subdomain = [o for k, o, c, p in findings if k == "subdomain" and c]
+    if any(c for _, c, _ in untrusted):
+        bad = ", ".join(dict.fromkeys(f"{o} on {p}" for o, c, p in untrusted if c))
         return failed("BROWSER-07", f"The site echoes untrusted origins ({bad}) with credentials allowed, so other sites "
                       "can read logged-in responses.", ev)
     if untrusted:
-        return warned("BROWSER-07", "The site echoes untrusted origins without credentials; fine for public data only.",
-                      ev)
+        return warned("BROWSER-07", "The site echoes untrusted origins without credentials ("
+                      + ", ".join(dict.fromkeys(p for _, _, p in untrusted)) + "); fine for public data only.", ev)
     if subdomain:
         return warned("BROWSER-07", "The site lets any subdomain read logged-in responses (credentials allowed). That is "
                       "safe only if every subdomain is trusted: one with an XSS bug or a dangling DNS record can read "
                       "your users' data. Allow exact origins instead.", ev)
-    return passed("BROWSER-07", "Untrusted origins are not allowed to read responses.", ev)
+    if not tested_apis:
+        why = ("the API routes found answered 404 or 405" if apis else "the crawl found no API route")
+        return Result("BROWSER-07", "manual", f"The home page does not let untrusted origins read responses, but {why}, "
+                      "and CORS is usually set on API routes. Check the CORS settings of the API routes in code.", ev)
+    return passed("BROWSER-07", "Untrusted origins are not allowed to read responses on the "
+                  f"{count(1 + len(tested_apis), 'URL')} tested (/, {', '.join(tested_apis)}).", ev)
 
 
 @auto("BROWSER-08")

@@ -19,7 +19,8 @@ from .ratelimit import login_endpoint
 MAX_SCRIPTS = 40
 
 # path -> (description, test(body_bytes, content_type) -> bool). A test must match the real file, not an HTML page.
-ENV_LINE = re.compile(rb"^\s*(export\s+)?[A-Z][A-Z0-9_]{2,}\s*=", re.MULTILINE)
+# KEY=value, any case, optionally after "export". A dotenv file may hold a single line.
+ENV_LINE = re.compile(rb"(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_.-]*[ \t]*=")
 
 
 def _not_html(ctype, body):
@@ -28,7 +29,14 @@ def _not_html(ctype, body):
 
 
 def _env(body, ctype):
-    return _not_html(ctype, body) and len(ENV_LINE.findall(body[:20000])) >= 2
+    """A dotenv file: not HTML, and most of its first lines (comments and blanks aside) are KEY=value lines.
+    One line is enough; an error page or script with a stray assignment is not."""
+    if not _not_html(ctype, body):
+        return False
+    lines = [ln.strip() for ln in body[:20000].splitlines()[:50]]
+    lines = [ln for ln in lines if ln and not ln.startswith(b"#")]
+    hits = sum(ENV_LINE.match(ln) is not None for ln in lines)
+    return hits >= 1 and hits * 2 > len(lines)
 
 
 SENSITIVE_FILES = {
@@ -311,7 +319,7 @@ def error_leaks(ctx):
         ("POST", f"/api/asa-missing-{token}", "{", {"Content-Type": "application/json"}),
     ]
     extra = login_endpoint(ctx)
-    if extra:
+    if extra and not extra["refused"]:
         probes.append(("POST", extra["path"], "{", {"Content-Type": "application/json"}))
     leaks, handled, ev = [], [], []
     for method, path, body, headers in probes:
