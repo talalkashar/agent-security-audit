@@ -542,6 +542,8 @@ class DnsTest(unittest.TestCase):
             ({"example.com": ["v=spf1 include:two.test -all"], "two.test": ["v=spf1 -all", "v=spf1 ~all"]}, (),
              "has 2 SPF records"),
             ({"example.com": ["v=spf1 include:open.test -all"], "open.test": ["v=spf1 +all"]}, (), "ends in +all"),
+            ({"example.com": ["v=spf1 include:a.test -all"], "a.test": ["v=spf1 redirect=b.test"],
+              "b.test": ["v=spf1 +all"]}, (), "include a.test ends in +all"),
         ]
         for zone, nx, words in cases:
             with self.subTest(zone=zone):

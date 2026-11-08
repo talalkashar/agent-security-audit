@@ -133,10 +133,10 @@ def _walk_spf(ctx, record):
                 state["problems"].append(f"{kind} {target} has {len(found)} SPF records")
             else:
                 state["ev"].append(f"TXT {target}: {found[0]}")
-                child = found[0].lower().split()[1:]
-                if kind == "include" and _all_of(child) in ("all", "+all"):
-                    state["problems"].append(f"include {target} ends in +all, so it matches every server")
                 inner = walk(found[0], depth + 1)
+                # judge the record the include resolves to, after its own redirect (RFC 7208 5.2, 6.1)
+                if kind == "include" and _all_of(inner.lower().split()[1:]) in ("all", "+all"):
+                    state["problems"].append(f"include {target} ends in +all, so it matches every server")
                 if kind == "redirect":
                     effective = inner
             if state["lookups"] > MAX_LOOKUPS:
