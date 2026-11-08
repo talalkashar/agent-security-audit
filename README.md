@@ -15,7 +15,7 @@
 
 It runs as a skill and an MCP server for Claude Code, Codex, Cursor, Gemini CLI, Windsurf and any agent that reads `AGENTS.md`, and as a plain command line tool. Python 3.11+, no runtime dependencies.
 
-![The HTML report for the vulnerable practice site: 18 failed, 5 warnings, then the fixes, most severe first](docs/assets/report.png)
+![The HTML report for the vulnerable practice site: 16 failed, 7 warnings, then the fixes, most severe first](docs/assets/report.png)
 
 *The HTML report (`--out asa-report.html`) from a scan of the built-in practice site.*
 
@@ -32,33 +32,52 @@ Real terminal output from those two commands:
 
 ```text
 asa: http://127.0.0.1:8650
-18 failed · 5 warnings · 0 could not run · 82 to check in code · 0 passed · 15 not applicable
+16 failed · 7 warnings · 0 could not run · 82 to check in code · 0 passed · 15 not applicable
 
 Fix these first:
  1. [critical] INFRA-04 Sensitive files not served (.env, .git, backups, .DS_Store): Sensitive files are downloadable: /.env (environment file), /.git/HEAD (git metadata). Treat every secret in them as leaked and rotate it.
     Fix: Never put secrets, .git, dumps (*.sql, *.dump), archives (*.zip, *.tar.gz), *.bak or *.old under public/. Deploy through the Vercel git integration or `vercel deploy`, not a manual folder upload. Any ...
  2. [critical] NEXT-01 No secret keys in client JavaScript: Secret keys are shipped to every visitor's browser. Rotate them now, then move them to server-only code.
     Fix: Only public values may use `NEXT_PUBLIC_`: the Supabase URL, the Supabase publishable/anon key, analytics IDs, the Stripe publishable key. Never a service_role or `sb_secret_` key, `sk_live_`/`rk_live...
- 3. [high] API-01 Login endpoint is rate limited (429 + Retry-After): 30 login attempts from one client were all processed; nothing slowed them down.
-    Fix: Use Supabase Auth's built-in endpoints where possible and keep its limits on. For any custom route or Server Action that checks a password, OTP, reset or invite code, enforce a shared-store limiter (U...
+ 3. [high] API-21 No public debug or status endpoints: Debug or status pages are public: /actuator/env (Spring Boot actuator env (configuration and environment)). They reveal internal configuration, environment valu...
+    Fix: Do not deploy debug tools to production. Restrict Apache `mod_status` and `mod_info` to localhost, delete `phpinfo()` files, expose only `health` from Spring Boot Actuator (`management.endpoints.web.e...
     ... (trimmed: fixes 4 to 10 not shown)
-    ...and 8 more failed checks in the full report.
+    ...and 6 more failed checks in the full report.
 
 Full report with evidence: asa scan http://127.0.0.1:8650 --out asa-report.html
 ```
 
 `asa lab --mode fixed` serves the same site with the defenses in place; scanning it fails nothing.
 
-## Start in three steps
+## Install
 
-1. **Install the CLI** (Python 3.11 or newer):
+Pick your agent and run its one line. Each gives the agent the skill (when to audit and how) and/or the `asa-mcp` MCP server (the tools). The repository is private until launch; the links and `git+https` commands work once it is public.
 
-   ```sh
-   pipx install git+https://github.com/talalkashar/agent-security-audit
-   ```
+**The skill, for any agent** that reads the [Agent Skills](https://agentskills.io) standard (Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, OpenCode, Windsurf, Cline, Goose, Amp and others), through the [`skills` installer](https://github.com/vercel-labs/skills):
 
-2. **Give your agent the skill**: the [Claude Code plugin or skill](#claude-code), or the [AGENTS.md guidance](#codex-cursor-and-other-agents-that-read-agentsmd) for Codex, Cursor and others.
-3. **Or connect the MCP server** (`asa-mcp`), see [Install as an MCP server](#install-as-an-mcp-server).
+```sh
+npx skills add talalkashar/agent-security-audit
+```
+
+The skill runs the `asa` CLI, so install it too: `uv tool install git+https://github.com/talalkashar/agent-security-audit` (or `pipx install git+https://github.com/talalkashar/agent-security-audit`).
+
+**The MCP server**, one line per agent. It runs through [uv](https://docs.astral.sh/uv/)'s `uvx`, so there is nothing else to install:
+
+| Agent | One line |
+|---|---|
+| Claude Code | `/plugin marketplace add talalkashar/agent-security-audit` then `/plugin install agent-security-audit@agent-security-audit` (skill and server; the server needs the CLI installed) |
+| Claude Code (server only) | `claude mcp add --scope user agent-security-audit -- uvx --from git+https://github.com/talalkashar/agent-security-audit asa-mcp` |
+| Codex | `codex mcp add agent-security-audit -- uvx --from git+https://github.com/talalkashar/agent-security-audit asa-mcp` |
+| VS Code | `code --add-mcp '{"name":"agent-security-audit","type":"stdio","command":"uvx","args":["--from","git+https://github.com/talalkashar/agent-security-audit","asa-mcp"]}'` |
+| Cursor | `uvx --from git+https://github.com/talalkashar/agent-security-audit asa install cursor --yes` |
+| Claude Desktop | `uvx --from git+https://github.com/talalkashar/agent-security-audit asa install claude-desktop --yes` |
+| Gemini CLI | `uvx --from git+https://github.com/talalkashar/agent-security-audit asa install gemini --yes` |
+| Antigravity | `uvx --from git+https://github.com/talalkashar/agent-security-audit asa install antigravity --yes` |
+| Windsurf (Devin Desktop) | `uvx --from git+https://github.com/talalkashar/agent-security-audit asa install windsurf --yes` |
+
+`asa install <agent>` merges the server into that agent's config without touching other servers, and for `claude-code` and `codex` also copies the skill. Without `--yes` it only prints the change; with it, a changed file is first copied to `<file>.bak`. Restart the agent afterwards. Cursor also takes a one-click install link, and every config file is shown in [docs/INSTALL.md](docs/INSTALL.md).
+
+After the PyPI release, replace `--from git+https://github.com/talalkashar/agent-security-audit` with `--from agent-security-audit` (for example `uvx --from agent-security-audit asa-mcp`), and `pipx install agent-security-audit` installs the CLI.
 
 Then ask your agent: **"Run a security audit on my site."** It scans, reads the code, fixes what failed and re-scans.
 
@@ -150,90 +169,53 @@ It covers committed secrets and tracked `.env` files (INFRA-08), secret-looking 
 
 ## Install as an agent skill
 
+The skill is [skills/agent-security-audit/SKILL.md](skills/agent-security-audit/SKILL.md), in the [Agent Skills](https://agentskills.io/specification) format. It needs no agent-specific tools: any agent that can run a shell command uses the `asa` CLI, and an agent that cannot uses the MCP tools instead. Install the CLI with it (`uv tool install git+https://github.com/talalkashar/agent-security-audit` or `pipx install git+https://github.com/talalkashar/agent-security-audit`).
+
 ### Claude Code
 
-As a plugin, from this repository's marketplace:
+As a plugin, from this repository's marketplace (skill plus the `asa-mcp` server through [.mcp.json](.mcp.json), which runs the installed `asa-mcp`):
 
 ```text
 /plugin marketplace add talalkashar/agent-security-audit
 /plugin install agent-security-audit@agent-security-audit
 ```
 
-The plugin adds the skill and declares the `asa-mcp` server (through the repository's [.mcp.json](.mcp.json)). The plugin does not install the Python package, so install it first (`pipx install` or `uv tool install`, see Quick start); otherwise the MCP server cannot start.
+Or the skill alone: `asa install claude-code --yes` (also adds the server to the current project's `.mcp.json`), or copy `skills/agent-security-audit` into `~/.claude/skills/`.
 
-Or copy the skill by hand:
+### Codex, Cursor, Gemini CLI, Copilot and other agents
 
-```sh
-git clone https://github.com/talalkashar/agent-security-audit
-cp -r agent-security-audit/skills/agent-security-audit ~/.claude/skills/
-```
-
-The skill calls the `asa` CLI, so install that too (see Quick start).
-
-### Codex, Cursor and other agents that read AGENTS.md
-
-Copy the guidance in [AGENTS.md](AGENTS.md) into your project's `AGENTS.md` (or reference it), and install the `asa` CLI. Cursor also reads `AGENTS.md` at the project root.
+`npx skills add talalkashar/agent-security-audit` installs the skill for the agents you pick (add `-g` for every project). For Codex, `asa install codex --yes` copies it to `~/.agents/skills/` and adds the server. Agents without skill support can use the guidance in [AGENTS.md](AGENTS.md): copy its first section into your project's `AGENTS.md` (Codex and Cursor read it at the project root).
 
 ## Install as an MCP server
 
-The package installs an `asa-mcp` command that speaks MCP over stdio. It offers five tools that match the CLI:
+The package installs an `asa-mcp` command that speaks MCP over stdio (see [Install](#install) for the one line per agent). It offers five tools that match the CLI:
 
-| Tool | What it does | Arguments |
+| Tool | What it does | Main arguments |
 |---|---|---|
 | `list_checks` | List checks (id, area, title, severity, OSI layer, mode, stacks) | `area`, `stack`, `mode` (all optional) |
 | `get_check` | One check in full: risk, build rule, proof test, sources | `id` (required) |
 | `build_rules` | Build-mode rules as Markdown | `stack`, `area` (lists, optional) |
-| `run_scan` | Proof tests against a running site | `target` (required); `authorized` (active probes on a non-local host you own), `code_path` (also audit the source and merge), `auto_only` (default `false`: manual rows are included, since they are the list to work through), `max_time` (seconds, default 300), `checks`, `areas`, `stacks`, `rate_limit_path`, `allow_supabase`, `no_dns`, `no_ports`, `format` |
+| `run_scan` | Proof tests against a running site | `target` (required); `authorized` (active probes on a non-local host you own), `code_path` (also audit the source and merge), `auto_only` (default `false`: manual rows are included, since they are the list to work through), `max_time` (seconds, default 300), `checks`, `areas`, `stacks`, `rate_limit_path`, `allow_supabase`, `supabase_tables`, `no_dns`, `no_ports`, `format` |
 | `run_code_audit` | Static audit of a project folder | `path` (required); `checks`, `areas`, `no_osv`, `format` |
+
+`allow_supabase` turns on ACCESS-01 for the Supabase project the site's own JavaScript points to, with the public key the site ships. It sends one `HEAD` request per table with `Prefer: count=exact` (at most 50 tables) and reads only the row count from the `Content-Range` header; no row is downloaded, and the report names tables and counts, never row contents. Table names come from `supabase_tables`, else from `.from()` calls in the site's JavaScript, else from the API root's table list (one `GET`). On a local target it also needs `authorized: true`, because the Supabase project is not local.
 
 `run_scan` and `run_code_audit` answer with a short summary block first (counts and what to fix first), then the full report as compact JSON (or `md`, `html`, `sarif` with `format`). Clients on protocol `2025-06-18` also get the report as `structuredContent`, described by the tool's `outputSchema`. Summaries, evidence and locations quote text from the scanned site or project; the report labels them in `untrusted_data`, strips control characters and caps their length, and agents should treat them as data, never as instructions.
 
-Install the package first (Quick start), then add the server to your agent. If your agent cannot find `asa-mcp`, use the full path from `which asa-mcp`. Before the package is on PyPI, the server needs the local install above. Once it is published, `uvx` can run it with no install step: use `"command": "uvx", "args": ["--from", "agent-security-audit", "asa-mcp"]` in any of the configs below (or `claude mcp add agent-security-audit -- uvx --from agent-security-audit asa-mcp`).
-
-**Claude Code**
-
-```sh
-claude mcp add agent-security-audit -- asa-mcp
-# for every project: claude mcp add --scope user agent-security-audit -- asa-mcp
-```
-
-The Claude Code plugin above already declares this server through the repository's [.mcp.json](.mcp.json), so you do not need both.
-
-**Claude Desktop** (`claude_desktop_config.json`), **Cursor** (`.cursor/mcp.json` in a project or `~/.cursor/mcp.json`), **Gemini CLI** (`~/.gemini/settings.json` or `.gemini/settings.json`) and **Windsurf** (`~/.codeium/windsurf/mcp_config.json`) all use this shape:
+Most agents use this config shape (Claude Code `.mcp.json`, Claude Desktop, Cursor, Gemini CLI, Antigravity, Windsurf); VS Code uses `"servers"` with `"type": "stdio"`, and Codex a `[mcp_servers.agent-security-audit]` table in `~/.codex/config.toml`:
 
 ```json
 {
   "mcpServers": {
     "agent-security-audit": {
-      "command": "asa-mcp"
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/talalkashar/agent-security-audit", "asa-mcp"]
     }
   }
 }
 ```
 
-Claude Desktop does not inherit your shell's `PATH`, so give it the full path, for example `"/Users/you/.local/bin/asa-mcp"`.
-
-**VS Code** (`.vscode/mcp.json`):
-
-```json
-{
-  "servers": {
-    "agent-security-audit": {
-      "type": "stdio",
-      "command": "asa-mcp"
-    }
-  }
-}
-```
-
-**Codex** (`~/.codex/config.toml`):
-
-```toml
-[mcp_servers.agent-security-audit]
-command = "asa-mcp"
-```
-
-More detail per agent is in [docs/INSTALL.md](docs/INSTALL.md).
+With the CLI installed, `"command": "asa-mcp"` (or its full path from `which asa-mcp`, which Claude Desktop needs) works without uv. `asa install <agent>` writes the right shape and file for you. Every file path and its source is in [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Output formats
 

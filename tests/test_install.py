@@ -213,5 +213,15 @@ class ReleaseWorkflowTest(unittest.TestCase):
             self.assertRegex(ref, r"@[0-9a-f]{40}$", ref)
 
 
+class DocsAccuracyTest(unittest.TestCase):
+    def test_allow_supabase_is_described_as_the_check_runs(self):
+        from agent_security_audit import mcp_server
+        desc = mcp_server.TOOLS_BY_NAME["run_scan"]["inputSchema"]["properties"]["allow_supabase"]["description"]
+        self.assertIn("HEAD", desc)
+        self.assertIn("count=exact", desc)
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("one `HEAD` request per table with `Prefer: count=exact`", readme)
+
+
 if __name__ == "__main__":
     unittest.main()

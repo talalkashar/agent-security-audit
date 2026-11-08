@@ -131,7 +131,8 @@ TOOLS = [
                 "rate_limit_attempts": {"type": "integer", "minimum": 1, "maximum": 60, "default": 30},
                 "allow_supabase": {"type": "boolean", "default": False,
                                    "description": "also test the Supabase project the site points to "
-                                                  "(read-only, row counts only); on a local target this also "
+                                                  "(ACCESS-01: one HEAD per table with Prefer: count=exact, so "
+                                                  "only row counts are read, never rows); on a local target this also "
                                                   "needs authorized=true, since the project is not local"},
                 "supabase_tables": {**_str_list, "description": "tables to test (default: names from .from() calls "
                                                          "in the site's JavaScript)"},
