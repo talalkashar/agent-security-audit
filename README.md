@@ -7,7 +7,7 @@
 
 **Your coding agent builds the site. This makes it prove the defenses work before you ship.**
 
-`asa` scans a running website you own, local or live, and reads its source code. Each finding comes with the evidence (the request, status and header it saw, or the file and line) and the fix. A live check reports `pass` only when its test observed the defense on the URLs it tested; a check it could not settle is reported as `manual`, `warn` ("Suspected") or `error`, never as a pass. Code-audit findings that rest on a pattern match are reported with their `file:line` evidence for the agent to confirm, not as proof.
+`asa` scans a running website you own, local or live, and reads its source code. Each finding comes with the evidence (the request, status and header it saw, or the file and line) and the fix. A live check reports `pass` only when its test observed the defense on the URLs it tested; partial or inconclusive evidence is reported as `manual`, `warn` ("Suspected") or `error`, never as a pass. The code audit never passes the checks a pattern match cannot prove (server-side auth, row-level security, route and Server Action guards, cron secrets): it reports them as `manual` with the `file:line` evidence it found, for the agent to confirm.
 
 No telemetry, no runtime dependencies, and nothing written to disk except the report you ask for (and, with `asa install --yes`, the agent config it shows you first). Every claim, with source references: [docs/TRUST.md](docs/TRUST.md).
 
@@ -44,18 +44,36 @@ Real terminal output from those two commands:
 
 ```text
 asa: http://127.0.0.1:8642
-18 failed · 6 warnings · 0 could not run · 85 to check in code · 0 passed · 17 not applicable
+18 fail · 6 warn · 0 error · 85 manual · 0 pass · 17 skip
+  fail: a defense is missing; fix it · warn: weak or partial · error: the check could not run ·
+  manual: needs the code or a logged-in test · pass: observed working · skip: does not apply here,
+  or an active probe was not allowed
 
 Fix these first:
- 1. [critical] INFRA-04 Sensitive files not served (.env, .git, backups, .DS_Store): Sensitive files are downloadable: /.env (environment file), /.git/HEAD (git metadata). Treat every secret in them as leaked and rotate it.
-    Fix: Never put secrets, .git, dumps (*.sql, *.dump), archives (*.zip, *.tar.gz), *.bak or *.old under public/. Deploy through the Vercel git integration or `vercel deploy`, not a manual folder upload. Any ...
- 2. [critical] NEXT-01 No secret keys in client JavaScript: Secret keys are shipped to every visitor's browser. Rotate them now, then move them to server-only code.
-    Fix: Only public values may use `NEXT_PUBLIC_`: the Supabase URL, the Supabase publishable/anon key, analytics IDs, the Stripe publishable key. Never a service_role or `sb_secret_` key, `sk_live_`/`rk_live...
- 3. [high] API-21 No public debug or status endpoints: Debug or status pages are public: /actuator/env (Spring Boot actuator env (configuration and environment)). They reveal internal configuration, environment valu...
-    Fix: Do not deploy debug tools to production. Restrict Apache `mod_status` and `mod_info` to localhost, delete `phpinfo()` files, expose only `health` from Spring Boot Actuator (`management.endpoints.web.e...
+ 1. [critical] INFRA-04 Sensitive files not served (.env, .git, backups, .DS_Store): Sensitive files
+    are downloadable: /.env (environment file), /.git/HEAD (git metadata). Treat every secret in
+    them as leaked and rotate it.
+    Fix: Never put secrets, .git, dumps (*.sql, *.dump), archives (*.zip, *.tar.gz), *.bak or *.old
+    under public/. Deploy through the Vercel git integration or `vercel deploy`, not a manual folder
+    upload. Any ... (asa show INFRA-04)
+ 2. [critical] NEXT-01 No secret keys in client JavaScript: Secret keys are shipped to every
+    visitor's browser. Rotate them now, then move them to server-only code.
+    Fix: Only public values may use `NEXT_PUBLIC_`: the Supabase URL, the Supabase publishable/anon
+    key, analytics IDs, the Stripe publishable key. Never a service_role or `sb_secret_` key ...
+    (asa show NEXT-01)
+ 3. [high] API-21 No public debug or status endpoints: Debug or status pages are public:
+    /actuator/env (Spring Boot actuator env (configuration and environment)). They reveal internal
+    configuration, environment ...
+    Fix: Do not deploy debug tools to production. Restrict Apache `mod_status` and `mod_info` to
+    localhost, delete `phpinfo()` files, expose only `health` from Spring Boot Actuator ... (asa
+    show API-21)
     ... (trimmed: fixes 4 to 10 not shown)
     ...and 8 more failed checks in the full report.
+
 Full report with evidence: asa scan http://127.0.0.1:8642 --out asa-report.html
+
+Next: 85 manual checks need the code or a logged-in test: asa scan http://127.0.0.1:8642 --code .
+(run it from the project folder; asa show <ID> gives each one's proof steps).
 ```
 
 Now stop it and serve the same site with the defenses in place, on the same port:
@@ -66,7 +84,7 @@ asa lab --mode fixed &
 asa scan http://127.0.0.1:8642 --rate-limit-path /api/login
 ```
 
-This time nothing fails: 0 failed and 24 passed. The 85 `manual` checks are the ones no scan can prove from outside (logged-in access between accounts, dashboard settings, policies); your agent works through them, as described in [Verify mode](#verify-mode). Stop the lab with `kill %1`.
+This time nothing fails: 0 fail, 24 pass. The 85 `manual` checks are the ones no scan can prove from outside (logged-in access between accounts, dashboard settings, policies); your agent works through them, as described in [Verify mode](#verify-mode). Stop the lab with `kill %1`.
 
 ## Quick start
 
@@ -79,7 +97,7 @@ asa https://your-site.example            # shortcut for `asa scan`; passive chec
 asa scan https://your-site.example --authorized   # also active probes: only on a site you own or may test
 ```
 
-In a terminal, a scan shows a progress line and ends with a short summary: the counts and the failed checks to fix first, most severe first, each with its fix. Add `--out asa-report.html` for the full report with evidence.
+In a terminal, a scan shows a progress line and ends with a short summary: the counts by status with a one-line legend, the failed checks to fix first (most severe first, each with its fix), and a `Next:` line for the `manual` checks. Add `--out asa-report.html` for the full report with evidence.
 
 Other commands:
 
@@ -93,16 +111,16 @@ Then ask your agent: **"Run a security audit on my site."** With the skill or MC
 
 ## How to read results
 
-Every result has one of six statuses. The terminal summary line uses the plain-language label in the second column.
+Every result has one of six statuses, and the terminal summary, reports, JSON and MCP output all use these names.
 
-| Status | Summary label | Meaning | What to do |
-|---|---|---|---|
-| `pass` | passed | The check's test observed the defense on this target. Evidence lists what was seen. | Keep it. Re-scan after related changes. |
-| `fail` | failed | The flaw was observed (live), or the source shows it (code audit, with `file:line`). | Fix it with the build rule shown under Fix, then scan again. |
-| `warn` | warnings | A weaker setting, or a "Suspected" code finding that is not proven. | Confirm it in the code, then fix it. |
-| `manual` | to check in code | Not provable by this scan: it needs the code, a logged-in test or a dashboard setting. The proof steps are in the result. | The agent reads the code or runs a logged-in test and records pass or fail with evidence (`asa show <ID>`). |
-| `skip` | not applicable | Does not apply to this target (for example TLS checks on plain HTTP), or an active probe that needs `--authorized`. The reason is given. | Scan the deployed HTTPS site, or a site you own with `--authorized`, to cover it. |
-| `error` | could not run | The check could not run (network error, timeout, time or request budget used up). | Fix the cause and scan again. It is not a pass. |
+| Status | Meaning | What to do |
+|---|---|---|
+| `pass` | The check's test observed the defense on this target. Evidence lists what was seen. | Keep it. Re-scan after related changes. |
+| `fail` | The flaw was observed (live), or the source shows it (code audit, with `file:line`). | Fix it with the build rule shown under Fix, then scan again. |
+| `warn` | A weaker setting, or a "Suspected" code finding that is not proven. | Confirm it in the code, then fix it. |
+| `manual` | Not provable by this run: it needs the code, a logged-in test or a dashboard setting, or the evidence was inconclusive (for example, ports that silently drop connections). The proof steps are in the result. | The agent reads the code or runs a logged-in test and records pass or fail with evidence (`asa show <ID>`). |
+| `skip` | Does not apply to this target (for example TLS checks on plain HTTP), or an active probe that needs `--authorized`. The reason is given. | Scan the deployed HTTPS site, or a site you own with `--authorized`, to cover it. |
+| `error` | The check could not run (network error, timeout, time or request budget used up). | Fix the cause and scan again. It is not a pass. |
 
 A pass means the defense was observed working on that target at that time. It does not mean the site has no flaws. Anything the catalog does not list was not tested. Treat anything not proven as suspected, not as fine.
 
@@ -238,7 +256,7 @@ asa code . --format sarif --out code.sarif   # one SARIF result per source line
 asa scan http://localhost:3000 --code .      # one report: live proof tests plus code evidence
 ```
 
-It covers committed secrets and tracked `.env` files (INFRA-08), secret-looking `NEXT_PUBLIC_`/`VITE_`/`PUBLIC_` variables (NEXT-01), Supabase migrations without row-level security or with open policies, owner-rights views and security definer functions (ACCESS-01, ACCESS-02, ACCESS-06), route handlers and Server Actions that touch data with no auth call (NEXT-05, NEXT-06, ACCESS-11), `getSession()` on the server (AUTH-01), the secret-key client in client components (ACCESS-08), cron routes without `CRON_SECRET` (NEXT-15), `next.config` and security header settings (NEXT-02, NEXT-03, NEXT-07, NEXT-11, BROWSER-01 to 05, BROWSER-08), raw HTML, `eval`, shell and SQL built from strings (BROWSER-09, API-30, API-31, API-32, API-05), GitHub Actions (INFRA-15) and vulnerable locked dependencies (INFRA-13, NEXT-04). Heuristic findings are `warn` and say "Suspected"; where a pattern match cannot prove a defense, the result stays `manual` with the files it read as evidence. The dependency lookup sends package names and versions to the [OSV](https://osv.dev) database; `--no-osv` skips it, and an OSV outage is reported as `error`, never `pass`. In `asa scan --code`, a live `fail` always stands, a code `fail` beats a live pass, and code results fill in the checks the scanner could only mark `manual`.
+It covers committed secrets and tracked `.env` files (INFRA-08), secret-looking `NEXT_PUBLIC_`/`VITE_`/`PUBLIC_` variables (NEXT-01), Supabase migrations without row-level security or with open policies, owner-rights views and security definer functions (ACCESS-01, ACCESS-02, ACCESS-06), route handlers and Server Actions that touch data with no auth call (NEXT-05, NEXT-06, ACCESS-11), `getSession()` on the server (AUTH-01), the secret-key client in client components (ACCESS-08), cron routes without `CRON_SECRET` (NEXT-15), `next.config` and security header settings (NEXT-02, NEXT-03, NEXT-07, NEXT-11, BROWSER-01 to 05, BROWSER-08), raw HTML, `eval`, shell and SQL built from strings (BROWSER-09, API-30, API-31, API-32, API-05), GitHub Actions (INFRA-15) and vulnerable locked dependencies (INFRA-13, NEXT-04). Heuristic findings are `warn` and say "Suspected". AUTH-01, ACCESS-01, ACCESS-02, ACCESS-06, ACCESS-11, NEXT-05, NEXT-06 and NEXT-15 never pass from code alone: a guard found by pattern is reported as `manual` ("Not proven: ...") with its `file:line`, and a code result never turns a live `manual` or `error` into a pass. In the terminal, each code finding shows its first location as `At: file:line`; `-q` turns off the progress line. The dependency lookup sends package names and versions to the [OSV](https://osv.dev) database; `--no-osv` skips it, and an OSV outage is reported as `error`, never `pass`. In `asa scan --code`, a live `fail` always stands, a code `fail` beats a live pass, and code results fill in the checks the scanner could only mark `manual`.
 
 ## Install as an agent skill
 
@@ -268,7 +286,7 @@ The package installs an `asa-mcp` command that speaks MCP over stdio (see [Agent
 | `list_checks` | List checks (id, area, title, severity, OSI layer, mode, stacks) | `area`, `stack`, `mode` (all optional) |
 | `get_check` | One check in full: risk, build rule, proof test, sources | `id` (required) |
 | `build_rules` | Build-mode rules as Markdown | `stack`, `area` (lists, optional) |
-| `run_scan` | Proof tests against a running site | `target` (required); `authorized` (active probes on a non-local host you own), `code_path` (also audit the source and merge), `auto_only` (default `false`: manual rows are included, since they are the list to work through), `max_time` (seconds, default 300), `checks`, `areas`, `stacks`, `rate_limit_path`, `allow_supabase`, `supabase_tables`, `no_dns`, `no_ports`, `format` |
+| `run_scan` | Proof tests against a running site | `target` (required); `authorized` (active probes on a non-local host you own), `code_path` (also audit the source and merge), `auto_only` (default `false`: manual rows are included, since they are the list to work through), `max_time` (seconds, default 300), `checks`, `areas`, `stacks`, `rate_limit_path`, `rate_limit_method` (`POST` only), `rate_limit_body`, `rate_limit_attempts`, `allow_supabase`, `supabase_tables`, `no_dns`, `dns_resolver` (an `https://` DoH URL), `no_ports`, `no_osv`, `max_pages`, `format` |
 | `run_code_audit` | Static audit of a project folder | `path` (required); `checks`, `areas`, `no_osv`, `format` |
 
 `allow_supabase` turns on ACCESS-01 for the Supabase project the site's own JavaScript points to, with the public key the site ships. It sends one `HEAD` request per table with `Prefer: count=exact` (at most 50 tables) and reads only the row count from the `Content-Range` header; no row is downloaded, and the report names tables and counts, never row contents. Table names come from `supabase_tables`, else from `.from()` calls in the site's JavaScript, else from the API root's table list (one `GET`). On a local target it also needs `authorized: true`, because the Supabase project is not local. Use it only for a Supabase project you own or may test; row counts can themselves be sensitive.
@@ -304,7 +322,9 @@ With `--out`, the format comes from `--format`, else from the file extension (`.
 
 Any URL scans without a prompt. Active probes on a non-local host run only with `--authorized`; otherwise they come back as `skip` with the reason.
 
-`asa scan` exits 1 when a failed check is at least as severe as `--fail-on` (default `high`), 2 on a usage or scope error, and 0 otherwise. Use `--fail-on none` to always exit 0, and `--auto-only` to leave out the `manual` rows.
+Every report records the run's scope: tool version, interface (CLI or MCP), mode, the flags in effect (`--authorized`, `--allow-supabase`, `--no-dns`, `--no-ports`, `--no-osv` and the rest), the hosts contacted besides the target (the DNS resolver, the Supabase project, `api.osv.dev`, only when they were contacted), the number of requests sent and the start and end time in UTC. SARIF carries it in `invocations`.
+
+`asa scan` and `asa code` exit 1 when a failed check is at least as severe as `--fail-on` (default `high`), 2 on a usage or scope error, 3 when checks could not run, and 0 otherwise. `--fail-on-error` sets when errors give exit 3: `all` (default: every check that tried to run errored, or a check named with `--check` errored), `any`, or `none`. A failed check (exit 1) takes precedence. Use `--fail-on none` to always exit 0 (it also defaults `--fail-on-error` to `none`), and `--auto-only` to leave out the `manual` rows.
 
 ### GitHub code scanning
 
@@ -345,9 +365,10 @@ This tool is for testing sites you own or have written permission to test. It is
 
 - **Any link, passive by default.** Any URL gets the passive checks: what the site already shows a visitor (headers, TLS, certificates, DNS and email records, cookies, public JavaScript and source maps). The requests are ones a visitor or standard client could send: page and script GETs, `robots.txt` and `sitemap.xml`, TLS handshakes including legacy-version and weak-cipher attempts, and CORS requests with a test `Origin`. No payloads, no guessed paths.
 - **Active probes need ownership.** Probes that test the server itself (fetching `/.env` and `.git`, the login rate-limit test, malformed requests, Supabase table reads) run on `localhost`, loopback, `*.localhost` and `*.test`, and on any other host only with `--authorized` (CLI) or `authorized: true` (MCP), which states that you own the site or have written permission. Without it they are listed as skipped, with how to run them.
-- **Request budget.** A scan sends at most 300 requests by default (`--budget`), with a short delay between them. The rate-limit probe sends at most 60 (`--rate-limit-attempts`, default 30).
+- **Request budget.** A scan sends at most 300 requests by default (`--budget`), with a short delay between them. The rate-limit probe sends at most 60 `POST` requests (`--rate-limit-attempts`, default 30), and refuses a named path that looks like sign-up, invitation or password reset.
 - **Whole-site crawl, bounded.** Checks read one shared crawl seeded from `/`, `robots.txt` and `sitemap.xml`: same-origin GET only, up to `--max-pages` pages (default 25) and `--max-depth` link hops (default 3), never more than half the remaining budget. Forms are recorded, never submitted, and logout or other state-changing links (sign-out, delete, unsubscribe) are never requested.
 - **Same origin.** Requests stay on the target's scheme, host and port. Redirects to other hosts are reported, not followed. The only exceptions are the www/apex twin of the same site over HTTPS, the Supabase project the site itself points to when you pass `--allow-supabase` (one `HEAD` per table with `Prefer: count=exact`; only table names and row counts are reported, never row contents; on a local target it also needs `--authorized`, because that project is not local), DNS lookups through a public resolver (turn off with `--no-dns`), the MTA-STS policy file on `mta-sts.<domain>`, and TCP connect probes (connect and close, nothing sent) to database and admin ports on the target's own address (turn off with `--no-ports`).
+- **Never metadata or link-local services.** Cloud metadata services (`169.254.169.254`, `metadata.google.internal` and the like) and link-local addresses are refused as targets, even with `--authorized`, by name, by address and after DNS resolution. A custom `--dns-resolver` must be an `https://` URL without credentials.
 - **Stops at a firewall challenge.** If the site's firewall answers with a bot challenge, the scan stops and says so. It does not try to get around it.
 - **Built to run against production.** Passive checks send only visitor-style requests, active probes need `--authorized`, and every request counts against the budget. Scanning the live site is what finds the leak before your users or an attacker do.
 - **Test accounts.** Logged-in tests use two accounts the agent signs up through your site's own sign-up, and it lists them at the end so you can delete them. On a non-local site it asks you first. It never signs in as one of your users or uses their credentials.

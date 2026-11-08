@@ -127,7 +127,7 @@ The Claude Code plugin declares the server through the repository's `.mcp.json`,
 | `list_checks` | List checks (id, area, title, severity, OSI layer, mode, stacks) | `area`, `stack`, `mode` (all optional) |
 | `get_check` | One check in full: risk, build rule, proof test, sources | `id` (required) |
 | `build_rules` | Build-mode rules as Markdown | `stack`, `area` (lists, optional) |
-| `run_scan` | Proof tests against a running site | `target` (required); `authorized`, `code_path`, `auto_only`, `max_time`, `checks`, `areas`, `stacks`, `rate_limit_path`, `allow_supabase`, `supabase_tables`, `no_dns`, `no_ports`, `format` |
+| `run_scan` | Proof tests against a running site | `target` (required); `authorized`, `code_path`, `auto_only`, `max_time`, `checks`, `areas`, `stacks`, `rate_limit_path`, `rate_limit_method` (`POST` only), `rate_limit_body`, `rate_limit_attempts`, `allow_supabase`, `supabase_tables`, `no_dns`, `dns_resolver` (`https://` only), `no_ports`, `no_osv`, `max_pages`, `format` |
 | `run_code_audit` | Static audit of a project folder | `path` (required); `checks`, `areas`, `no_osv`, `format` |
 
 See the README's [Install as an MCP server](../README.md#install-as-an-mcp-server) for what each answer contains and what `allow_supabase` (ACCESS-01) sends.

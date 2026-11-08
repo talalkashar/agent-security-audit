@@ -29,7 +29,7 @@ The first release published to PyPI. 0.1.0 was never tagged or published; everyt
 
 - HTML report (`--out asa-report.html`): one self-contained page, no scripts or external URLs, light and dark, prints cleanly.
 - SARIF: code-audit results carry the file and line as their location, and every rule links to its check documentation.
-- A short terminal summary with the failed checks to fix first; "Fix these first" and an OSI layer coverage table in the Markdown, HTML and JSON reports.
+- A short terminal summary that counts results by status name (`fail`, `warn`, `error`, `manual`, `pass`, `skip`) with a one-line legend, the failed checks to fix first, and a `Next:` line for the `manual` checks; code findings show `At: file:line`, and `asa code -q` turns off the progress line; "Fix these first" and an OSI layer coverage table in the Markdown, HTML and JSON reports.
 - `asa <url>` as a shortcut for `asa scan <url>`; `--max-time` (default 300 s) with checks the time budget cut reported as `error`, never `pass`.
 - Reports and MCP output strip control, bidi, zero-width and other invisible characters from target text and cap its length.
 
@@ -52,15 +52,15 @@ The first release published to PyPI. 0.1.0 was never tagged or published; everyt
 
 ### Accuracy and hardening
 
-<!-- Integrator: replace these placeholders with one line each for the parallel fixes as they merge, then remove this comment. -->
-
-- TODO: code-audit heuristics no longer report `pass` for checks they cannot prove (reported as `manual` with evidence).
-- TODO: ReDoS fix in the Next.js chunk pattern (a hostile page can no longer stall the scanner or MCP server).
-- TODO: MCP error messages are sanitized, capped and labelled as untrusted before they reach the agent.
-- TODO: the rate-limit probe (API-01) sends `POST` only.
-- TODO: link-local and cloud metadata addresses are refused as targets.
-- TODO: reports record the scope and run configuration (`--authorized`, `--allow-supabase`, `--no-dns`, `--no-ports`, `--no-osv`).
-- TODO: `--fail-on` also fails the run on `error` results.
+- Code audit: AUTH-01, ACCESS-01, ACCESS-02, ACCESS-06, ACCESS-11, NEXT-05, NEXT-06 and NEXT-15 never pass from code alone. A guard found by pattern is reported as `manual` ("Not proven: ...") with its `file:line`; NEXT-15 needs a comparison that rejects a wrong `CRON_SECRET`. A code `pass` never overrides a live `manual` or `error`.
+- Live checks no longer pass on partial or inconclusive evidence: INFRA-24/25 report `manual` when ports silently drop connections, INFRA-26 often reports `skip` on OpenSSL 3, BROWSER-06 reports `manual` when no session cookie was seen, BROWSER-07 probes up to 3 API routes and reports `manual` if it finds none, and a duplicated HSTS directive fails.
+- ReDoS fix in the Next.js chunk pattern, and script scans read at most 500 KB per response, so a hostile page cannot stall the scanner or MCP server. The response cache is capped at 50 MB.
+- CMS end-of-support data expires after 90 days; after that the check reports `manual` instead of trusting stale dates.
+- The rate-limit probe (API-01) sends `POST` only (`--rate-limit-method` and the MCP enum accept only `POST`) and refuses a named path that looks like sign-up, registration, invitation or password reset.
+- Cloud metadata services and link-local addresses are refused as targets, even with `--authorized`, by name, by address and after DNS resolution. A custom DNS resolver must be an `https://` URL without credentials.
+- MCP `run_scan` takes `dns_resolver` (https only). MCP tool errors are cleaned, capped and labelled as untrusted before they reach the agent.
+- Reports record the run's scope: tool version, interface, mode, flags (`--authorized`, `--allow-supabase`, `--no-dns`, `--no-ports`, `--no-osv` and the rest), hosts contacted besides the target, request count and UTC start and end times. SARIF carries it in `invocations`.
+- Exit code 3 when checks could not run, set by `--fail-on-error {all,any,none}` (default `all`; `none` when `--fail-on none`), for `asa scan` and `asa code`.
 - Earlier accuracy fixes in this release: a security header that middleware sets only on some requests is judged `manual`, not `pass`; script checks cannot pass when only the first 40 of more same-origin scripts were read; string and template literals are read in one linear pass so a hostile file cannot stall the code audit.
 
 ## 0.1.0 - 2026-11-07

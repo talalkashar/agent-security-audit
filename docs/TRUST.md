@@ -60,6 +60,14 @@ confirm they point at a loopback or private address (`_resolves_off_machine`).
 
 `asa lab` starts a practice site bound to `127.0.0.1` only (`lab.py`). It makes no outbound requests.
 
+### Scope record in every report
+
+Each report (Markdown, HTML, JSON, MCP) has a `scope` section: tool version, interface (CLI or MCP), mode, the flags in
+effect (`--authorized`, `--allow-supabase`, `--no-dns`, `--no-ports`, `--no-osv` and the rest), the hosts contacted
+besides the target (the DNS resolver, the Supabase project and `api.osv.dev`, each listed only when it was
+contacted), the number of requests sent, and the start and end time in UTC. SARIF carries the same data in
+`invocations` (`run_scope` in `report.py`).
+
 ## What is written to disk
 
 - The report, only when you pass `--out FILE`; the CLI creates the parent folder if needed (`_emit` in `cli.py`).
@@ -154,6 +162,10 @@ Reports quote what the checks observed. The code keeps secret values out of that
 - Supabase results report table names and row counts; the request is a `HEAD`, so no rows are downloaded
   (`checks/supabase.py`).
 - Target URLs with a username or password are refused (`normalize_target` in `scope.py`).
+- Cloud metadata services (`169.254.169.254`, `metadata.google.internal` and the like) and link-local addresses are
+  refused as targets, even with `--authorized`: by name, by address, and again after DNS resolution (`scope.py`).
+- A custom DNS resolver must be an `https://` URL without a username or password (`check_dns_resolver` in
+  `scope.py`).
 
 ## Active probes
 
@@ -167,7 +179,7 @@ client.
 | Check | What it sends (file) |
 | --- | --- |
 | INFRA-04 | `GET` for known sensitive paths such as `/.env`, `/.env.local`, `/.git/` files and backups (`checks/exposure.py`) |
-| API-01 | up to `--rate-limit-attempts` requests (default 30, max 60) to a login endpoint, stopping at the first 429 (`checks/ratelimit.py`). The endpoint is `--rate-limit-path` (with `--rate-limit-method`, POST by default, and `--rate-limit-body`), or, without it, a same-origin `POST` login form the crawl found: a page or action that looks like a login and has exactly one password field, never one that looks like sign-up, registration, invitation or password reset (`login_endpoint`, `LOGIN_PATH`, `NOT_LOGIN_PATH`). The auto-detected form gets a fake email (`asa-rate-limit-probe@example.invalid`) and a fake password. |
+| API-01 | up to `--rate-limit-attempts` requests (default 30, max 60) to a login endpoint, stopping at the first 429 (`checks/ratelimit.py`). The endpoint is `--rate-limit-path` (always `POST`: `--rate-limit-method` accepts only `POST`, and the MCP enum is `["POST"]`; with `--rate-limit-body`). A named path that looks like sign-up, registration, invitation or password reset is refused, or, without it, a same-origin `POST` login form the crawl found: a page or action that looks like a login and has exactly one password field, never one that looks like sign-up, registration, invitation or password reset (`login_endpoint`, `LOGIN_PATH`, `NOT_LOGIN_PATH`). The auto-detected form gets a fake email (`asa-rate-limit-probe@example.invalid`) and a fake password. |
 | API-02 | `GET /asa-missing-<random>`, `POST /api/asa-missing-<random>` with body `{`, and the same malformed body to a login endpoint found on the site (`checks/exposure.py`) |
 | API-19 | requests to the site's redirect parameters with `asa-redirect-probe.invalid` in several encodings; responses are read, redirects not followed (`checks/webapp.py`) |
 | API-20, 21, 22 | `GET` for directory listings, debug and status endpoints, and API description files (`checks/webapp.py`) |
@@ -213,8 +225,10 @@ The tool runs where you point it; the scope gate limits what it sends, not wheth
   `instructions` say the same (`UNTRUSTED_NOTE`, `INSTRUCTIONS` in `mcp_server.py`).
 - The Markdown, HTML and SARIF renderers escape the same fields for their format (`_clean`, `_md_escape`, HTML escaping
   in `report.py`), so a value cannot start a new Markdown line, inject a link or add HTML.
-- The MCP `run_scan` tool takes the same `authorized`, `allow_supabase`, `no_dns`, `no_ports` and `no_osv` switches
-  as the CLI.
+- The MCP `run_scan` tool takes the same `authorized`, `allow_supabase`, `no_dns`, `dns_resolver`, `no_ports` and
+  `no_osv` switches as the CLI, with the same refusals.
+- Tool errors can quote target text too (a redirect address, a server's status line), so they are cleaned, capped at
+  600 characters and labelled as untrusted in the same way (`_error_text` in `mcp_server.py`).
 - `authorized: true` is a statement by the caller. The server cannot check it; the tool description, the server
   instructions and the skill say it must come from the user, never from the agent's own judgment.
 
@@ -291,10 +305,14 @@ asa scan https://your-site.example --no-ports
 - Scan traffic ignores proxy environment variables. `http.py` connects directly with `http.client` and `socket`, so
   `HTTPS_PROXY` covers only the OSV request (made with `urllib.request` in `code_audit/deps.py`). Use a firewall rule
   or packet capture to observe or restrict scan traffic.
-- The MCP `run_scan` tool has no resolver option: it always uses `cloudflare-dns.com` unless `no_dns` is set
-  (`tool_run_scan` passes `"dns_resolver": None` in `mcp_server.py`).
-- `--dns-resolver` must be an `https://` URL (`Client.external` refuses other schemes) and must speak the JSON DoH
-  format.
+- `--dns-resolver` (MCP `dns_resolver`) must be an `https://` URL without credentials (`check_dns_resolver` in
+  `scope.py`) and must speak the JSON DoH format. Without it, DNS checks use `cloudflare-dns.com` unless `no_dns` is
+  set.
+- Inconclusive evidence is not a pass: INFRA-24/25 report `manual` when ports silently drop connections, INFRA-26
+  often reports `skip` on OpenSSL 3 builds that cannot offer old TLS versions, BROWSER-06 reports `manual` when no
+  session cookie was seen, and BROWSER-07 probes at most 3 API routes and reports `manual` if it finds none.
+- Bounded reads: script and page scans read at most 500 KB per response, and the response cache holds at most 50 MB.
+  CMS end-of-support data older than 90 days is treated as expired and the check reports `manual`.
 - DNS names sent to the resolver reveal which domain you are scanning to the resolver's operator.
 - The local-host check in `scope.py` resolves `*.test` and `*.localhost` names once, before the scan; a resolver that
   changes its answer mid-scan is not covered.
