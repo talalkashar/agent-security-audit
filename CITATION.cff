@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "agent-security-audit"
+abstract: "Security checks a coding agent builds in and then proves on the running site."
+type: software
+authors:
+  - family-names: Kashar
+    given-names: Talal
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/talalkashar/agent-security-audit"
+keywords:
+  - security
+  - owasp
+  - asvs
+  - nextjs
+  - supabase
+  - mcp
+  - agent-skills

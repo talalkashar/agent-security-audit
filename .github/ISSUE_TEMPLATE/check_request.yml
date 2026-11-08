@@ -1,0 +1,41 @@
+name: Feature or check request
+description: Suggest a new check, a better fix text, or a new feature.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project is defensive only. Requests for exploit payloads, payload lists, bypass techniques,
+        ways around rate limits or firewalls, or tests that could damage data are closed. See CONTRIBUTING.md.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - New check
+        - Change to an existing check
+        - Feature (CLI, MCP, report, skill)
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk or problem
+      description: What goes wrong today and why it matters, in plain words.
+    validations:
+      required: true
+  - type: textarea
+    id: proof
+    attributes:
+      label: Safe proof (for a check)
+      description: How to show the defense working on a site the tester owns, without changing data, with clear pass and fail conditions.
+  - type: input
+    id: area
+    attributes:
+      label: Area and stack
+      description: access, api, auth, browser, infra or nextjs; and the stacks it applies to.
+  - type: textarea
+    id: sources
+    attributes:
+      label: Sources
+      description: Primary sources (OWASP ASVS, Cheat Sheets, WSTG, CWE, NIST, vendor docs, CVE entries).
