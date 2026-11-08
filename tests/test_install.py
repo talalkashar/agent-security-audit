@@ -147,8 +147,10 @@ class InstallTest(unittest.TestCase):
         secret.write_text("secret")
         logical_bak = link.with_name("config.toml.bak")
         self.link(logical_bak, secret)
-        code, _ = self.asa("codex", "--yes")
+        code, out = self.asa("codex", "--yes")
         self.assertEqual(code, 0)
+        # The message names the backup where it was written: beside the real file, not beside the link.
+        self.assertIn(f"backup: {os.path.realpath(real)}.bak", out)
         self.assertTrue(link.is_symlink())
         self.assertEqual(os.readlink(link), str(real))
         merged = tomllib.loads(real.read_text())
