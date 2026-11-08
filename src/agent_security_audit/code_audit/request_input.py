@@ -7,15 +7,21 @@ import re
 
 from .base import SUSPECTED, make, plural
 from .nextjs import INLINE_SERVER, ROUTE, _at, _code, _directive
-from .patterns import LITERAL, _arg, _assigned, _constant
+from .patterns import LITERAL, _arg, _assigned
 
 # Where request input comes from in route handlers, Server Actions, pages and Express-style handlers.
 REQ = re.compile(r"\b(?:req|request)\.(?:query|body|params)\b|\b(?:req|request)\.(?:json|formData|text)\(\s*\)|"
                  r"\bsearchParams\b|\bformData\.get\(|\bnextUrl\b")
 # A request body as a whole object (not one named field).
 BODY = re.compile(r"^\s*(?:await\s+)?(?:req|request)\.(?:json\(\s*\)|body)\s*$|"
-                  r"^\s*Object\.fromEntries\(\s*(?:await\s+)?\w+(?:\.formData\(\s*\))?\s*\)\s*$")
-SCHEMA = re.compile(r"\.(?:parse|safeParse|parseAsync|safeParseAsync|validate|validateSync)\(")
+                  r"^\s*Object\.fromEntries\(\s*(?:await\s+)?\w+(?:\.formData\(\s*\))?\s*\)\s*$|"
+                  r"^\s*JSON\.parse\(\s*(?:await\s+)?(?:req|request)\.(?:body|text\(\s*\))\s*\)\s*$")
+SCHEMA = re.compile(r"([A-Za-z_$][\w$]*)\s*\.\s*(?:parse|safeParse|parseAsync|safeParseAsync|validate|validateSync)\(")
+# Receivers whose .parse() decodes text and checks no fields: JSON.parse(req.body) is still the whole body.
+NOT_SCHEMA = {"JSON", "qs", "querystring", "url", "URL", "Date", "cookie", "path"}
+# Client-only React hooks: a file that calls one runs in the browser even without its own 'use client'.
+CLIENT_HOOK = re.compile(r"\buse(?:Effect|LayoutEffect|State|Reducer|SearchParams|Router|Pathname|Params)\s*\(")
+SERVER_EXPORT = re.compile(r"\bget(?:ServerSideProps|StaticProps|InitialProps)\b")
 IDENT = re.compile(r"[A-Za-z_$][\w$]*")
 
 FETCH = re.compile(r"(?<![\w$.])fetch\(\s*|\baxios(?:\.(?:get|post|put|patch|delete|head|request))?\(\s*|"
@@ -24,6 +30,9 @@ FETCH = re.compile(r"(?<![\w$.])fetch\(\s*|\baxios(?:\.(?:get|post|put|patch|del
 # A URL whose origin is fixed in the source: a literal scheme and host followed by a slash, or a relative path.
 FIXED_ORIGIN = re.compile(r"""^\s*[`'"](?:https?://[^/`'"$\s]+/|/(?!/))""")
 ENV = re.compile(r"^\s*process\.env\.[A-Z0-9_]+\s*$")
+ENV_OBJECT = re.compile(r"^\s*process\.env\s*$")
+# A template literal that starts with one ${...} and a slash: the origin is whatever that expression is.
+TEMPLATE_BASE = re.compile(r"^\s*`\$\{([^{}`]+)\}/")
 HOST_CHECK = re.compile(r"\.hostname\b|\ballow(?:ed)?[_-]?(?:hosts?|list|origins?|domains?)\b|\ballowlist\b",
                         re.IGNORECASE)
 
@@ -47,7 +56,9 @@ def _server_files(project):
         code = _code(project, rel)
         if _directive(code) == "client":
             continue
-        if ROUTE.search(rel) or _directive(code) == "server" or INLINE_SERVER.search(code) or REQ.search(code):
+        server = ROUTE.search(rel) or _directive(code) == "server" or INLINE_SERVER.search(code)
+        # Otherwise request input marks server code, unless the file calls client-only hooks.
+        if server or (REQ.search(code) and (SERVER_EXPORT.search(code) or not CLIENT_HOOK.search(code))):
             out.append((rel, code))
     return out
 
@@ -65,6 +76,19 @@ def _source(code, name):
     return _arg(code, m.end()).split(";")[0], "rest" if rest else "field"
 
 
+def _reassigned(code, name):
+    """Right-hand sides of later assignments to a name (`target = body.url`, `target ??= x`), not its declaration."""
+    out = []
+    for m in re.finditer(r"(?<![\w$.])" + re.escape(name) + r"\s*(?:\+|\?\?|\|\||&&)?=(?![=>])", code):
+        if not re.search(r"\b(?:const|let|var)\s+$", code[max(0, m.start() - 20):m.start()]):
+            out.append(_arg(code, m.end()).split(";")[0])
+    return out
+
+
+def _schema(text):
+    return any(m.group(1) not in NOT_SCHEMA for m in SCHEMA.finditer(text))
+
+
 def _from_request(code, expr, depth=0):
     if REQ.search(expr):
         return True
@@ -72,19 +96,29 @@ def _from_request(code, expr, depth=0):
         return False
     for name in set(IDENT.findall(expr)):
         src, _ = _source(code, name)
-        if src and src.strip() != expr.strip() and _from_request(code, src, depth + 1):
-            return True
+        for value in ([src] if src else []) + _reassigned(code, name):
+            if value.strip() != expr.strip() and _from_request(code, value, depth + 1):
+                return True
     return False
 
 
-def _fixed_url(code, arg):
-    if LITERAL.match(arg) or FIXED_ORIGIN.match(arg) or ENV.match(arg) or _constant(code, arg):
+def _fixed_url(code, arg, depth=0):
+    """True when the URL's origin is fixed in the source: a literal, a fixed-origin template, an environment variable,
+    or a name set once in this file to one of those (an UPPER_CASE name proves nothing by itself)."""
+    if LITERAL.match(arg) or FIXED_ORIGIN.match(arg) or ENV.match(arg):
         return True
+    if depth > 2:
+        return False
+    base = TEMPLATE_BASE.match(arg)
+    if base:
+        return _fixed_url(code, base.group(1), depth + 1)
     name = arg.strip()
-    if IDENT.fullmatch(name):
-        src, _ = _source(code, name)
-        return bool(src) and (LITERAL.match(src) or FIXED_ORIGIN.match(src) or ENV.match(src)) is not None
-    return False
+    if not IDENT.fullmatch(name) or _reassigned(code, name):
+        return False
+    src, how = _source(code, name)
+    if how == "field":
+        return ENV_OBJECT.match(src) is not None  # const { API_URL } = process.env
+    return how == "assign" and _fixed_url(code, src, depth + 1)
 
 
 def outbound_requests(project):
@@ -138,7 +172,7 @@ def _payload_kind(code, value, depth=0):
             if kind != "safe":
                 return kind
         return "safe"
-    if SCHEMA.search(value):
+    if _schema(value):
         return "safe"
     base = re.match(r"^([A-Za-z_$][\w$]*)(?:\s*\.\s*data)?$", value)
     if not base:
@@ -146,7 +180,7 @@ def _payload_kind(code, value, depth=0):
     src, how = _source(code, base.group(1))
     if not src or how == "field":
         return "unknown"
-    if SCHEMA.search(src):
+    if _schema(src):
         return "safe"
     if BODY.match(src):
         return "raw"  # const body = await req.json(), or const { role, ...rest } = await req.json()

@@ -78,6 +78,43 @@ class SsrfCodeTest(unittest.TestCase):
                "  return fetch(`https://api.example.com${x}`);\n}\n")
         self.assertEqual(self.status({"pages/api/p.ts": src}), "warn")
 
+    def test_reassigned_url_is_not_fixed(self):
+        # The declaration is a literal, but a later assignment takes the request body.
+        src = ("export async function POST(req) {\n  const body = await req.json();\n"
+               "  let target = 'https://api.example.com/data';\n  if (body.url) target = body.url;\n"
+               "  return fetch(target);\n}\n")
+        self.assertEqual(self.status({ROUTE: src}), "warn")
+
+    def test_upper_case_name_from_request_is_not_constant(self):
+        src = ("export async function POST(request) {\n  const { url: TARGET_URL } = await request.json();\n"
+               "  return fetch(TARGET_URL);\n}\n")
+        self.assertEqual(self.status({ROUTE: src}), "warn")
+        # An imported UPPER_CASE name is not traced in this file: not proven, so manual rather than pass.
+        src = "import { API_URL } from './config';\nexport async function GET(req) {\n  return fetch(API_URL);\n}\n"
+        self.assertEqual(self.status({ROUTE: src}), "manual")
+
+    def test_env_or_constant_origin_with_request_path_passes(self):
+        src = ("const BASE = 'https://api.example.com';\nconst { SEARCH_URL } = process.env;\n"
+               "export async function GET(req) {\n  const q = req.nextUrl.searchParams.get('q');\n"
+               "  await fetch(`${process.env.API_URL}/search?q=${q}`);\n  await fetch(`${BASE}/items/${q}`);\n"
+               "  return fetch(SEARCH_URL);\n}\n")
+        self.assertEqual(self.status({ROUTE: src}), "pass")
+        # Request input in the origin slot is still a warning.
+        src = ("export async function GET(req) {\n  const host = req.query.host;\n"
+               "  return fetch(`${host}/search`);\n}\n")
+        self.assertEqual(self.status({"pages/api/p.ts": src}), "warn")
+
+    def test_component_with_client_hooks_is_browser_code(self):
+        src = ("import { useEffect } from 'react';\nimport { useSearchParams } from 'next/navigation';\n"
+               "export function Preview() {\n  const searchParams = useSearchParams();\n"
+               "  useEffect(() => {\n    fetch(searchParams.get('src'));\n  }, []);\n  return null;\n}\n")
+        self.assertIsNone(self.status({"components/preview.tsx": src}))
+        # A page with getServerSideProps still runs server code even if its component uses hooks.
+        src = ("import { useState } from 'react';\nexport async function getServerSideProps({ req, query }) {\n"
+               "  const r = await fetch(req.query.src);\n  return { props: {} };\n}\n"
+               "export default function P() { useState(0); return null; }\n")
+        self.assertEqual(self.status({"pages/p.tsx": src}), "warn")
+
     def test_client_files_and_no_fetch_say_nothing(self):
         self.assertIsNone(self.status({"app/page.tsx": "'use client'\nfetch(location.search);\n"}))
         self.assertIsNone(self.status({ROUTE: "export function GET(req) { return req.query; }\n"}))
@@ -111,6 +148,19 @@ class MassAssignmentCodeTest(unittest.TestCase):
                "  await supabase.from('notes').update(input).eq('id', 1);\n"
                "  await prisma.note.create({ data: { title: input.title } });\n}\n")
         self.assertEqual(self.status(src), "pass")
+
+    def test_json_parse_of_body_is_the_whole_body(self):
+        # JSON.parse decodes text; it checks no fields, so it is not a schema.
+        src = ("export default async function handler(req, res) {\n  const payload = JSON.parse(req.body);\n"
+               "  await supabase.from('profiles').insert(payload);\n}\n")
+        self.assertEqual(self.status(src, "pages/api/save.ts"), "warn")
+        src = ("export default async function handler(req, res) {\n  const payload = qs.parse(await load(req));\n"
+               "  await supabase.from('profiles').insert(payload);\n}\n")
+        self.assertEqual(self.status(src, "pages/api/save.ts"), "manual")
+        src = ("export default async function handler(req, res) {\n"
+               "  const payload = Profile.parse(JSON.parse(req.body));\n"
+               "  await supabase.from('profiles').insert(payload);\n}\n")
+        self.assertEqual(self.status(src, "pages/api/save.ts"), "pass")
 
     def test_untraced_payload_is_manual(self):
         self.assertEqual(self.status("export async function POST(req) {\n"
