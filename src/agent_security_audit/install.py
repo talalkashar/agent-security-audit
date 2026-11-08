@@ -141,7 +141,7 @@ def json_change(path, key, entry):
         return Change(path, "conflict", added, note=f"an \"{NAME}\" entry with other settings is already there; "
                       "it was left as is (remove it first to replace it)")
     data[key] = {**servers, NAME: entry}
-    return Change(path, "update", added, json.dumps(data, indent=2) + "\n")
+    return Change(path, "update", added, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def _toml_str(value):

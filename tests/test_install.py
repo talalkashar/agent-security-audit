@@ -92,6 +92,15 @@ class InstallTest(unittest.TestCase):
         self.assertIn("not plain JSON", err.getvalue())
         self.assertEqual(path.read_text(), '{ // comment\n "servers": {} }')
 
+    def test_non_ascii_text_is_kept_as_written(self):
+        path = self.home / ".cursor" / "mcp.json"
+        path.parent.mkdir()
+        path.write_text('{"mcpServers": {"café": {"command": "x"}}}', encoding="utf-8")
+        self.asa("cursor", "--yes")
+        text = path.read_text(encoding="utf-8")
+        self.assertIn('"café"', text)
+        self.assertNotIn("\\u00e9", text)
+
     def test_vscode_uses_servers_with_type(self):
         self.asa("vscode", "--yes")
         data = json.loads((self.cwd / ".vscode" / "mcp.json").read_text())
