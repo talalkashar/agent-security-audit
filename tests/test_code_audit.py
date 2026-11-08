@@ -562,6 +562,13 @@ class AccuracyTest(unittest.TestCase):
         self.assertEqual(html("sanitize(x, { allowedTags: [] })", "import sanitize from 'sanitize-html';\n"), "pass")
         self.assertEqual(html("renderToString(x)", "import { renderToString } from 'react-dom/server';\n"), "pass")
 
+    def test_shared_header_list_across_routes_is_manual(self):
+        cfg = ("const common = [{ key: 'X-Content-Type-Options', value: 'nosniff' }];\n"
+               "module.exports = { async headers() { return [\n"
+               "  { source: '/a', headers: common },\n  { source: '/b', headers: [] },\n] } };\n")
+        r = audit_files({"next.config.js": cfg})
+        self.assertNotEqual(r["BROWSER-03"].status, "pass")
+
     def test_sanitizer_import_scan_is_linear(self):
         from agent_security_audit.code_audit import patterns
         for code in ["import " + "a," * 25000, "import x " + " " * 50000 + "from", "const " + "{" * 50000,

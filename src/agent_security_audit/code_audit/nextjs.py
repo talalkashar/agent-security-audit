@@ -524,17 +524,23 @@ def _headers_in(rel, text, project=None, loose=True):
         return out
     seen = set()
     imported = project and _importer(project, rel)
+    # With several source: routes, a headers list held in a variable (headers: common) is not inside any one
+    # route's braces, so which responses get which value cannot be told: every value is then unknown.
+    shared = len(ROUTE_START["js"].findall(text)) > 1 and SHARED_HEADERS.search(text)
     for m in JS_HEADER.finditer(text):
         name = next(g for g in (m.group(2), m.group(4), m.group(6)) if g)
         for expr in _branches(_arg(text, m.end(), 4000)):  # cond ? a : b sends a or b: judge both
             value = _static(text, expr, imported=imported)
-            out.append((name.lower(), None if value is None else " ".join(value.split()), m.start(),
+            out.append((name.lower(), None if value is None or shared else " ".join(value.split()), m.start(),
                         _route(ROUTE_START["js"], text, m.start())))
         seen.add(m.start(next(i for i in (2, 4, 6) if m.group(i))) - 1)
     for m in ANY_NAME.finditer(text) if loose else ():
         if m.start() not in seen:  # named, but not set in a way this reader follows
             out.append((m.group(2).lower(), None, m.start(), _route(ROUTE_START["js"], text, m.start())))
     return out
+
+
+SHARED_HEADERS = re.compile(r"\bheaders\s*:\s*(?:\.\.\.)?[A-Za-z_$][\w$]*\s*[,}\n]")
 
 
 def _route(rx, text, offset):
