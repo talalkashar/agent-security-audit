@@ -656,15 +656,16 @@ class VerbAgreementTest(unittest.TestCase):
                 self.assertNotIn("(s)", summary)
 
     def test_no_placeholder_plural_in_any_check_string(self):
+        import ast
         import pathlib
-        import tokenize
         root = pathlib.Path(webapp.__file__).resolve().parent.parent
         for path in sorted([*(root / "checks").glob("*.py"), *(root / "code_audit").glob("*.py")]):
-            with path.open("rb") as fh:
-                for tok in tokenize.tokenize(fh.readline):
-                    if tok.type == tokenize.STRING or tok.type == getattr(tokenize, "FSTRING_MIDDLE", -1):
-                        with self.subTest(file=path.name, line=tok.start[0]):
-                            self.assertNotIn("(s)", tok.string)
+            # The AST exposes literal f-string parts consistently on Python 3.11 and 3.12+;
+            # tokenize on 3.11 includes expressions such as statuses.count(s) in STRING tokens.
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    with self.subTest(file=path.name, line=node.lineno):
+                        self.assertNotIn("(s)", node.value)
 
     def rate_limit(self, answer, attempts=30):
         c = ctx({"/api/login": lambda m, u, h, b, n={"i": 0}: (n.__setitem__("i", n["i"] + 1), answer(n["i"]))[1]},
