@@ -234,13 +234,32 @@ class RateLimitVerdictTest(unittest.TestCase):
 
     def test_single_server_error_is_not_throttling(self):
         _, r = self.run_check(lambda i: resp(502 if i == 7 else 401, [], "x"), rate_limit_path="/api/login")
-        self.assertNotIn("Throttled", r.summary)
-        self.assertIn("No limit observed", r.summary)
-
-    def test_repeated_new_status_is_throttling_from_its_start(self):
-        _, r = self.run_check(lambda i: resp(400 if i > 8 else 401, [], "x"), rate_limit_path="/api/login")
         self.assertEqual(r.status, "warn")
-        self.assertIn("Throttled after 8 attempts", r.summary)
+        self.assertNotIn("Throttled", r.summary)
+        self.assertIn("Inconsistent responses, no limit proven: 1 server error (502)", r.summary)
+
+    def test_intermittent_and_repeated_server_errors_are_not_throttling(self):
+        for answer in (lambda i: resp(503 if i % 4 == 0 else 401, [], "x"),
+                       lambda i: resp(500 if i > 8 else 401, [], "x")):
+            with self.subTest(answer=answer):
+                _, r = self.run_check(answer, rate_limit_path="/api/login")
+                self.assertEqual(r.status, "warn")
+                self.assertNotIn("Throttled", r.summary)
+                self.assertIn("Inconsistent responses, no limit proven", r.summary)
+                self.assertIn("server errors", r.summary)
+
+    def test_new_status_without_limit_wording_is_not_throttling(self):
+        for status in (400, 403):
+            with self.subTest(status=status):
+                _, r = self.run_check(lambda i, s=status: resp(s if i > 8 else 401, [], "x"),
+                                      rate_limit_path="/api/login")
+                self.assertNotIn("Throttled", r.summary)
+                self.assertIn("No limit observed", r.summary)
+
+    def test_captcha_wording_is_throttling(self):
+        _, r = self.run_check(lambda i: resp(403 if i > 6 else 401, [], "Complete the captcha" if i > 6 else "x"),
+                              rate_limit_path="/api/login")
+        self.assertIn("Throttled after 6 attempts", r.summary)
 
     def test_lockout_status_counts_at_once(self):
         c, r = self.run_check(lambda i: resp(423 if i > 4 else 401, [], "x"), rate_limit_path="/api/login")
