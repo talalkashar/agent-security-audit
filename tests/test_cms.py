@@ -3,6 +3,7 @@
 import subprocess
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -33,6 +34,12 @@ def context(*pages):
 
 
 class CmsChecksTest(unittest.TestCase):
+    def setUp(self):
+        # Judge against the snapshot's own date, so these tests do not depend on today's date.
+        clock = patch.object(cms, "_today", lambda: date.fromisoformat(cms.SUPPORT_DATE))
+        clock.start()
+        self.addCleanup(clock.stop)
+
     def test_html_doctype_does_not_make_a_complete_sample_limited(self):
         ctx = context(Page('<!DOCTYPE html><meta name=generator content=WordPress>'))
         self.assertEqual(cms.version_disclosure(ctx).status, "pass")
@@ -55,8 +62,9 @@ class CmsChecksTest(unittest.TestCase):
         self.assertEqual(result.status, "manual")
 
     def test_supported_and_ended_release_lines(self):
-        cases = [("WordPress", "7.1", "ok"), ("WordPress", "7.0", "old"),
-                 ("Drupal", "11.3", "ok"), ("Drupal", "11.2", "eol"),
+        # A supported line is "ok" only at its latest known patch; "7.1" reports 7.1.0, behind 7.1.4.
+        cases = [("WordPress", "7.1.4", "ok"), ("WordPress", "7.1", "old"), ("WordPress", "7.0", "old"),
+                 ("Drupal", "11.3.21", "ok"), ("Drupal", "11.3", "old"), ("Drupal", "11.2", "eol"),
                  ("Drupal", "10.6", "old"), ("Joomla", "5.4", "old"),
                  ("Joomla", "4.4", "eol"), ("Joomla", "6.2", "ok"), ("Joomla", "6.0", "eol")]
         for name, version, expected in cases:
