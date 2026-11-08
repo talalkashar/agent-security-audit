@@ -43,6 +43,7 @@ URL_HOSTS = {
     # Never contacted: header values, report metadata, examples.
     "github.com": "project homepage in the User-Agent string (http.py) and the SARIF tool URI (report.py)",
     "json.schemastore.org": "SARIF $schema value in report.py; never fetched",
+    "docs.astral.sh": "uv installation help printed by install.py; never fetched",
     "asa-origin-probe.invalid": "Origin header value for the CORS check (checks/browser.py); .invalid never "
                                 "resolves (RFC 6761)",
     "{}.asa-origin-probe.invalid": "Origin header value, suffix form (checks/browser.py)",
@@ -99,7 +100,7 @@ URL = re.compile(r"(?i)(?:\b(?:https?|wss?)|\{\})://([^/\s\"'`<>()\\?#]+)")
 LABEL = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
 HOSTNAME = re.compile(rf"(?i)^\.?{LABEL}(?:\.{LABEL})*\.[a-z][a-z0-9-]*[a-z0-9]\.?$")
 # Bare names that look like hosts but are file names or library names.
-NOT_A_HOST = re.compile(r"(?i)(^\.env\b|\.(json|lock|lockb|yaml|yml|txt|toml|js|ts|sum|md|py)$)")
+NOT_A_HOST = re.compile(r"(?i)(^\.env\b|\.(json|lock|lockb|yaml|yml|txt|toml|js|ts|sum|md|py|exe)$)")
 
 
 def _strings(tree):

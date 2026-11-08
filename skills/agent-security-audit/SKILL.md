@@ -1,6 +1,8 @@
 ---
 name: agent-security-audit
 description: Build security into a website or web app while writing it, then prove each defense works on the running site with evidence. Use when building, launching or shipping a website or web app (especially Next.js, Supabase or Vercel), when adding auth, database access, APIs or payments, or when the user asks for a security audit, security review, hardening pass or pentest-style verification of a site they own.
+license: MIT
+compatibility: Works in any agent that can run shell commands or call MCP tools. Needs Python 3.11+ for the asa CLI (no dependencies) and network access to the site under test.
 ---
 
 # agent-security-audit
@@ -21,7 +23,19 @@ pipx install git+https://github.com/talalkashar/agent-security-audit
 uv tool install git+https://github.com/talalkashar/agent-security-audit
 ```
 
-If neither `pipx` nor `uv` exists, use `python3 -m pip install --user git+https://github.com/talalkashar/agent-security-audit`. It needs Python 3.11 or newer and has no dependencies. If the `agent-security-audit` MCP server is connected, you may use its tools instead of the CLI; the rules below are the same.
+If neither `pipx` nor `uv` exists, use `python3 -m pip install --user git+https://github.com/talalkashar/agent-security-audit`. It needs Python 3.11 or newer and has no dependencies.
+
+This skill works in any agent. Use whatever your agent offers to run a shell command (a terminal, shell or command tool). If you cannot run commands but the `agent-security-audit` MCP server is connected, use its tools instead; the rules below are the same:
+
+| CLI | MCP tool |
+|---|---|
+| `asa list` | `list_checks` |
+| `asa show <ID>` | `get_check` |
+| `asa rules --stack ...` | `build_rules` |
+| `asa scan <url> [--code .]` | `run_scan` (`target`, `code_path`) |
+| `asa code .` | `run_code_audit` (`path`) |
+
+To read files, use your agent's file reading tool, or `cat`/`grep` in a shell. For browser steps, any headless browser automation works (Playwright, Puppeteer, or the agent's built-in browser in headless mode).
 
 Useful commands:
 

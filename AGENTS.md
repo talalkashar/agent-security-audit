@@ -4,7 +4,7 @@ Copy this section into your project's `AGENTS.md` (Codex, Cursor and other agent
 
 ## Security: build it in, then prove it
 
-Tool: `asa` (install with `pipx install git+https://github.com/talalkashar/agent-security-audit` or `uv tool install git+https://github.com/talalkashar/agent-security-audit`; Python 3.11+, no dependencies). Check with `asa --version`.
+Tool: `asa` (install with `uv tool install git+https://github.com/talalkashar/agent-security-audit` or `pipx install git+https://github.com/talalkashar/agent-security-audit`; Python 3.11+, no dependencies; or run it once with `uvx --from git+https://github.com/talalkashar/agent-security-audit asa <command>`). Check with `asa --version`. The full skill installs with `npx skills add talalkashar/agent-security-audit`; `asa install <agent> --yes` adds the MCP server to your agent.
 
 **Build mode** (while writing code)
 - Run `asa rules --stack <nextjs,supabase,vercel,node>` for the stacks the project uses and follow every rule that applies.

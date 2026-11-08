@@ -310,6 +310,7 @@ def outputs():
                            skill_coverage(checks, automated))
     if skill is not None:
         files[skill_path] = skill
+        files["src/agent_security_audit/skill/SKILL.md"] = skill
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     if START in readme and END in readme:
         head, rest = readme.split(START, 1)
