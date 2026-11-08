@@ -153,7 +153,8 @@ class ProbePortTest(unittest.TestCase):
     def test_open_and_closed(self):
         client = Client("http://127.0.0.1:1", delay=0, budget=5)
         self.assertEqual(client.probe_port(self.open_port, timeout=1), "open")
-        self.assertEqual(client.probe_port(self.closed_port, timeout=1), "closed")
+        # A host firewall may silently drop rather than refuse an unused local port.
+        self.assertIn(client.probe_port(self.closed_port, timeout=1), ("closed", "filtered"))
         self.assertEqual(client.sent, 2)
 
     def test_counts_against_budget(self):
@@ -165,7 +166,14 @@ class ProbePortTest(unittest.TestCase):
     def test_probe_through_context(self):
         c = Context("http://127.0.0.1:1", Client("http://127.0.0.1:1", delay=0), {})
         states = network._probe(c, [self.open_port, self.closed_port])
-        self.assertEqual(states, {self.open_port: "open", self.closed_port: "closed"})
+        self.assertEqual(states[self.open_port], "open")
+        self.assertIn(states[self.closed_port], ("closed", "filtered"))
+
+    def test_refusal_and_timeout_remain_distinct(self):
+        for error, expected in ((ConnectionRefusedError(), "closed"), (TimeoutError(), "filtered")):
+            with self.subTest(expected=expected), mock.patch("socket.create_connection", side_effect=error):
+                client = Client("http://127.0.0.1:1", delay=0)
+                self.assertEqual(client.probe_port(self.closed_port), expected)
 
 
 # --- TLS ---------------------------------------------------------------------------------------------------------

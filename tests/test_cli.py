@@ -22,7 +22,7 @@ class CatalogCommandsTest(unittest.TestCase):
     def test_list(self):
         code, out, _ = call("list")
         self.assertEqual(code, 0)
-        self.assertEqual(len(out.strip().splitlines()), 122)
+        self.assertEqual(len(out.strip().splitlines()), 126)
         self.assertTrue(out.startswith("ACCESS-01"))
 
     def test_list_json_filters(self):
@@ -52,7 +52,7 @@ class CatalogCommandsTest(unittest.TestCase):
         self.assertIn("ACCESS-01", out)
         _, all_rules, _ = call("rules")
         self.assertLess(out.count("\n- **"), all_rules.count("\n- **"))
-        self.assertEqual(all_rules.count("\n- **"), 122)
+        self.assertEqual(all_rules.count("\n- **"), 126)
 
 
 class ScanCommandTest(unittest.TestCase):
@@ -77,7 +77,7 @@ class ScanCommandTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(data["tool"], "agent-security-audit")
         self.assertGreater(data["counts"]["fail"], 5)
-        self.assertEqual(len(data["results"]), 39)
+        self.assertEqual(len(data["results"]), 43)
         self.assertEqual(data["results"][0]["status"], "fail")
 
     def test_sarif(self):
@@ -178,10 +178,10 @@ class StackAndHintTest(unittest.TestCase):
         server, url = lab.serve("fixed", 0)
         cwd = os.getcwd()
         try:
-            with tempfile.TemporaryDirectory() as tmp:
+            # Restore cwd before TemporaryDirectory cleanup (required by Windows).
+            with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
                 with open(os.path.join(tmp, "package.json"), "w") as fh:
                     fh.write("{}")
-                os.chdir(tmp)
                 _, _, err = call("scan", url, "--auto-only", "--check", "BROWSER-03", "--format", "json")
                 self.assertIn("add --code .", err)
                 _, _, err = call("scan", url, "--auto-only", "--check", "BROWSER-03", "--format", "json",

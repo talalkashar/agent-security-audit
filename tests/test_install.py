@@ -223,7 +223,8 @@ class InstallTest(unittest.TestCase):
             self.assertEqual(install._abs(change.root), install._abs(project))
             with self.assertRaises(install.InstallError) as caught:
                 install.apply([change])
-            self.assertIn("symlink", str(caught.exception))
+            expected = "symlink" if install._anchored_writes_available() else "unavailable"
+            self.assertIn(expected, str(caught.exception))
             self.assertEqual(real.read_text(), "{}\n")
             self.assertFalse(real.with_name(real.name + ".bak").exists())
             self.assertTrue(link.is_symlink())
