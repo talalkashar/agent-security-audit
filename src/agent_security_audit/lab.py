@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import secrets
+import socket
 import threading
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -229,12 +230,22 @@ class LabHandler(BaseHTTPRequestHandler):
         return self._send(400, '{"error":"bad request"}', "application/json")
 
 
+class LabServer(ThreadingHTTPServer):
+    # Windows SO_REUSEADDR permits a second listener on an occupied port. Reserve it exclusively instead.
+    allow_reuse_address = not hasattr(socket, "SO_EXCLUSIVEADDRUSE")
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve(mode="fixed", port=0):
     """Start the lab in a background thread. Returns (server, base_url); call server.shutdown() to stop."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
     handler = type("Handler", (LabHandler,), {"mode": mode, "login_attempts": 0, "lock": threading.Lock()})
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = LabServer(("127.0.0.1", port), handler)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_address[1]}"

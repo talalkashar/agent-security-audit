@@ -31,6 +31,7 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    timeout-minutes: 10
     # Every supported Python on every GitHub-hosted OS. setup-python ships 3.11-3.14
     # for ubuntu-latest, macos-latest (arm64) and windows-latest, so no combo is excluded.
     runs-on: ${{ matrix.os }}

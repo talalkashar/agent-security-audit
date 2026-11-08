@@ -1,6 +1,7 @@
 """The practice lab: every automated check fails or warns on `vulnerable` and passes on `fixed` over local HTTP."""
 
 import unittest
+from unittest import mock
 
 from agent_security_audit import lab, runner
 from agent_security_audit.checks import load_all
@@ -61,6 +62,17 @@ class LabTest(unittest.TestCase):
     def test_serve_rejects_unknown_mode(self):
         with self.assertRaises(ValueError):
             lab.serve("broken", 0)
+
+    def test_windows_reserves_port_before_binding(self):
+        server = object.__new__(lab.LabServer)
+        server.socket = mock.Mock()
+        events = []
+        server.socket.setsockopt.side_effect = lambda *args: events.append("exclusive")
+        with mock.patch.object(lab.socket, "SO_EXCLUSIVEADDRUSE", -5, create=True), \
+                mock.patch.object(lab.ThreadingHTTPServer, "server_bind", side_effect=lambda: events.append("bind")):
+            server.server_bind()
+        server.socket.setsockopt.assert_called_once_with(lab.socket.SOL_SOCKET, -5, 1)
+        self.assertEqual(events, ["exclusive", "bind"])
 
 
 if __name__ == "__main__":

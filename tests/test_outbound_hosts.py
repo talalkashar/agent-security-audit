@@ -88,7 +88,7 @@ NETWORK_MODULES = {"socket", "ssl", "http.client", "http.server", "urllib.reques
 NETWORK_IMPORTERS = {
     "http.py": {"socket", "ssl", "http.client"},   # the bounded client every scan request goes through
     "scope.py": {"socket"},                         # resolves *.test / *.localhost names before a scan
-    "lab.py": {"http.server"},                      # the practice site, bound to 127.0.0.1
+    "lab.py": {"http.server", "socket"},            # loopback practice site; exclusive port binding on Windows
     "deps.py": {"ssl", "urllib.request"},           # the OSV query
     "transport.py": {"ssl"},                        # TLS contexts handed to http.Client.open_tls
     "network.py": {"ssl"},                          # TLS contexts handed to http.Client.open_tls

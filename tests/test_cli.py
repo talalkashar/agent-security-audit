@@ -134,7 +134,8 @@ class ScanCommandTest(unittest.TestCase):
 
     def test_lab_port_in_use_exits_2(self):
         port = int(self.servers["fixed"][1].rsplit(":", 1)[1])
-        code, _, err = call("lab", "--port", str(port))
+        with mock.patch("time.sleep", side_effect=AssertionError("lab accepted an occupied port")):
+            code, _, err = call("lab", "--port", str(port))
         self.assertEqual(code, 2)
         self.assertIn("pass another --port", err)
 
