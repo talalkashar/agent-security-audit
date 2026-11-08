@@ -285,6 +285,19 @@ class CookieNameTest(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self.status(f"{name}=abc; Secure; SameSite=Lax"), "fail")
 
+    def test_known_platform_session_names_fail(self):
+        for name in (".ASPXAUTH", "ASPSESSIONIDQACRBTCT", "ASP.NET_SessionId", "SESS0123abcdef", "SSESS0123abcdef",
+                     "MOODLESESSION", "CFID", "CFTOKEN", "JSESSIONID", "PHPSESSID", "laravel_session", "connect.sid",
+                     "sid", "myapp_session", "myapp-session", "__Host-sid", "__Secure-sid", "__Host-PHPSESSID",
+                     "__Secure-myapp_session"):
+            with self.subTest(name=name):
+                self.assertEqual(self.status(f"{name}=abc; Secure; SameSite=Lax"), "fail")
+
+    def test_prefixed_csrf_cookies_stay_exempt(self):
+        for name in ("__Host-XSRF-TOKEN", "__Secure-csrftoken"):
+            with self.subTest(name=name):
+                self.assertEqual(self.status(f"{name}=abc; Secure; SameSite=Lax"), "pass")
+
     def test_home_page_is_counted_once(self):
         r = browser.cookies(ctx({"/": html("x", ("Set-Cookie", "a=1; Secure; HttpOnly; SameSite=Lax"))}))
         self.assertEqual(r.status, "pass")
