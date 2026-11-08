@@ -307,10 +307,10 @@ class CookieNameTest(unittest.TestCase):
 class ErrorPathProofTest(unittest.TestCase):
     """API-02 passes only when a handler's error path answered, not auth middleware, a CDN or a WAF."""
 
-    def run_check(self, status):
+    def run_check(self, status, headers=()):
         class Every(dict):
             def get(self, key, default=None):
-                return resp(status, [("Content-Type", "text/html")], "Blocked")
+                return resp(status, [("Content-Type", "text/html"), *headers], "Blocked")
         c = ctx({})
         c.client.routes = Every()
         return exposure.error_leaks(c)
@@ -322,6 +322,12 @@ class ErrorPathProofTest(unittest.TestCase):
 
     def test_handler_error_passes(self):
         self.assertEqual(self.run_check(400).status, "pass")
+
+    def test_gateway_and_challenge_answers_are_manual(self):
+        for status, headers in ((503, ()), (502, ()), (504, ()), (403, [("cf-mitigated", "challenge")]),
+                                (400, [("cf-mitigated", "challenge")]), (500, [("x-vercel-mitigated", "challenge")])):
+            with self.subTest(status=status, headers=headers):
+                self.assertEqual(self.run_check(status, headers).status, "manual")
 
 
 class LibraryBannerTest(unittest.TestCase):

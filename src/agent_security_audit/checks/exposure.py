@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from urllib.parse import urljoin, urlsplit
 
 from ..crawl import crawl, next_chunks
-from ..http import TIME_BUDGET_MESSAGE, BudgetExceeded, ResponseTooSlow, TimeBudgetExceeded
+from ..http import TIME_BUDGET_MESSAGE, BudgetExceeded, ResponseTooSlow, TimeBudgetExceeded, challenge_of
 from ..model import Result, failed, passed, skipped, warned
 from ..scope import same_origin
 from . import are, auto, count
@@ -275,7 +275,7 @@ def find_leaks(text):
     return [name for name, pattern in LEAK_MARKERS if pattern.search(text)]
 
 
-NOT_A_HANDLER = (401, 403, 404, 405, 407, 429)
+NOT_A_HANDLER = (401, 403, 404, 405, 407, 429, 502, 503, 504)
 
 
 @auto("API-02")
@@ -295,8 +295,9 @@ def error_leaks(ctx):
         ev.append(f"{method} {path} -> {resp.status}" + (f": shows {', '.join(hit)}" if hit else ""))
         leaks += hit
         # Not-found and wrong-method answers come from the router; auth, proxy-auth and throttle answers often come
-        # from middleware, a CDN or a WAF before any route handler runs. None of them proves a handler's error path ran.
-        if resp.status >= 400 and resp.status not in NOT_A_HANDLER:
+        # from middleware, a CDN or a WAF before any route handler runs; gateway errors and firewall challenges come from
+        # the proxy. None of them proves a handler's error path ran.
+        if resp.status >= 400 and resp.status not in NOT_A_HANDLER and not challenge_of(resp):
             handled.append(path)
     if leaks:
         return failed("API-02", "Error responses reveal internals (" + ", ".join(sorted(set(leaks))) + "). "

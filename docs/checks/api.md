@@ -77,9 +77,9 @@ Route every route handler and Server Action through one handleError() helper: lo
 
 1. The CLI requests a random path that does not exist on the user's own site.
 2. It sends a malformed JSON body to a random path under /api/, and to the login endpoint (--rate-limit-path, or the login form found by the crawl, as in API-01).
-3. Pass: no response contains stack frames, file paths (/var/task, node_modules, C:\), SQL or PGRST text, or framework internals, and at least one answer is an error other than 401, 403, 404, 405, 407 or 429, so a handler's error path actually ran (those come from the router, auth middleware, a CDN or a WAF). Otherwise the result is manual.
+3. Pass: no response contains stack frames, file paths (/var/task, node_modules, C:\), SQL or PGRST text, or framework internals, and at least one answer is an error other than 401, 403, 404, 405, 407, 429, 502, 503 or 504 and carries no firewall challenge header (such as cf-mitigated), so a handler's error path actually ran (those come from the router, auth middleware, a gateway, a CDN or a WAF). Otherwise the result is manual.
 4. Fail: any of those markers appears in a response body.
-5. Manual: only not-found or wrong-method answers came back. They come from the router and do not prove what a handler shows when it fails.
+5. Manual: only not-found, wrong-method, auth, throttle, gateway or challenge answers came back. They do not prove what a handler shows when it fails.
 6. Manual follow-up: send malformed JSON, wrong types and an invalid UUID to each real API route and check the same markers.
 
 ### Sources
