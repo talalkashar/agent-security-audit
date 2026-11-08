@@ -74,11 +74,12 @@ For dynamic App Router pages, build the policy in `proxy.ts` (`middleware.ts` be
 1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result. On each it reads the enforcing `Content-Security-Policy` header (not `-Report-Only`) and any `<meta http-equiv="Content-Security-Policy">` policy, without the directives browsers ignore in a meta tag (`frame-ancestors`, `report-uri`, `sandbox`).
 2. It takes `script-src`, or `default-src` when `script-src` is absent. Several enforcing policies all apply, so a script must be allowed by every one of them, and the strictest policy decides.
 3. Pass: an enforcing policy is set and its script directive has no `'unsafe-inline'`, or has it only alongside a `'nonce-...'` or `'sha256-'`/`'sha384-'`/`'sha512-'` source, and allows no source that matches every host (`*`, a bare scheme such as `https:`, `http:` or `data:`, `https://*`, or `*.com`) unless `'strict-dynamic'` is set with a nonce or hash.
-4. Fail: no enforcing CSP, no script directive in any policy, `'unsafe-inline'` with no nonce or hash, or a source that matches every host.
+4. Fail: no enforcing CSP (including report-only CSP without an enforcing policy), no script directive in any policy, `'unsafe-inline'` with no nonce or hash, or a source that matches every host.
 5. Manual extra: confirm `object-src 'none'`, `base-uri`, no `'unsafe-eval'` in production, and zero CSP violations in the browser console on key pages.
 
 ### Sources
 
+- [W3C CSP3: Report-Only header](https://www.w3.org/TR/CSP3/#csp-report-only-header)
 - [Next.js docs: How to set a Content Security Policy](https://nextjs.org/docs/app/guides/content-security-policy)
 - [Weichselbaum et al., CSP Is Dead, Long Live CSP (CCS 2016)](https://research.google/pubs/csp-is-dead-long-live-csp-on-the-insecurity-of-whitelists-and-the-future-of-content-security-policy/)
 - [OWASP HTTP Headers Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html)
@@ -220,12 +221,14 @@ Send `Cross-Origin-Opener-Policy: same-origin` (`same-origin-allow-popups` if th
 ### Proof test
 
 1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result.
-2. Pass on every page: `Permissions-Policy` is present and `Cross-Origin-Opener-Policy` is `same-origin` or `same-origin-allow-popups`.
-3. Warning: either header missing or COOP is `unsafe-none`.
-4. Manual extra: if the app uses popups, run the OAuth or payment popup flow once on staging and confirm it still completes.
+2. Pass on every page: `Permissions-Policy` is present and the complete combined `Cross-Origin-Opener-Policy` field parses as a case-sensitive `same-origin` or `same-origin-allow-popups` token item. Parameters such as `report-to="endpoint"` are allowed; the check validates string, token, boolean and numeric parameter syntax, not reporting delivery.
+3. Warning: either header missing or the parsed COOP token is outside those two values. An unvalidated item (including malformed syntax, duplicate/list values, unsupported parameter types, or a value over 8192 characters) needs manual review and cannot pass. Byte sequence, date and display string parameters are not parsed by this check.
+4. Manual extra: confirm any unvalidated COOP header follows the structured field syntax. If the app uses popups, run the OAuth or payment popup flow once on staging and confirm it still completes.
 
 ### Sources
 
+- [HTML Standard: Cross-origin opener policy headers](https://html.spec.whatwg.org/multipage/browsers.html#the-cross-origin-opener-policy-header)
+- [RFC 9651: Parsing Structured Fields](https://www.rfc-editor.org/rfc/rfc9651.html#section-4.2)
 - [MDN: Cross-Origin-Opener-Policy](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cross-Origin-Opener-Policy)
 - [OWASP HTTP Headers Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html)
 - [OWASP Secure Headers Project recommended headers](https://raw.githubusercontent.com/OWASP/www-project-secure-headers/master/ci/headers_add.json)

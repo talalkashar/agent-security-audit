@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlsplit
 
 from ..crawl import crawl, is_html
-from ..model import failed, passed, skipped, warned
+from ..model import Result, failed, passed, skipped, warned
 from . import auto, count
 
 ONE_YEAR = 31536000
@@ -61,7 +61,7 @@ def _csp_ev(resp):
                                                       for v in meta_csp(resp)]
 
 
-RANK = {"fail": 0, "warn": 1, "pass": 2}
+RANK = {"fail": 0, "warn": 1, "manual": 2, "pass": 3}
 
 
 def _page_path(resp):
@@ -181,7 +181,7 @@ def _csp(resp):
     if not policies:
         ro = resp.get("content-security-policy-report-only")
         if ro:
-            return warned("BROWSER-02", "CSP is report-only, so it blocks nothing yet.",
+            return failed("BROWSER-02", "CSP is report-only, so it blocks nothing yet.",
                           ev + [f"content-security-policy-report-only: {ro}"])
         return failed("BROWSER-02", "No Content-Security-Policy (header or meta tag); injected scripts would run.", ev)
     scripted = [p for p in policies if "script-src" in p or "default-src" in p]
@@ -386,15 +386,37 @@ def isolation(ctx):
     return per_page(ctx, _isolation)
 
 
+# COOP is a structured token Item, not a list. Validate the entire value, including parameters, before trusting
+# the token (HTML's opener policy algorithm; RFC 9651 section 4.2). Byte sequences, dates and display strings
+# are left for manual review. A non-string report-to is ignored by HTML, but does not invalidate the policy.
+COOP_TOKEN = r"[A-Za-z*][A-Za-z0-9!#$%&'*+.^_`|~:/-]*"
+COOP_STRING = r'"(?:[\x20-\x21\x23-\x5b\x5d-\x7e]|\\["\\])*"'
+COOP_PARAM_VALUE = rf"(?:{COOP_STRING}|{COOP_TOKEN}|\?[01]|-?[0-9]{{1,12}}\.[0-9]{{1,3}}|-?[0-9]{{1,15}})"
+COOP_ITEM = re.compile(rf"({COOP_TOKEN})(?:; *[a-z*][a-z0-9_.*-]*(?:={COOP_PARAM_VALUE})?)* *")
+
+
 def _isolation(resp):
     pp = resp.get("permissions-policy")
-    coop = (resp.get("cross-origin-opener-policy") or "").strip().lower()
-    ev = [_hdr(resp, "permissions-policy"), _hdr(resp, "cross-origin-opener-policy")]
+    # Do not use get/get_all for parsing: their control-character cleanup can turn malformed syntax into a pass.
+    values = [v.strip(" \t") for k, v in resp.headers if k.lower() == "cross-origin-opener-policy"]
+    value = ", ".join(values)
+    item = COOP_ITEM.fullmatch(value) if len(value) <= 8192 else None
+    coop = item[1] if item else None
+    ev = [_hdr(resp, "permissions-policy")] + ([f"cross-origin-opener-policy: {v}"
+          for v in resp.get_all("cross-origin-opener-policy")] or ["cross-origin-opener-policy: (not set)"])
     missing = []
     if not pp:
         missing.append("Permissions-Policy (turn off camera, microphone, geolocation and other features you do not use)")
-    if coop not in ("same-origin", "same-origin-allow-popups"):
+    if not values:
         missing.append("Cross-Origin-Opener-Policy: same-origin")
+    elif coop is None:
+        return Result("BROWSER-08", "manual", "Cross-Origin-Opener-Policy could not be validated as a supported "
+                      "structured token item; review the complete header syntax and parameters."
+                      + (" Missing: " + "; ".join(missing) + "." if missing else ""), ev)
+    elif coop not in ("same-origin", "same-origin-allow-popups"):
+        return warned("BROWSER-08", f"Cross-Origin-Opener-Policy is {coop}; this check expects same-origin or "
+                      "same-origin-allow-popups."
+                      + (" Missing: " + "; ".join(missing) + "." if missing else ""), ev)
     if missing:
         return warned("BROWSER-08", "Missing: " + "; ".join(missing) + ".", ev)
-    return passed("BROWSER-08", "Permissions-Policy and Cross-Origin-Opener-Policy are set.", ev)
+    return passed("BROWSER-08", f"Permissions-Policy and Cross-Origin-Opener-Policy are set (COOP: {coop}).", ev)

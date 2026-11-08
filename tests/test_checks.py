@@ -5,6 +5,7 @@ import json
 import unittest
 
 from agent_security_audit.checks import Context, browser, dns_email, exposure, ratelimit, supabase, transport
+from agent_security_audit.crawl import Site
 from agent_security_audit.http import Response
 
 
@@ -80,8 +81,27 @@ class CspTest(unittest.TestCase):
         csp = "script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'"
         self.assertEqual(self.status(("Content-Security-Policy", csp)), "fail")
 
-    def test_report_only_warns(self):
-        self.assertEqual(self.status(("Content-Security-Policy-Report-Only", "script-src 'self'")), "warn")
+    def test_report_only_fails_with_evidence(self):
+        header = ("Content-Security-Policy-Report-Only", "script-src 'self'")
+        result = browser.csp(home_with(header))
+        self.assertEqual(result.status, "fail")
+        self.assertIn("report-only", result.summary)
+        self.assertIn("content-security-policy-report-only: script-src 'self'", result.evidence)
+
+    def test_report_only_does_not_change_enforced_policy(self):
+        strict = "script-src 'self'; object-src 'none'; base-uri 'none'"
+        weak = "script-src * 'unsafe-inline'"
+        for enforced, report_only, want in ((strict, weak, "pass"), (weak, strict, "fail")):
+            with self.subTest(enforced=enforced):
+                self.assertEqual(self.status(("Content-Security-Policy", enforced),
+                                             ("Content-Security-Policy-Report-Only", report_only)), want)
+
+    def test_report_only_does_not_override_enforcing_meta(self):
+        result = browser._csp(resp(headers=[("Content-Type", "text/html"),
+                                           ("Content-Security-Policy-Report-Only", "script-src *")],
+                                   body='<meta http-equiv="Content-Security-Policy" '
+                                        'content="default-src &#39;self&#39;; base-uri &#39;none&#39;">'))
+        self.assertEqual(result.status, "pass")
 
     def test_missing_fails(self):
         self.assertEqual(self.status(), "fail")
@@ -180,6 +200,85 @@ class HeaderChecksTest(unittest.TestCase):
         ok = home_with(("Permissions-Policy", "camera=()"), ("Cross-Origin-Opener-Policy", "same-origin"))
         self.assertEqual(browser.isolation(ok).status, "pass")
         self.assertEqual(browser.isolation(home_with()).status, "warn")
+
+    def test_coop_valid_parameters_preserve_policy(self):
+        parameters = ('', '; report-to="coop"', ';report-to=""', ';report-to="a;b,c"',
+                      r';report-to="a\"b\\c"', ';report-to="first";report-to="last"',
+                      ';report-to=endpoint', ';report-to=?0', ';flag;unknown=Token:/',
+                      ';n=-999999999999999;d=999999999999.999', '; *key', '   ')
+        for policy in ("same-origin", "same-origin-allow-popups"):
+            for parameter in parameters:
+                with self.subTest(policy=policy, parameter=parameter):
+                    result = browser.isolation(home_with(("Permissions-Policy", "camera=()"),
+                                               ("Cross-Origin-Opener-Policy", policy + parameter)))
+                    self.assertEqual(result.status, "pass")
+                    self.assertIn(f"COOP: {policy}", result.summary)
+                    self.assertIn("cross-origin-opener-policy: " + (policy + parameter).strip(), result.evidence)
+
+    def test_coop_malformed_or_unhandled_values_need_review(self):
+        # Whole-value parsing must reject lists, malformed parameters, invalid escapes and raw controls.
+        values = ('', '"same-origin"', 'Same-Origin', 'same-origin, same-origin',
+                  'same-origin;report-to="ok", unsafe-none', 'same-origin;',
+                  'same-origin;Report-To="coop"', 'same-origin;report-to=',
+                  'same-origin;report-to="unterminated', r'same-origin;report-to="bad\q"',
+                  'same-origin ;report-to="coop"', 'same-origin;report-to ="coop"',
+                  'same-origin;\treport-to="coop"', 'same-origin;\x00report-to="coop"',
+                  'same-origin;report-to="a\tb"', 'same-origin;report-to="café"',
+                  'same-origin;flag=?2', 'same-origin;n=1000000000000000',
+                  'same-origin;d=1.0000', 'same-origin;d=1000000000000.1',
+                  # Valid structured parameter types outside this bounded parser's supported subset.
+                  'same-origin;x=:YQ==:', 'same-origin;x=@123', 'same-origin;x=%"hello"',
+                  'same-origin;report-to="' + 'a' * 8192 + '"')
+        for value in values:
+            with self.subTest(value=value[:100]):
+                result = browser.isolation(home_with(("Permissions-Policy", "camera=()"),
+                                           ("Cross-Origin-Opener-Policy", value)))
+                self.assertEqual(result.status, "warn" if value == "Same-Origin" else "manual")
+                self.assertNotIn("Missing:", result.summary)
+
+    def test_duplicate_coop_fields_cannot_pass(self):
+        for values in (("same-origin", "same-origin"), ("same-origin", "unsafe-none"),
+                       ("unsafe-none", "same-origin"), ("same-origin", "")):
+            with self.subTest(values=values):
+                result = browser.isolation(home_with(("Permissions-Policy", "camera=()"),
+                                           *(("Cross-Origin-Opener-Policy", v) for v in values)))
+                self.assertEqual(result.status, "manual")
+                for value in values:
+                    self.assertIn(f"cross-origin-opener-policy: {value}", result.evidence)
+
+    def test_coop_other_tokens_warn_without_claiming_missing(self):
+        for value in ("unsafe-none", "Same-Origin", "future-policy", "noopener-allow-popups"):
+            with self.subTest(value=value):
+                result = browser.isolation(home_with(("Permissions-Policy", "camera=()"),
+                                           ("Cross-Origin-Opener-Policy", value)))
+                self.assertEqual(result.status, "warn")
+                self.assertIn(f"is {value}", result.summary)
+                self.assertNotIn("Missing:", result.summary)
+
+    def test_coop_report_only_does_not_satisfy_check(self):
+        result = browser.isolation(home_with(("Permissions-Policy", "camera=()"),
+                                   ("Cross-Origin-Opener-Policy-Report-Only", "same-origin")))
+        self.assertEqual(result.status, "warn")
+        self.assertIn("Missing:", result.summary)
+
+    def test_valid_coop_still_requires_permissions_policy(self):
+        result = browser.isolation(home_with(("Cross-Origin-Opener-Policy", 'same-origin;report-to="coop"')))
+        self.assertEqual(result.status, "warn")
+        self.assertIn("Missing: Permissions-Policy", result.summary)
+
+    def test_manual_coop_on_one_page_prevents_site_pass(self):
+        good = resp(headers=[("Permissions-Policy", "camera=()"),
+                             ("Cross-Origin-Opener-Policy", "same-origin")])
+        uncertain = resp(headers=[("Permissions-Policy", "camera=()"),
+                                  ("Cross-Origin-Opener-Policy", 'same-origin;x=:YQ==:')],
+                         url="https://example.test/uncertain")
+        for pages in ([good, uncertain], [uncertain, good]):
+            with self.subTest(first=pages[0].url):
+                ctx = home_with()
+                ctx.cache["crawl"] = Site(pages=pages)
+                result = browser.isolation(ctx)
+                self.assertEqual(result.status, "manual")
+                self.assertIn("page: /uncertain", result.evidence)
 
 
 class CookieTest(unittest.TestCase):

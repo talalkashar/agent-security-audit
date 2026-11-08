@@ -37,9 +37,10 @@ build = """For dynamic App Router pages, build the policy in `proxy.ts` (`middle
 proof = """1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result. On each it reads the enforcing `Content-Security-Policy` header (not `-Report-Only`) and any `<meta http-equiv="Content-Security-Policy">` policy, without the directives browsers ignore in a meta tag (`frame-ancestors`, `report-uri`, `sandbox`).
 2. It takes `script-src`, or `default-src` when `script-src` is absent. Several enforcing policies all apply, so a script must be allowed by every one of them, and the strictest policy decides.
 3. Pass: an enforcing policy is set and its script directive has no `'unsafe-inline'`, or has it only alongside a `'nonce-...'` or `'sha256-'`/`'sha384-'`/`'sha512-'` source, and allows no source that matches every host (`*`, a bare scheme such as `https:`, `http:` or `data:`, `https://*`, or `*.com`) unless `'strict-dynamic'` is set with a nonce or hash.
-4. Fail: no enforcing CSP, no script directive in any policy, `'unsafe-inline'` with no nonce or hash, or a source that matches every host.
+4. Fail: no enforcing CSP (including report-only CSP without an enforcing policy), no script directive in any policy, `'unsafe-inline'` with no nonce or hash, or a source that matches every host.
 5. Manual extra: confirm `object-src 'none'`, `base-uri`, no `'unsafe-eval'` in production, and zero CSP violations in the browser console on key pages."""
 sources = [
+  { title = "W3C CSP3: Report-Only header", url = "https://www.w3.org/TR/CSP3/#csp-report-only-header" },
   { title = "Next.js docs: How to set a Content Security Policy", url = "https://nextjs.org/docs/app/guides/content-security-policy" },
   { title = "Weichselbaum et al., CSP Is Dead, Long Live CSP (CCS 2016)", url = "https://research.google/pubs/csp-is-dead-long-live-csp-on-the-insecurity-of-whitelists-and-the-future-of-content-security-policy/" },
   { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
@@ -159,10 +160,12 @@ stacks = ["any"]
 risk = """Without `Cross-Origin-Opener-Policy`, windows the site opens or is opened by keep a `window` reference, enabling XS-Leaks and reverse tabnabbing. Without `Permissions-Policy`, an injected script or third-party iframe can prompt for camera, microphone, location or payment under the site's name."""
 build = """Send `Cross-Origin-Opener-Policy: same-origin` (`same-origin-allow-popups` if the app uses OAuth or payment popups) and `Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()`, allowing only features the app uses (e.g. `camera=(self)`). Send `Cross-Origin-Resource-Policy: same-site` on API and user-file responses. Send `X-XSS-Protection: 0` or omit it; do not send `Expect-CT`. Do not set `Cross-Origin-Embedder-Policy: require-corp` by default. Hiding `X-Powered-By` is NEXT-03."""
 proof = """1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result.
-2. Pass on every page: `Permissions-Policy` is present and `Cross-Origin-Opener-Policy` is `same-origin` or `same-origin-allow-popups`.
-3. Warning: either header missing or COOP is `unsafe-none`.
-4. Manual extra: if the app uses popups, run the OAuth or payment popup flow once on staging and confirm it still completes."""
+2. Pass on every page: `Permissions-Policy` is present and the complete combined `Cross-Origin-Opener-Policy` field parses as a case-sensitive `same-origin` or `same-origin-allow-popups` token item. Parameters such as `report-to="endpoint"` are allowed; the check validates string, token, boolean and numeric parameter syntax, not reporting delivery.
+3. Warning: either header missing or the parsed COOP token is outside those two values. An unvalidated item (including malformed syntax, duplicate/list values, unsupported parameter types, or a value over 8192 characters) needs manual review and cannot pass. Byte sequence, date and display string parameters are not parsed by this check.
+4. Manual extra: confirm any unvalidated COOP header follows the structured field syntax. If the app uses popups, run the OAuth or payment popup flow once on staging and confirm it still completes."""
 sources = [
+  { title = "HTML Standard: Cross-origin opener policy headers", url = "https://html.spec.whatwg.org/multipage/browsers.html#the-cross-origin-opener-policy-header" },
+  { title = "RFC 9651: Parsing Structured Fields", url = "https://www.rfc-editor.org/rfc/rfc9651.html#section-4.2" },
   { title = "MDN: Cross-Origin-Opener-Policy", url = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cross-Origin-Opener-Policy" },
   { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },
   { title = "OWASP Secure Headers Project recommended headers", url = "https://raw.githubusercontent.com/OWASP/www-project-secure-headers/master/ci/headers_add.json" },
