@@ -475,13 +475,86 @@ class DnsTest(unittest.TestCase):
         self.assertEqual(dns_email.mail_domain(self.ctx({})), "example.com")
 
     def test_spf(self):
+        mail = {"mail.test": ['"v=spf1 ip4:192.0.2.0/24 -all"'], "_spf.mail.test": ['"v=spf1 ip4:192.0.2.0/24 ~all"']}
         cases = [(['"v=spf1 include:mail.test -all"'], "pass"), (['"v=spf1 ~all"'], "pass"),
                  (['"v=spf1 +all"'], "fail"), (['"v=spf1 all"'], "fail"), (['"v=spf1 ?all"'], "warn"),
                  (['"v=spf1 include:mail.test"'], "warn"), (['"v=spf1 redirect=_spf.mail.test"'], "pass"),
                  (['"v=spf1 -all"', '"v=spf1 ~all"'], "fail"), (['"google-site-verification=x"'], "fail"), ([], "fail")]
         for records, want in cases:
             with self.subTest(records=records):
-                self.assertEqual(dns_email.spf(self.ctx({"example.com": records})).status, want)
+                self.assertEqual(dns_email.spf(self.ctx({"example.com": records, **mail})).status, want)
+
+    def spf_ctx(self, zone, nxdomain=()):
+        """zone: {name: [SPF strings]}; names in nxdomain answer NXDOMAIN. Every query is recorded."""
+        def route(m, u, h, b):
+            name = u.split("name=")[1].split("&")[0]
+            if name in nxdomain:
+                return resp(200, [], json.dumps({"Status": 3}))
+            return resp(200, [], doh(*[f'"{r}"' for r in zone.get(name, [])]))
+        return ctx_for(route, "https://www.example.com")
+
+    def test_spf_redirect_is_walked(self):
+        c = self.spf_ctx({"example.com": ["v=spf1 redirect=_spf.example.com"], "_spf.example.com": ["v=spf1 +all"]})
+        r = dns_email.spf(c)
+        self.assertEqual(r.status, "fail")
+        self.assertIn("redirects to a record that ends in +all", r.summary)
+        c = self.spf_ctx({"example.com": ["v=spf1 redirect=_spf.example.com"], "_spf.example.com": ["v=spf1 ?all"]})
+        self.assertEqual(dns_email.spf(c).status, "warn")
+        c = self.spf_ctx({"example.com": ["v=spf1 redirect=_spf.example.com"],
+                          "_spf.example.com": ["v=spf1 include:x.test -all"], "x.test": ["v=spf1 a -all"]})
+        r = dns_email.spf(c)
+        self.assertEqual(r.status, "pass")
+        self.assertIn("needs 3 of 10 DNS lookups", r.summary)
+
+    def test_spf_more_than_ten_lookups_fails(self):
+        zone = {"example.com": ["v=spf1 include:a.test include:b.test mx -all"],
+                "a.test": ["v=spf1 a mx ptr exists:x.a.test include:c.test -all"],
+                "b.test": ["v=spf1 a:h.b.test mx:m.b.test -all"],
+                "c.test": ["v=spf1 ip4:192.0.2.1 -all"]}
+        r = dns_email.spf(self.spf_ctx(zone))  # 3 at the top + 5 in a.test + 2 in b.test = 10: still allowed
+        self.assertEqual(r.status, "pass", r.summary)
+        self.assertIn("10 of 10", r.summary)
+        zone["example.com"] = ["v=spf1 include:a.test include:b.test mx a -all"]  # 11
+        r = dns_email.spf(self.spf_ctx(zone))
+        self.assertEqual(r.status, "fail")
+        self.assertIn("RFC 7208 4.6.4", r.summary)
+
+    def test_spf_exactly_ten_and_eleven(self):
+        ten = {"example.com": ["v=spf1 " + " ".join(["a"] * 10) + " -all"]}
+        self.assertEqual(dns_email.spf(self.spf_ctx(ten)).status, "pass")
+        eleven = {"example.com": ["v=spf1 " + " ".join(["a"] * 9) + " mx include:i.test -all"],
+                  "i.test": ["v=spf1 -all"]}
+        r = dns_email.spf(self.spf_ctx(eleven))
+        self.assertEqual(r.status, "fail")
+        self.assertIn("more than 10 DNS lookups", r.summary)
+
+    def test_spf_include_loop_is_bounded(self):
+        zone = {"example.com": ["v=spf1 include:loop.test -all"], "loop.test": ["v=spf1 include:loop.test -all"]}
+        c = self.spf_ctx(zone)
+        self.assertEqual(dns_email.spf(c).status, "fail")
+        self.assertLessEqual(len(c.client.calls), dns_email.MAX_LOOKUPS + 1)
+
+    def test_spf_broken_include_or_redirect_fails(self):
+        cases = [
+            ({"example.com": ["v=spf1 include:gone.test -all"]}, ("gone.test",), "does not exist (NXDOMAIN)"),
+            ({"example.com": ["v=spf1 include:empty.test -all"]}, (), "has no SPF record"),
+            ({"example.com": ["v=spf1 redirect=gone.test"]}, ("gone.test",), "redirect gone.test does not exist"),
+            ({"example.com": ["v=spf1 include:two.test -all"], "two.test": ["v=spf1 -all", "v=spf1 ~all"]}, (),
+             "has 2 SPF records"),
+            ({"example.com": ["v=spf1 include:open.test -all"], "open.test": ["v=spf1 +all"]}, (), "ends in +all"),
+        ]
+        for zone, nx, words in cases:
+            with self.subTest(zone=zone):
+                r = dns_email.spf(self.spf_ctx(zone, nx))
+                self.assertEqual(r.status, "fail")
+                self.assertIn(words, r.summary)
+
+    def test_spf_redirect_ignored_when_all_present_and_macros_not_walked(self):
+        c = self.spf_ctx({"example.com": ["v=spf1 -all redirect=gone.test"]}, ("gone.test",))
+        self.assertEqual(dns_email.spf(c).status, "pass")
+        c = self.spf_ctx({"example.com": ["v=spf1 include:%{i}._spf.example.com -all"]})
+        self.assertEqual(dns_email.spf(c).status, "pass")
+        self.assertEqual(len(c.client.calls), 1)
 
     def test_dmarc(self):
         cases = [(['"v=DMARC1; p=reject; rua=mailto:d@example.com"'], "pass"), (['"v=DMARC1; p=quarantine; rua=mailto:d@example.com"'], "pass"),
