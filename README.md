@@ -15,7 +15,7 @@
 
 It runs as a skill and an MCP server for Claude Code, Codex, Cursor, Gemini CLI, Windsurf and any agent that reads `AGENTS.md`, and as a plain command line tool. Python 3.11+, no runtime dependencies.
 
-![The HTML report for the vulnerable practice site: 16 failed, 7 warnings, then the fixes, most severe first](docs/assets/report.png)
+![The HTML report for the vulnerable practice site: 18 failed, 6 warnings, then the fixes, most severe first](docs/assets/report.png)
 
 *The HTML report (`--out asa-report.html`) from a scan of the built-in practice site.*
 
@@ -32,7 +32,7 @@ Real terminal output from those two commands:
 
 ```text
 asa: http://127.0.0.1:8650
-16 failed · 7 warnings · 0 could not run · 82 to check in code · 0 passed · 15 not applicable
+18 failed · 6 warnings · 0 could not run · 85 to check in code · 0 passed · 17 not applicable
 
 Fix these first:
  1. [critical] INFRA-04 Sensitive files not served (.env, .git, backups, .DS_Store): Sensitive files are downloadable: /.env (environment file), /.git/HEAD (git metadata). Treat every secret in them as leaked and rotate it.
@@ -42,7 +42,7 @@ Fix these first:
  3. [high] API-21 No public debug or status endpoints: Debug or status pages are public: /actuator/env (Spring Boot actuator env (configuration and environment)). They reveal internal configuration, environment valu...
     Fix: Do not deploy debug tools to production. Restrict Apache `mod_status` and `mod_info` to localhost, delete `phpinfo()` files, expose only `health` from Spring Boot Actuator (`management.endpoints.web.e...
     ... (trimmed: fixes 4 to 10 not shown)
-    ...and 6 more failed checks in the full report.
+    ...and 8 more failed checks in the full report.
 
 Full report with evidence: asa scan http://127.0.0.1:8650 --out asa-report.html
 ```
