@@ -1,4 +1,4 @@
-"""Command line: asa list | show | rules | lab | scan | code, and `asa <url>` as a shortcut for `asa scan <url>`."""
+"""Command line: asa list | show | rules | lab | scan | code | install, and `asa <url>` as a shortcut for `asa scan <url>`."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ import os
 import sys
 from urllib.parse import urlsplit
 
-from . import __version__, catalog, code_audit, report, runner
+from . import __version__, catalog, code_audit, install, report, runner
 from .scope import ScopeError, is_local_host
 
 FAIL_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-COMMANDS = ("list", "show", "rules", "lab", "scan", "code")
+COMMANDS = ("list", "show", "rules", "lab", "scan", "code", "install")
 FORMATS = ("md", "json", "sarif", "html")
 MAX_TIME = 300.0
 EXTENSIONS = {".md": "md", ".json": "json", ".sarif": "sarif", ".html": "html", ".htm": "html"}
@@ -175,6 +175,16 @@ def build_parser():
     co.add_argument("--no-osv", action="store_true",
                     help="skip the dependency vulnerability lookup (the only network call, to api.osv.dev)")
     co.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for OSV")
+
+    ins = sub.add_parser("install", help="add the MCP server (and the skill, where supported) to an agent's config",
+                         description="Adds the asa-mcp server to one agent's MCP config, plus the skill for "
+                         "claude-code and codex. claude-code and vscode write to the current folder (.mcp.json, "
+                         ".vscode/mcp.json); the others write to your home folder. Without --yes it only prints the "
+                         "change. Existing servers are kept; a changed file is first copied to <file>.bak.")
+    ins.add_argument("agent", choices=install.AGENTS)
+    ins.add_argument("--yes", action="store_true", help="write the change (default: dry run that prints it)")
+    ins.add_argument("--uvx", action="store_true",
+                     help="run the server with `uvx --from git+<repo> asa-mcp` instead of the installed asa-mcp")
     return p
 
 
@@ -231,6 +241,12 @@ def _main(argv=None):
             return 0
         if args.cmd == "lab":
             return run_lab(args.mode, args.port)
+        if args.cmd == "install":
+            try:
+                return install.run(args.agent, yes=args.yes, uvx=args.uvx)
+            except install.InstallError as exc:
+                print(f"asa: {exc}", file=sys.stderr)
+                return 2
         if args.cmd == "code":
             target, results = code_audit.run(args.path, osv=not args.no_osv, timeout=args.timeout,
                                              ids=_csv(args.check), areas=_csv(args.area))

@@ -30,4 +30,4 @@ asa-mcp = "agent_security_audit.mcp_server:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-agent_security_audit = ["catalog/*.toml"]
+agent_security_audit = ["catalog/*.toml", "skill/SKILL.md"]
