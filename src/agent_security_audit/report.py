@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import re
@@ -305,41 +306,74 @@ def to_html(target, results):
     return "\n".join(out) + "\n"
 
 
+REPO = "https://github.com/talalkashar/agent-security-audit"
+SECURITY_SEVERITY = {"critical": "9.5", "high": "7.5", "medium": "5.0", "low": "3.0"}
+
+
+def _doc_anchor(chk):
+    """The heading anchor GitHub gives "## <id> <title>" in docs/checks/<area>.md (same rule as scripts/gen_docs.py)."""
+    text = f"{chk.id} {chk.title}".lower()
+    return "".join(ch for ch in text if ch.isalnum() or ch in " -_").replace(" ", "-")
+
+
+def _cwe_tags(cwe):
+    """GitHub code scanning reads CWE ids from tags of the form external/cwe/cwe-079."""
+    out = []
+    for c in cwe:
+        m = re.fullmatch(r"CWE-(\d+)", c)
+        if m:
+            out.append(f"external/cwe/cwe-{int(m.group(1)):03d}")
+    return out
+
+
+def _sarif_rule(chk):
+    return {
+        "id": chk.id, "name": chk.title, "shortDescription": {"text": _clean(chk.title)},
+        "fullDescription": {"text": _clean(chk.risk)},
+        "help": {"text": _clean(chk.build, 4000),
+                 "markdown": f"**Fix:** {chk.build}\n\n**How it is proven:**\n\n{chk.proof}"},
+        "helpUri": f"{REPO}/blob/main/docs/checks/{chk.area}.md#{_doc_anchor(chk)}",
+        "properties": {"tags": ["security", *chk.cwe, *_cwe_tags(chk.cwe)], "precision": "high",
+                       "security-severity": SECURITY_SEVERITY[chk.severity]},
+        "defaultConfiguration": {"level": SARIF_LEVEL[chk.severity]},
+    }
+
+
+def _fingerprint(*parts):
+    return {"asaFinding/v1": hashlib.sha256("|".join(map(str, parts)).encode()).hexdigest()[:32]}
+
+
 def to_sarif(target, results):
+    """SARIF 2.1.0 for GitHub code scanning: one rule per check that ran, one result per failed or warned check
+    (or per source location for the code audit). Valid against the OASIS schema; see tests/test_report.py."""
     checks = catalog.by_id()
     used = sorted({r.check_id for r in results})
-    rules = []
-    for cid in used:
-        chk = checks[cid]
-        rules.append({
-            "id": cid, "name": chk.title, "shortDescription": {"text": chk.title},
-            "fullDescription": {"text": chk.risk}, "help": {"text": chk.build},
-            "properties": {"tags": ["security", *chk.cwe], "security-severity": {
-                "critical": "9.5", "high": "7.5", "medium": "5.0", "low": "3.0"}[chk.severity]},
-            "defaultConfiguration": {"level": SARIF_LEVEL[chk.severity]},
-        })
+    index = {cid: i for i, cid in enumerate(used)}
+    rules = [_sarif_rule(checks[cid]) for cid in used]
     sarif_results = []
     for r in sort_results(results):
         if r.status not in ("fail", "warn"):
             continue
         chk = checks[r.check_id]
         level = SARIF_LEVEL[chk.severity] if r.status == "fail" else "note"
+        base = {"ruleId": r.check_id, "ruleIndex": index[r.check_id], "level": level}
         if not r.locations:
-            sarif_results.append({"ruleId": r.check_id, "level": level, "message": {"text": r.summary},
-                                  "locations": [{"physicalLocation": {"artifactLocation": {"uri": target}}}]})
+            sarif_results.append({**base, "message": {"text": _clean(r.summary) or chk.title},
+                                  "locations": [{"physicalLocation": {"artifactLocation": {"uri": target}}}],
+                                  "partialFingerprints": _fingerprint(r.check_id, target)})
         # Code audit results: one SARIF result per source location, relative to the project root.
         for loc in r.locations:
+            line = max(1, int(loc.get("line") or 1))
+            uri = quote(str(loc["path"]))
             sarif_results.append({
-                "ruleId": r.check_id, "level": level,
-                "message": {"text": _clean(f"{loc.get('message') or r.summary}. {r.summary}")},
+                **base, "message": {"text": _clean(f"{loc.get('message') or r.summary}. {r.summary}")},
                 "locations": [{"physicalLocation": {
-                    "artifactLocation": {"uri": quote(str(loc["path"])), "uriBaseId": "%SRCROOT%"},
-                    "region": {"startLine": max(1, int(loc.get("line") or 1))}}}],
+                    "artifactLocation": {"uri": uri, "uriBaseId": "%SRCROOT%"}, "region": {"startLine": line}}}],
+                "partialFingerprints": _fingerprint(r.check_id, uri, line, _clean(loc.get("message") or "")),
             })
     return json.dumps({
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json", "version": "2.1.0",
         "runs": [{"tool": {"driver": {"name": "agent-security-audit", "version": __version__,
-                                      "informationUri": "https://github.com/talalkashar/agent-security-audit",
-                                      "rules": rules}},
+                                      "semanticVersion": __version__, "informationUri": REPO, "rules": rules}},
                   "results": sarif_results}],
     }, indent=2)

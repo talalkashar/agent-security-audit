@@ -85,13 +85,93 @@ class CodeSpanTest(unittest.TestCase):
         self.assertEqual(row.count("|") - row.count("\\|"), 5)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class HiddenCarrierTest(unittest.TestCase):
     def test_variation_selectors_and_fillers_are_dropped(self):
         from agent_security_audit import mcp_server
         text = "ok" + "".join(chr(c) for c in range(0xE0100, 0xE0105)) + "\ufe0f\u3164\u115f\u034f\uffa0end"
         self.assertEqual(report.strip_invisible(text), "okend")
         self.assertEqual(mcp_server._data(text, 100), "okend")
+
+
+class SarifTest(unittest.TestCase):
+    """Structure required by the SARIF 2.1.0 schema and by GitHub code scanning. The full OASIS schema (112 KB) was
+    used to validate real lab and code-audit output; these assertions pin the parts GitHub relies on."""
+
+    def sarif(self, results, target="http://127.0.0.1:8080"):
+        import json
+        return json.loads(report.to_sarif(target, results))
+
+    def results(self):
+        from agent_security_audit.model import Result, passed, warned
+        loc = [{"path": "app/a b.ts", "line": 0, "message": "service key"}, {"path": "lib/x.ts", "line": 7}]
+        return [failed("NEXT-03", "X-Powered-By: " + HOSTILE, ["e"]), warned("BROWSER-02", "weak"),
+                passed("INFRA-04", "fine", ["ok"]), failed("NEXT-01", "key in code", ["k"]),
+                Result("NEXT-02", "fail", "map", [], "", loc)]
+
+    def test_top_level_and_driver(self):
+        doc = self.sarif(self.results())
+        self.assertEqual(doc["version"], "2.1.0")
+        self.assertTrue(doc["$schema"].endswith("sarif-2.1.0.json"))
+        self.assertEqual(len(doc["runs"]), 1)
+        driver = doc["runs"][0]["tool"]["driver"]
+        self.assertEqual(driver["name"], "agent-security-audit")
+        self.assertTrue(driver["version"])
+        self.assertTrue(driver["informationUri"].startswith("https://"))
+
+    def test_rules_carry_what_github_shows(self):
+        rules = self.sarif(self.results())["runs"][0]["tool"]["driver"]["rules"]
+        self.assertEqual([r["id"] for r in rules], sorted(r["id"] for r in rules))
+        for rule in rules:
+            self.assertTrue(rule["shortDescription"]["text"])
+            self.assertTrue(rule["fullDescription"]["text"])
+            self.assertTrue(rule["help"]["text"])
+            self.assertIn("**Fix:**", rule["help"]["markdown"])
+            self.assertRegex(rule["helpUri"], r"^https://github\.com/.+/docs/checks/\w+\.md#[a-z0-9_-]+$")
+            self.assertIn(rule["defaultConfiguration"]["level"], ("error", "warning", "note"))
+            props = rule["properties"]
+            self.assertIsInstance(props["security-severity"], str)
+            self.assertGreater(float(props["security-severity"]), 0)
+            self.assertIn("security", props["tags"])
+            self.assertTrue(all(isinstance(t, str) for t in props["tags"]))
+
+    def test_cwe_tags_use_github_form(self):
+        self.assertEqual(report._cwe_tags(("CWE-79", "CWE-1021", "x")), ["external/cwe/cwe-079", "external/cwe/cwe-1021"])
+
+    def test_results_have_level_location_rule_index_and_fingerprint(self):
+        doc = self.sarif(self.results())
+        run = doc["runs"][0]
+        rules = run["tool"]["driver"]["rules"]
+        res = run["results"]
+        self.assertNotIn("INFRA-04", {r["ruleId"] for r in res})  # a pass is not a result
+        self.assertEqual(len(res), 5)  # 3 live findings plus 2 code locations
+        for r in res:
+            self.assertEqual(rules[r["ruleIndex"]]["id"], r["ruleId"])
+            self.assertIn(r["level"], ("error", "warning", "note"))
+            self.assertTrue(r["message"]["text"])
+            self.assertEqual(len(r["locations"]), 1)
+            self.assertTrue(r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"])
+            self.assertRegex(r["partialFingerprints"]["asaFinding/v1"], r"^[0-9a-f]{32}$")
+        self.assertEqual(len({r["partialFingerprints"]["asaFinding/v1"] for r in res}), len(res))
+        warn = next(r for r in res if r["ruleId"] == "BROWSER-02")
+        self.assertEqual(warn["level"], "note")
+
+    def test_code_locations_are_relative_and_one_based(self):
+        res = self.sarif(self.results())["runs"][0]["results"]
+        code = [r["locations"][0]["physicalLocation"] for r in res if r["ruleId"] == "NEXT-02"]
+        self.assertEqual(code[0]["artifactLocation"], {"uri": "app/a%20b.ts", "uriBaseId": "%SRCROOT%"})
+        self.assertEqual([c["region"]["startLine"] for c in code], [1, 7])
+
+    def test_messages_are_cleaned(self):
+        res = self.sarif(self.results())["runs"][0]["results"]
+        msg = next(r for r in res if r["ruleId"] == "NEXT-03")["message"]["text"]
+        self.assertNotIn("\n", msg)
+        self.assertNotIn("\r", msg)
+
+    def test_fingerprints_are_stable(self):
+        a = self.sarif(self.results())["runs"][0]["results"]
+        b = self.sarif(self.results())["runs"][0]["results"]
+        self.assertEqual([r["partialFingerprints"] for r in a], [r["partialFingerprints"] for r in b])
+
+
+if __name__ == "__main__":
+    unittest.main()
