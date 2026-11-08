@@ -12,6 +12,7 @@ import secrets
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from ..crawl import crawl, is_html
+from ..http import challenge_of
 from ..model import Result, failed, passed, skipped, warned
 from ..scope import is_local_host, same_origin
 from . import are, auto, count
@@ -446,23 +447,35 @@ GRAPHQL_ERROR = re.compile(r"(?i)introspection|cannot query field|\bGRAPHQL_[A-Z
 PROBE_ECHO = re.compile(r"(?i)AsaIntrospectionProbe")
 
 
+GRAPHQL_MEDIA_TYPES = ("application/graphql-response+json", "application/graphql+json")
+# Router answers (not found, wrong method) say nothing about GraphQL; auth, throttle, gateway and firewall answers come
+# from middleware, a proxy or a WAF before any GraphQL server ran, so they cannot prove introspection was refused.
+GRAPHQL_NOT_HERE = (404, 405, 410, 501)
+GRAPHQL_NOT_SERVER = (401, 403, 407, 429, 502, 503, 504)
+
+
 def _graphql_refusal(resp, data):
     """'proven', 'unclear' (GraphQL-shaped errors only) or None (not GraphQL errors at all)."""
+    if resp.status in GRAPHQL_NOT_HERE:
+        return None
     if not (isinstance(data, dict) and isinstance(data.get("errors"), list) and data["errors"]
             and all(isinstance(e, dict) and "message" in e for e in data["errors"])):
         return None
-    if "graphql" in (resp.get("content-type") or "").lower():
+    if resp.status in GRAPHQL_NOT_SERVER or challenge_of(resp):
+        return "unclear"
+    ctype = (resp.get("content-type") or "").split(";")[0].strip().lower()
+    if ctype in GRAPHQL_MEDIA_TYPES:
         return "proven"
     query = json.loads(INTROSPECTION)["query"]
     text = json.dumps(data["errors"])[:5000].replace(json.dumps(query)[1:-1], "").replace(query, "")
     if GRAPHQL_ERROR.search(PROBE_ECHO.sub("", text)):
         return "proven"
-    return None if resp.status in (404, 405) else "unclear"
+    return "unclear"
 
 
 @auto("API-23")
 def graphql_introspection(ctx):
-    open_, closed, unclear, ev = [], [], [], []
+    open_, closed, unclear, hidden, ev = [], [], [], [], []
     for path in GRAPHQL_PATHS:
         resp = ctx.client.request("POST", path, body=INTROSPECTION, headers={"Content-Type": "application/json"})
         try:
@@ -482,7 +495,13 @@ def graphql_introspection(ctx):
             ev.append(f"POST {path} -> {resp.status}, GraphQL error returned (introspection refused)")
         elif _graphql_refusal(resp, data) == "unclear":
             unclear.append(path)
-            ev.append(f"POST {path} -> {resp.status}, JSON errors, but no GraphQL media type or GraphQL error message")
+            ev.append(f"POST {path} -> {resp.status}, JSON errors, but " + (
+                "an auth, throttle, gateway or firewall answer" if resp.status in GRAPHQL_NOT_SERVER or challenge_of(resp)
+                else "no GraphQL media type or GraphQL error message"))
+        elif resp.status in GRAPHQL_NOT_SERVER or challenge_of(resp):
+            hidden.append(f"{path} ({resp.status})")
+            ev.append(f"POST {path} -> {resp.status}, an auth, throttle, gateway or firewall answer without GraphQL "
+                      "errors; whether GraphQL is behind it is not known")
         else:
             ev.append(f"POST {path} -> {resp.status}, not a GraphQL endpoint")
     if open_:
@@ -494,6 +513,10 @@ def graphql_introspection(ctx):
     if unclear:
         return Result("API-23", "manual", f"{', '.join(unclear)} answered the introspection query with errors, but "
                       "nothing shows it is GraphQL. If it is, confirm by hand that introspection is refused.", ev)
+    if hidden:  # nothing shows GraphQL, but these answers came before any app could, so absence is not shown either
+        return skipped("API-23", f"No GraphQL answer at /graphql or /api/graphql; {', '.join(hidden)} answered with "
+                       "an auth, throttle, gateway or firewall status, which hides whether an endpoint is there. "
+                       "If the site runs GraphQL, check introspection by hand with access.")
     return skipped("API-23", "No GraphQL endpoint at /graphql or /api/graphql.")
 
 

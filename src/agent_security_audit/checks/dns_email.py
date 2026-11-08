@@ -50,7 +50,8 @@ def _why_skip(ctx):
         return None
 
 
-def txt_records(ctx, name):
+def _txt_lookup(ctx, name):
+    """(DNS response code, TXT strings) for name through the configured DNS-over-HTTPS resolver."""
     resolver = ctx.opt("dns_resolver", DEFAULT_RESOLVER)
     url = f"{resolver}?name={quote(name)}&type=TXT"
     resp = ctx.client.external("GET", url, headers={"Accept": "application/dns-json"})
@@ -69,7 +70,81 @@ def txt_records(ctx, name):
         raw = str(ans.get("data", ""))
         parts = QUOTED.findall(raw)
         records.append("".join(parts) if parts else raw)
-    return records
+    rcode = data.get("Status", 0)
+    return (rcode if isinstance(rcode, int) else 0), records
+
+
+def txt_records(ctx, name):
+    return _txt_lookup(ctx, name)[1]
+
+
+def _spf_records(records):
+    return [r for r in records if r.lower() == "v=spf1" or r.lower().startswith("v=spf1 ")]
+
+
+# RFC 7208 4.6.4: include, a, mx, ptr and exists mechanisms and the redirect modifier each cost one DNS lookup, counted
+# across every included record; more than 10 is a permerror, so receivers treat the SPF policy as broken.
+MAX_LOOKUPS = 10
+DNS_MECHANISM = re.compile(r"^(?:a|mx|ptr)(?:$|[:/])|^exists:")
+NXDOMAIN = 3
+
+
+def _all_of(terms):
+    return next((t for t in terms if t.lstrip("+-~?") == "all"), None)
+
+
+def _walk_spf(ctx, record):
+    """Expand include: and redirect= through the same resolver. Returns (lookups, problems, evidence, effective record),
+    where the effective record is the one whose all mechanism decides (the redirect target when there is no all).
+    Stops once the lookup limit is passed, so it never sends more than MAX_LOOKUPS + 1 queries."""
+    state = {"lookups": 0, "problems": [], "ev": []}
+
+    def walk(rec, depth):
+        terms = rec.lower().split()[1:]
+        effective = rec
+        has_all = _all_of(terms) is not None
+        for term in terms:
+            mech = term.lstrip("+-~?")
+            if term.startswith("redirect="):
+                if has_all:  # RFC 7208 6.1: redirect is ignored when the record has an all mechanism
+                    continue
+                kind, target = "redirect", term.removeprefix("redirect=")
+            elif mech.startswith("include:"):
+                kind, target = "include", mech.removeprefix("include:")
+            elif DNS_MECHANISM.search(mech):
+                state["lookups"] += 1
+                continue
+            else:
+                continue
+            state["lookups"] += 1
+            if state["lookups"] > MAX_LOOKUPS:
+                return effective
+            if "%" in target or depth >= MAX_LOOKUPS:  # a macro is expanded per message; it cannot be resolved here
+                continue
+            rcode, records = _txt_lookup(ctx, target)
+            found = _spf_records(records)
+            if rcode == NXDOMAIN:
+                state["problems"].append(f"{kind} {target} does not exist (NXDOMAIN)")
+            elif rcode != 0:
+                raise OSError(f"DNS resolver answered status {rcode} for {target}")
+            elif not found:
+                state["problems"].append(f"{kind} {target} has no SPF record")
+            elif len(found) > 1:
+                state["problems"].append(f"{kind} {target} has {len(found)} SPF records")
+            else:
+                state["ev"].append(f"TXT {target}: {found[0]}")
+                inner = walk(found[0], depth + 1)
+                # judge the record the include resolves to, after its own redirect (RFC 7208 5.2, 6.1)
+                if kind == "include" and _all_of(inner.lower().split()[1:]) in ("all", "+all"):
+                    state["problems"].append(f"include {target} ends in +all, so it matches every server")
+                if kind == "redirect":
+                    effective = inner
+            if state["lookups"] > MAX_LOOKUPS:
+                return effective
+        return effective
+
+    effective = walk(record, 0)
+    return state["lookups"], state["problems"], state["ev"], effective
 
 
 @auto("INFRA-06")
@@ -78,7 +153,7 @@ def spf(ctx):
     if why:
         return skipped("INFRA-06", why)
     domain = mail_domain(ctx)
-    found = [r for r in txt_records(ctx, domain) if r.lower().startswith("v=spf1")]
+    found = _spf_records(txt_records(ctx, domain))
     if not found:
         return failed("INFRA-06", f"{domain} has no SPF record, so anyone can send mail that claims to be from it. "
                       "If the domain sends no mail, publish v=spf1 -all.", [f"TXT {domain}: no v=spf1 record"])
@@ -90,11 +165,26 @@ def spf(ctx):
     terms = record.lower().split()
     if "+all" in terms or "all" in terms:
         return failed("INFRA-06", "SPF ends in +all, which lets every server on the internet send as this domain.", ev)
+    lookups, problems, walked, effective = _walk_spf(ctx, record)
+    ev += walked[:12]
+    if lookups > MAX_LOOKUPS:
+        return failed("INFRA-06", f"SPF needs more than {MAX_LOOKUPS} DNS lookups once includes and redirects are "
+                      "expanded, so receivers return permerror and the policy protects nothing (RFC 7208 4.6.4). "
+                      "Remove unused includes or flatten them.", ev + [f"DNS lookups counted: over {MAX_LOOKUPS}"])
+    if problems:
+        return failed("INFRA-06", "SPF points at records that do not resolve to one valid SPF policy ("
+                      + "; ".join(problems) + "), so receivers return permerror or let every server pass.", ev)
+    ev.append(f"DNS lookups counted: {lookups} of {MAX_LOOKUPS}")
+    terms = effective.lower().split()
+    if "+all" in terms or "all" in terms:
+        return failed("INFRA-06", "SPF redirects to a record that ends in +all, which lets every server on the "
+                      "internet send as this domain.", ev)
     if "?all" in terms:
         return warned("INFRA-06", "SPF ends in ?all (neutral), which gives receivers no instruction.", ev)
-    if not any(t.endswith("all") for t in terms) and not any(t.startswith("redirect=") for t in terms):
+    if _all_of(terms) is None:
         return warned("INFRA-06", "SPF has no all mechanism; end it with -all or ~all.", ev)
-    return passed("INFRA-06", "SPF names the allowed senders and rejects or flags the rest.", ev)
+    return passed("INFRA-06", f"SPF names the allowed senders, rejects or flags the rest, and needs {lookups} of "
+                  f"{MAX_LOOKUPS} DNS lookups.", ev)
 
 
 @auto("INFRA-07")

@@ -168,9 +168,10 @@ Publish exactly one `v=spf1` TXT record at the apex listing only senders in use 
 ### Proof test
 
 1. Query TXT for the apex over DNS over HTTPS through a public resolver. Skipped with --no-dns.
-2. Expand includes and redirects recursively and count DNS-querying terms (include, a, mx, ptr, exists, redirect).
-3. Pass: exactly one v=spf1 record, 10 or fewer lookups, ends in -all or ~all, every included domain resolves.
-4. Fail: none, more than one, +all or ?all, more than 10 lookups, or an include that returns NXDOMAIN.
+2. Expand includes and redirects recursively through the same resolver (it stops once the limit is passed, so at most 11 queries) and count DNS-querying terms (include, a, mx, ptr, exists, redirect), as RFC 7208 4.6.4 does. A redirect is ignored when the record has an all mechanism; an include or redirect with a macro (%{...}) counts but is not expanded.
+3. Pass: exactly one v=spf1 record, 10 or fewer lookups, every include and redirect resolves to exactly one SPF record, and the deciding record (the redirect target when there is no all) ends in -all or ~all.
+4. Fail: none or more than one SPF record; +all, in the record, in an included record or in the redirect target; more than 10 lookups; an include or redirect that returns NXDOMAIN, has no SPF record or has more than one.
+5. Warning: ?all, or no all mechanism.
 
 ### Sources
 

@@ -19,9 +19,9 @@ PROBE_ORIGIN = "https://asa-origin-probe.invalid"
 # Whole words in a cookie name (split on punctuation and camelCase) that mark a session or auth cookie. Whole words, so
 # "author" or "consider" do not count.
 SESSION_WORDS = {"session", "sess", "sessid", "sessionid", "sid", "auth", "token", "jwt", "login", "remember",
-                 "refresh", "jsessionid", "phpsessid"}
+                 "refresh", "jsessionid", "phpsessid", "cfid"}
 # Run-together platform names: ASP.NET .ASPXAUTH and ASPSESSIONID<suffix>, Drupal SESS<hash> and SSESS<hash>,
-# MOODLESESSION, ColdFusion CFTOKEN. A word counts when it starts with sess or ssess, contains session, or ends with
+# MOODLESESSION, ColdFusion CFTOKEN (CFID is a whole word above). A word counts when it starts with sess or ssess, contains session, or ends with
 # auth or token; "author", "authorized" and "tokenizer" still do not.
 SESSION_RUN_ON = re.compile(r"^s?sess|session|(auth|token)$")
 # Double-submit CSRF cookies (Django csrftoken, Laravel/Angular XSRF-TOKEN, csurf _csrf) must be readable by

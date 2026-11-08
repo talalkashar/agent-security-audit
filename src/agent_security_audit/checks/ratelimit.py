@@ -8,7 +8,7 @@ from urllib.parse import urlencode, urlsplit
 from ..crawl import crawl
 from ..model import Result, passed, warned
 from ..scope import same_origin
-from . import auto
+from . import auto, count
 
 FAKE_EMAIL = "asa-rate-limit-probe@example.invalid"
 FAKE_PASSWORD = "asa-not-a-real-password"
@@ -24,9 +24,9 @@ LIMIT_WORDS = ("too many", "rate limit", "try again later", "slow down", "locked
 LOGIN_PATH = re.compile(r"(?i)log[-_]?in|sign[-_]?in|session|auth")
 NOT_LOGIN_PATH = re.compile(r"(?i)sign[-_]?up|register|join|create|invite|reset|forgot|recover")
 USER_FIELD = re.compile(r"(?i)e-?mail|user|login|account|identifier")
-# Statuses that mean refusal or lockout on their own. Any other new error status (a 500 or 502) counts only when the
-# next attempt repeats it, so one transient server error is not reported as a limit.
-THROTTLE_STATUSES = (403, 423, 503)
+# 429 (handled on its own) and 423 Locked mean throttling; any other changed status (a 403, a 400, a 500 or 502) proves
+# nothing without limit or lockout wording. A 403 can be a WAF or CSRF refusal, and a 5xx is the server failing.
+THROTTLE_STATUSES = (423,)
 
 
 def _path(url):
@@ -73,7 +73,7 @@ def login_rate_limit(ctx):
     attempts = max(1, min(int(ctx.opt("rate_limit_attempts", 30)), MAX_ATTEMPTS))
     headers = {"Content-Type": target["ctype"]} if body is not None else {}
     source = f"endpoint from {target['source']}"
-    statuses, base_status, base_words, pending = [], None, set(), None
+    statuses, base_status, base_words = [], None, set()
     for i in range(1, attempts + 1):
         resp = ctx.client.request(method, path, headers=headers, body=body)
         statuses.append(resp.status)
@@ -89,27 +89,31 @@ def login_rate_limit(ctx):
             base_status, base_words = resp.status, _limit_words(resp)
         if resp.status == 429:
             retry = resp.get("retry-after")
-            ev = [f"{method} {path}: {i - 1} attempts accepted, attempt {i} got 429",
+            ev = [f"{method} {path}: {count(i - 1, 'attempt')} accepted, attempt {i} got 429",
                   f"retry-after: {retry or '(not set)'}", source]
             if not retry:
-                return warned("API-01", f"Rate limited after {i - 1} attempts, but no Retry-After header.", ev)
-            return passed("API-01", f"Rate limited after {i - 1} attempts (429, Retry-After {retry}).", ev)
-        # Limit words the first answer did not have, a lockout status, or a new error status seen twice in a row is
-        # throttling. It began at the first changed attempt.
+                return warned("API-01", f"Rate limited after {count(i - 1, 'attempt')}, but no Retry-After header.", ev)
+            return passed("API-01", f"Rate limited after {count(i - 1, 'attempt')} (429, Retry-After {retry}).", ev)
+        # Limit or lockout words the first answer did not have, or a change to 423 Locked, is throttling.
         words = sorted(_limit_words(resp) - base_words)
-        changed = i > 1 and resp.status != base_status and resp.status >= 400
-        if words or (changed and (resp.status in THROTTLE_STATUSES or pending == resp.status)):
-            start = i - 2 if pending == resp.status else i - 1
-            span = f"attempt {i}" if start == i - 1 else f"attempts {start + 1}-{i}"
+        changed = i > 1 and resp.status != base_status
+        if words or (changed and resp.status in THROTTLE_STATUSES):
+            start = i - 1
             why = f"{resp.status}" + (f" saying \"{words[0]}\"" if words else "")
-            return warned("API-01", f"Throttled after {start} attempts: attempt {start + 1} got {why} instead of "
+            return warned("API-01", f"Throttled after {count(start, 'attempt')}: attempt {i} got {why} instead of "
                           f"{base_status}. Clients and monitoring expect 429 with Retry-After.",
-                          [f"{method} {path}: attempts 1-{start} -> {base_status}, {span} -> {resp.status}", source])
-        pending = resp.status if changed else None
+                          [f"{method} {path}: " + ("attempt 1" if start == 1 else f"attempts 1-{start}")
+                           + f" -> {base_status}, attempt {i} -> {resp.status}", source])
     summary = ", ".join(f"{s}x{statuses.count(s)}" for s in sorted(set(statuses)))
     ev = [f"{method} {path} x{attempts}: {summary}", source]
+    errors = sum(s >= 500 for s in statuses)
+    if errors and len(set(statuses)) > 1:
+        return warned("API-01", f"Inconsistent responses, no limit proven: {count(errors, 'server error')} "
+                      f"({', '.join(str(s) for s in sorted({s for s in statuses if s >= 500}))}) among {attempts} login "
+                      "attempts, with no 429, 423 or limit wording. Check the server logs and confirm the limit in "
+                      "code.", ev)
     if attempts < MIN_VERDICT:
-        return warned("API-01", f"No limit seen within {attempts} attempts, which is too few to judge; use at least "
+        return warned("API-01", f"No limit seen within {count(attempts, 'attempt')}, which is too few to judge; use at least "
                       f"{MIN_VERDICT} (default 30).", ev)
     same = "every answer was the same" if len(set(statuses)) == 1 else "no answer changed in a way that shows a limit"
     return warned("API-01", f"No limit observed up to {attempts} login attempts from one client: {same}. A limit may "

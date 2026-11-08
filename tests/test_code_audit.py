@@ -479,6 +479,87 @@ class AccuracyTest(unittest.TestCase):
         self.assertEqual(r["BROWSER-02"].status, "pass", r["BROWSER-02"].summary)
         self.assertEqual(r["BROWSER-08"].status, "warn")  # no Cross-Origin-Opener-Policy, as the live check says
 
+    def test_middleware_headers_in_separate_branches_are_manual(self):
+        pp = "res.headers.set('Permissions-Policy', 'camera=()');\n"
+        coop = "res.headers.set('Cross-Origin-Opener-Policy', 'same-origin');\n"
+        hsts = "res.headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');\n"
+        head = "export function middleware(req) {\n  const res = NextResponse.next();\n"
+        cases = {
+            "if/else": head + "  if (req.nextUrl.pathname.startsWith('/api')) {\n    " + pp + "  } else {\n    " + coop
+                       + "  }\n  return res;\n}\n",
+            "early return": head + "  if (!req.cookies.get('sid')) {\n    return NextResponse.redirect('/login');\n  }\n  "
+                            + pp + "  " + coop + "  return res;\n}\n",
+            "brace-less early return": head + "  if (req.method === 'OPTIONS') return res;\n  " + pp + "  " + coop
+                                       + "  return res;\n}\n",
+            "brace-less if": head + "  if (prod) " + pp + "  " + coop + "  return res;\n}\n",
+            "switch": head + "  switch (kind) {\n    case 'a': " + pp + "      " + coop + "      break;\n  }\n"
+                      "  return res;\n}\n",
+        }
+        for name, mw in cases.items():
+            with self.subTest(name=name):
+                r = audit_files({"middleware.ts": mw})
+                self.assertEqual(r["BROWSER-08"].status, "manual", r["BROWSER-08"].summary)
+                self.assertIn("only in some branches", r["BROWSER-08"].summary)
+        r = audit_files({"middleware.ts": cases["early return"].replace(pp, pp + "  " + hsts)})
+        self.assertEqual(r["BROWSER-01"].status, "manual")
+
+    def test_semicolon_free_middleware_sets_after_a_braceless_if_pass(self):
+        # A brace-less if guards one statement; in code without semicolons later sets still run on every request.
+        xfo = "  response.headers.set('X-Frame-Options', 'DENY')\n  response.headers.set('X-Content-Type-Options', 'nosniff')\n"
+        for guard in ("  if (process.env.DEBUG) console.log(request.url)\n",
+                      "  if (isProtectedRoute(req)) await auth.protect()\n",
+                      "  if (process.env.DEBUG)\n    console.log(request.url)\n"):
+            with self.subTest(guard=guard):
+                mw = ("export default function middleware(request) {\n" + guard
+                      + "  const response = NextResponse.next()\n" + xfo + "  return response\n}\n")
+                r = audit_files({"middleware.ts": mw})
+                self.assertEqual(r["BROWSER-03"].status, "pass", r["BROWSER-03"].summary)
+                self.assertEqual(r["BROWSER-04"].status, "pass", r["BROWSER-04"].summary)
+        # The set that is the guarded statement, on the same or the next line, is still conditional.
+        for guard in ("  if (prod) ", "  if (prod)\n    ", "  if (a) foo()\n  else "):
+            with self.subTest(guard=guard):
+                mw = ("export default function middleware(request) {\n  const response = NextResponse.next()\n"
+                      + guard + "response.headers.set('X-Frame-Options', 'DENY')\n  return response\n}\n")
+                self.assertEqual(audit_files({"middleware.ts": mw})["BROWSER-04"].status, "manual")
+
+    def test_middleware_early_return_inside_a_loop_is_manual(self):
+        xfo = "  res.headers.set('X-Frame-Options', 'DENY')\n  res.headers.set('X-Content-Type-Options', 'nosniff')\n"
+        loops = {
+            "for of": "  for (const p of SKIP) {\n    if (path.startsWith(p)) return NextResponse.next()\n  }\n",
+            "classic for": "  for (let i = 0; i < SKIP.length; i++) {\n    if (path.startsWith(SKIP[i])) return NextResponse.next();\n  }\n",
+            "while": "  while (i < n) {\n    if (skip(i)) return NextResponse.next()\n    i++\n  }\n",
+            "brace-less for": "  for (const p of SKIP) if (path.startsWith(p)) return NextResponse.next()\n",
+        }
+        for name, loop in loops.items():
+            with self.subTest(name=name):
+                mw = ("export function middleware(req) {\n  const path = req.nextUrl.pathname\n" + loop
+                      + "  const res = NextResponse.next()\n" + xfo + "  return res\n}\n")
+                r = audit_files({"middleware.ts": mw})
+                self.assertEqual(r["BROWSER-03"].status, "manual", r["BROWSER-03"].summary)
+                self.assertEqual(r["BROWSER-04"].status, "manual", r["BROWSER-04"].summary)
+
+    def test_sanitized_html_count_agrees(self):
+        one = audit_files({"a.jsx": "export const A = () => <div dangerouslySetInnerHTML={{ __html: '<b>x</b>' }} />;\n"})
+        self.assertIn("(1 literal or sanitized use)", one["BROWSER-09"].summary)
+        two = audit_files({"a.jsx": "export const A = () => <div dangerouslySetInnerHTML={{ __html: '<b>x</b>' }} />;\n"
+                                    "export const B = () => <p dangerouslySetInnerHTML={{ __html: '<i>y</i>' }} />;\n"})
+        self.assertIn("(2 literal or sanitized uses)", two["BROWSER-09"].summary)
+
+    def test_middleware_headers_on_every_path_still_pass(self):
+        # A helper with its own early return, a nonce template and a final return do not make the sets conditional.
+        mw = ("function pick(x) {\n  if (!x) return 'a';\n  return x;\n}\n"
+              "export function middleware(req) {\n  const nonce = crypto.randomUUID();\n"
+              "  const res = NextResponse.next();\n"
+              "  res.headers.set('Permissions-Policy', `camera=()`);\n"
+              "  res.headers.set('Cross-Origin-Opener-Policy', 'same-origin');\n"
+              "  if (req.nextUrl.pathname === '/x') { console.log(pick(nonce)); }\n  return res;\n}\n")
+        r = audit_files({"middleware.ts": mw})
+        self.assertEqual(r["BROWSER-08"].status, "pass", r["BROWSER-08"].summary)
+        # A weak value set in one branch is still a fail: that value is observed in the code.
+        weak = ("export function middleware(req) {\n  if (a) {\n"
+                "    res.headers.set('Strict-Transport-Security', 'max-age=0');\n  }\n}\n")
+        self.assertEqual(audit_files({"middleware.ts": weak})["BROWSER-01"].status, "fail")
+
     def test_header_value_from_import_and_ternary(self):
         r = audit_files({
             "src/config/headers.ts": 'export const HSTS = "max-age=100";\n',

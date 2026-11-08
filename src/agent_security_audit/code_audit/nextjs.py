@@ -575,31 +575,15 @@ def _headers_in(rel, text, project=None, loose=True):
     return out
 
 
-BRANCH = re.compile(r"\b(?:if|else|switch|case|for|while|do|catch)\b|\?")
 MATCHER = re.compile(r"\bmatcher\s*:")
 
 
 def _some_requests(text):
-    """A function (offset) -> True when middleware may set a header at offset on only some requests: the file has a
-    matcher, or the line sits in an if/else/switch/loop/catch block, after a return, or the braces do not balance."""
+    """A matcher or unbalanced source prevents proving that headers reach every request.
+    Per-statement branches are judged after their literal values, so weak values still fail."""
     code = _blank_strings(text)
-    depth = _depths(code)
-    if MATCHER.search(code) or depth[-1]:
-        return lambda off: True
-
-    def some(off):
-        if re.search(r"\breturn\b", code[:off]):
-            return True
-        need, p = depth[off], off - 1
-        while need and p >= 0:
-            if code[p] == "{" and depth[p] == need - 1:
-                head = re.split(r"[;{}]", code[max(0, p - 400):p])[-1]
-                if BRANCH.search(head):
-                    return True
-                need -= 1
-            p -= 1
-        return False
-    return some
+    partial = bool(MATCHER.search(code) or _depths(code)[-1])
+    return lambda off: partial
 
 
 SHORTHAND_HEADERS = re.compile(r"[{,]\s*headers\s*[,}]")
@@ -625,6 +609,61 @@ def _route(rx, text, offset):
 
 
 _RANK = {"fail": 0, "warn": 1, "manual": 2, "pass": 3}
+# A block opened by if, else, switch, case, try, catch, finally or a loop runs on some requests only (a loop body
+# may run zero times, and a return inside it leaves the whole function).
+COND_OPEN = re.compile(r"(?:\b(?:if|switch|catch|while)\s*\([^{};]*\)|\bfor\s*(?:await\s*)?\([^{}]*\)|"
+                       r"\belse|\btry|\bfinally|\bdo|\bcase\b[^{};:]*:|\bdefault\s*:)\s*$")
+BRACELESS_IF = re.compile(r"\b(?:if|for)\s*\(|\belse\b")
+STATEMENT = re.compile(r"\s*[^;\n]*")  # one statement: up to the next ; or line break
+
+
+def _conditional(text, offsets):
+    """The offsets (header sets in a middleware or proxy file) that do not run on every request: inside an if, else,
+    switch, try or loop block, as the body of a brace-less if, else or for, or after a conditional early return in
+    the same function."""
+    clean = _blank_strings(text)
+
+    def braceless(pos):
+        """True when pos is the body of a brace-less if, else or for in the same statement run. Code without
+        semicolons ends a statement at the line break, so an earlier brace-less if guards its own line only.
+        Looks back 400 characters and at the last three keywords, which keeps the scan linear on any input."""
+        start = max(clean.rfind(c, max(0, pos - 400), pos) for c in ";{}") + 1 or max(0, pos - 400)
+        for m in list(BRACELESS_IF.finditer(clean, start, pos))[-3:]:
+            body, depth = m.end(), 0
+            if clean[body - 1] == "(":  # skip the condition to its closing parenthesis
+                depth = 1
+                while body < pos and depth:
+                    depth += {"(": 1, ")": -1}.get(clean[body], 0)
+                    body += 1
+            if not depth and STATEMENT.match(clean, body, pos).end() >= pos:
+                return True
+        return False
+
+    # Each open block is [conditional, holds a conditional return]; the counts keep every event O(1).
+    stack, plain, ncond, nreturn, out = [], [], 0, 0, set()
+    events = sorted([(m.start(), m.group()) for m in re.finditer(r"[{}]|\breturn\b", clean)]
+                    + [(o, "set") for o in offsets])
+    for pos, kind in events:
+        if kind == "{":
+            cond = bool(COND_OPEN.search(clean[max(0, pos - 300):pos]))
+            ncond += cond
+            if not cond:
+                plain.append(len(stack))
+            stack.append([cond, False])
+        elif kind == "}":
+            if stack:
+                cond, returned = stack.pop()
+                ncond -= cond
+                nreturn -= returned
+                if not cond:
+                    plain.pop()
+        elif kind == "return":
+            if plain and not stack[plain[-1]][1] and (ncond or braceless(pos)):
+                stack[plain[-1]][1] = True  # later sets in this function run on some requests only
+                nreturn += 1
+        elif ncond or nreturn or braceless(pos):
+            out.add(pos)
+    return out
 
 
 def _header_result(project, cid, label, names, check, files, texts, found):
@@ -664,6 +703,10 @@ def _header_result(project, cid, label, names, check, files, texts, found):
                                                  "site.")
             judged.append((status, f"{f}: {summary}"))
         status, summary = min(judged, key=lambda x: _RANK[x[0]])
+        if status != "fail" and MIDDLEWARE.search(f) and _conditional(texts[f], [off for _, _, off, _ in hits]):
+            status, summary = "manual", (f"{f} sets {label} only in some branches (if/else, switch or after an early "
+                                         "return), so the code does not show that every response carries it. Confirm "
+                                         "it on the live site.")
         per_file.append((status, summary, findings))
     if not per_file:
         return make(cid, "warn", _not_set(label, files), [Finding(files[0], 1, f"no {label} header configured")])
