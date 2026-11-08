@@ -11,12 +11,8 @@ from urllib.parse import urlsplit
 
 from . import __version__, catalog, code_audit, install, report, runner
 from .checks.dns_email import DEFAULT_RESOLVER
+from .checks.ratelimit import ALLOWED_METHODS as ALLOWED_RATE_LIMIT_METHODS
 from .scope import ScopeError, check_dns_resolver, is_local_host
-
-try:
-    from .checks.ratelimit import ALLOWED_RATE_LIMIT_METHODS
-except ImportError:  # checks/ratelimit.py defines it once that change lands; until then hold the same line here
-    ALLOWED_RATE_LIMIT_METHODS = frozenset({"POST"})
 
 FAIL_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 COMMANDS = ("list", "show", "rules", "lab", "scan", "code", "install")
