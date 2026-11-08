@@ -37,7 +37,7 @@
 
 ## INFRA-01 HTTP redirects to HTTPS
 
-Severity: high · OSI layer 6 (Presentation) · CWE-319 · Mode: auto (proof test built in) · Stacks: any
+Severity: high · OSI layer 6 (Presentation) · CWE-319 · OWASP A02:2021, A05:2021, A02:2025, A04:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -61,7 +61,7 @@ Serve every hostname through Vercel or another host that forces HTTPS. Keep apex
 
 ## INFRA-02 TLS certificate valid and not near expiry
 
-Severity: high · OSI layer 6 (Presentation) · CWE-324 · Mode: auto (proof test built in) · Stacks: any
+Severity: high · OSI layer 6 (Presentation) · CWE-324 · OWASP A02:2021, A04:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -85,7 +85,7 @@ Keep DNS for every custom domain pointed at the host that renews its certificate
 
 ## INFRA-03 Legacy TLS 1.0 and 1.1 refused
 
-Severity: medium · OSI layer 6 (Presentation) · CWE-327 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 6 (Presentation) · CWE-327 · OWASP A02:2021, A04:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -108,7 +108,7 @@ Allow only TLS 1.2 and 1.3 on every hostname. On self-managed servers set the mi
 
 ## INFRA-04 Sensitive files not served (.env, .git, backups, .DS_Store)
 
-Severity: critical · OSI layer 7 (Application) · CWE-538, CWE-527 · Mode: auto (proof test built in) · Stacks: any
+Severity: critical · OSI layer 7 (Application) · CWE-538, CWE-527 · OWASP A01:2021, A05:2021, A01:2025, A02:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -205,7 +205,7 @@ Publish `_dmarc.<domain>` with `p=none; rua=mailto:...`, review reports for 2-4 
 
 ## INFRA-08 No secrets in git history or working tree
 
-Severity: critical · OSI layer 7 (Application) · CWE-798, CWE-540 · Mode: review (code audit built in: `asa code`) · Stacks: any
+Severity: critical · OSI layer 7 (Application) · CWE-798, CWE-540 · OWASP A02:2021, A07:2021, A04:2025, A07:2025 · Mode: review (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -255,7 +255,7 @@ Turn on DKIM for each service that sends as the domain (Google Workspace, Resend
 
 ## INFRA-10 No dangling DNS records (subdomain takeover)
 
-Severity: high · OSI layer 7 (Application) · CWE-672 · Mode: review · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-672 · OWASP A05:2021, A02:2025 · Mode: review · Stacks: any
 
 ### Risk
 
@@ -280,7 +280,7 @@ When deleting a Vercel project, Netlify site, S3 bucket or SaaS page, delete its
 
 ## INFRA-11 CAA records name only the CAs in use
 
-Severity: low · OSI layer 7 (Application) · CWE-295 · Mode: auto (proof test built in) · Stacks: any
+Severity: low · OSI layer 7 (Application) · CWE-295 · OWASP A05:2021, A02:2025 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -328,7 +328,7 @@ Publish `_mta-sts.<domain>` TXT (`v=STSv1; id=<n>`) and serve https://mta-sts.<d
 
 ## INFRA-13 Dependencies locked, audited and install scripts restricted
 
-Severity: critical · OSI layer 7 (Application) · CWE-1395, CWE-506, CWE-829 · Mode: review (code audit built in: `asa code`) · Stacks: node, nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-1395, CWE-506, CWE-829 · OWASP A06:2021, A08:2021, A03:2025, A08:2025 · Mode: review (code audit built in: `asa code`) · Stacks: node, nextjs
 
 ### Risk
 
@@ -355,7 +355,7 @@ Commit the lockfile. CI and Vercel install with `npm ci` or `pnpm install --froz
 
 ## INFRA-14 New dependencies vetted against typosquats
 
-Severity: high · OSI layer 7 (Application) · CWE-506, CWE-829 · Mode: review · Stacks: node, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-506, CWE-829 · OWASP A08:2021, A03:2025 · Mode: review · Stacks: node, nextjs
 
 ### Risk
 
@@ -378,7 +378,7 @@ Do not add a dependency without checking the exact name on npmjs.com: publisher,
 
 ## INFRA-15 GitHub Actions pinned, least-privilege and injection-safe
 
-Severity: high · OSI layer 7 (Application) · CWE-829, CWE-94, CWE-250 · Mode: review (code audit built in: `asa code`) · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-829, CWE-94, CWE-250 · OWASP A08:2021, A03:2025 · Mode: review (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -404,7 +404,7 @@ Pin third-party actions to a full 40-character commit SHA with the version in a 
 
 ## INFRA-16 Database reachable only from allowed networks over SSL
 
-Severity: high · OSI layer 3 (Network) · CWE-284, CWE-319 · Mode: review · Stacks: supabase
+Severity: high · OSI layer 3 (Network) · CWE-284, CWE-319 · OWASP A02:2021, A05:2021, A02:2025, A04:2025 · Mode: review · Stacks: supabase
 
 ### Risk
 
@@ -427,7 +427,7 @@ Set Supabase Network Restrictions to known CIDRs when nothing outside needs dire
 
 ## INFRA-17 Phishing-resistant MFA on every account that controls the site
 
-Severity: critical · OSI layer 7 (Application) · CWE-308 · Mode: review · Stacks: any
+Severity: critical · OSI layer 7 (Application) · CWE-308 · OWASP A07:2021, A07:2025 · Mode: review · Stacks: any
 
 ### Risk
 
@@ -451,7 +451,7 @@ Enable MFA on GitHub, Vercel, Supabase, npm, the registrar, the DNS host and the
 
 ## INFRA-18 Self-hosted admin and database ports closed to the internet
 
-Severity: critical · OSI layer 4 (Transport) · CWE-1188, CWE-306 · Mode: review · Stacks: supabase
+Severity: critical · OSI layer 4 (Transport) · CWE-1188, CWE-306 · OWASP A05:2021, A02:2025 · Mode: review · Stacks: supabase
 
 ### Risk
 
@@ -498,7 +498,7 @@ Agree a recovery point with the owner. Run scheduled `supabase db dump` (schema 
 
 ## INFRA-20 Security events logged durably without secrets
 
-Severity: medium · OSI layer 7 (Application) · CWE-778, CWE-532 · Mode: assisted · Stacks: vercel, supabase
+Severity: medium · OSI layer 7 (Application) · CWE-778, CWE-532 · OWASP A09:2021, A09:2025 · Mode: assisted · Stacks: vercel, supabase
 
 ### Risk
 
@@ -599,7 +599,7 @@ Turn on full-disk encryption on every device that touches the code or dashboards
 
 ## INFRA-24 Database, cache and container API ports closed to the internet
 
-Severity: critical · OSI layer 4 (Transport) · CWE-668, CWE-306 · Mode: auto (proof test built in) · Stacks: any
+Severity: critical · OSI layer 4 (Transport) · CWE-668, CWE-306 · OWASP A05:2021, A02:2025 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -626,7 +626,7 @@ Bind databases, caches and the Docker daemon to localhost or a private network. 
 
 ## INFRA-25 Remote administration ports closed to the internet
 
-Severity: high · OSI layer 4 (Transport) · CWE-668, CWE-319 · Mode: auto (proof test built in) · Stacks: any
+Severity: high · OSI layer 4 (Transport) · CWE-668, CWE-319 · OWASP A05:2021, A02:2025 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -651,7 +651,7 @@ Close Telnet, RDP and VNC to the internet; reach servers through a VPN, a bastio
 
 ## INFRA-26 TLS 1.2 refuses broken and non-forward-secret cipher suites
 
-Severity: medium · OSI layer 6 (Presentation) · CWE-327 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 6 (Presentation) · CWE-327 · OWASP A02:2021, A04:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -700,7 +700,7 @@ Enable DNSSEC only when the registrar and DNS host both support it with automati
 
 ## INFRA-28 No dangling CNAME on the site's hostnames (subdomain takeover)
 
-Severity: high · OSI layer 7 (Application) · CWE-672 · Mode: auto (proof test built in) · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-672 · OWASP A05:2021, A02:2025 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 

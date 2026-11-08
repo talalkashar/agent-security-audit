@@ -57,7 +57,7 @@ TOOLS = [
         "name": "list_checks",
         "title": "List checks",
         "description": "List the security checks in the catalog (id, area, title, severity, OSI layer, mode, "
-                       "stacks). Filter by area, stack or mode.",
+                       "stacks, OWASP categories). Filter by area, stack, mode or OWASP category.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -67,6 +67,10 @@ TOOLS = [
                 "mode": {"type": "string", "enum": list(catalog.MODES),
                          "description": "auto: proven by the scanner; assisted: code check, then an "
                                         "optional logged-in test; review: code or config check"},
+                "owasp": {"type": "string", "enum": sorted({o.split(":")[0] for o in catalog.OWASP}
+                                                         | set(catalog.OWASP)),
+                          "description": "only checks mapped to this OWASP category: A03 (every list), "
+                                         "A03:2021, A03:2025 or API1:2023"},
             },
             "additionalProperties": False,
         },
@@ -341,11 +345,13 @@ def _validate(schema, args):
             raise ToolError(f"{key} must be between {spec['minimum']} and {spec['maximum']}")
 
 
-def tool_list_checks(area=None, stack=None, mode=None):
+def tool_list_checks(area=None, stack=None, mode=None, owasp=None):
     checks = runner.select(areas=[area] if area else None, stacks=[stack] if stack else None,
                            modes=[mode] if mode else None)
+    if owasp:
+        checks = [c for c in checks if catalog.owasp_match(c, owasp)]
     rows = [{"id": c.id, "area": c.area, "title": c.title, "severity": c.severity, "osi_layer": c.layer,
-             "mode": c.mode, "stacks": list(c.stacks)} for c in checks]
+             "mode": c.mode, "stacks": list(c.stacks), "owasp": list(c.owasp)} for c in checks]
     return _compact({"count": len(rows), "checks": rows})
 
 

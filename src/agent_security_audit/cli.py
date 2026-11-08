@@ -46,12 +46,25 @@ def rules_markdown(checks):
 def show_markdown(c):
     lines = [f"# {c.id} {c.title}", "",
              f"Severity: {c.severity} · OSI layer {c.layer} · {', '.join(c.cwe) or 'no CWE'}"
-             + (f" · ASVS {', '.join(c.asvs)}" if c.asvs else "") + f" · mode: {c.mode}"
+             + (f" · ASVS {', '.join(c.asvs)}" if c.asvs else "")
+             + (f" · OWASP {', '.join(c.owasp)}" if c.owasp else "") + f" · mode: {c.mode}"
              + f" · stacks: {', '.join(c.stacks)}", "",
              "## Risk", "", c.risk, "", "## Build rule", "", c.build, "", "## Proof test", "", c.proof, "",
              "## Sources", ""]
     lines += [f"- [{s.title}]({s.url})" for s in c.sources]
     return "\n".join(lines) + "\n"
+
+
+def _owasp(values):
+    """--owasp values, checked against the OWASP ids so a typo is an error, not an empty list."""
+    queries = _csv(values)
+    if values and not queries:
+        raise ValueError("--owasp needs a category such as A01, API1 or A03:2021")
+    bad = [q for q in queries or [] if not catalog.owasp_query_valid(q)]
+    if bad:
+        raise ValueError(f"unknown OWASP category {', '.join(bad)}; use A01 to A10, API1 to API10, or a full id "
+                         "such as A03:2021, A03:2025 or API1:2023")
+    return queries
 
 
 def _csv(values):
@@ -106,6 +119,8 @@ def build_parser():
     ls = sub.add_parser("list", help="list checks")
     ls.add_argument("--area", action="append")
     ls.add_argument("--stack", action="append", help=f"only checks for these stacks: {', '.join(catalog.STACKS)}")
+    ls.add_argument("--owasp", action="append",
+                    help="only checks mapped to these OWASP categories: A03 (every list), A03:2021, API1:2023")
     ls.add_argument("--json", action="store_true")
 
     sh = sub.add_parser("show", help="show one check in full")
@@ -216,6 +231,8 @@ def _main(argv=None):
     try:
         if args.cmd == "list":
             checks = runner.select(areas=_csv(args.area), stacks=_stacks(args.stack))
+            if owasp := _owasp(args.owasp):
+                checks = [c for c in checks if any(catalog.owasp_match(c, q) for q in owasp)]
             if args.json:
                 print(json.dumps([c.to_dict() for c in checks], indent=2))
             else:

@@ -2,7 +2,7 @@
 
 # Check catalog
 
-120 checks in 6 areas. Each check has a risk, a build rule the agent follows while writing code, a proof test that shows the defense working on the running site, and sources.
+122 checks in 6 areas. Each check has a risk, a build rule the agent follows while writing code, a proof test that shows the defense working on the running site, and sources.
 
 - **auto**: `asa scan` runs the proof test and reports pass or fail with evidence.
 - **assisted**: the agent checks the code first, then runs a logged-in test itself if the code does not settle it.
@@ -13,12 +13,12 @@
 | Area | What it covers | Checks | Auto | Assisted | Review | Critical | High | Medium | Low |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | [access](access.md) | Access control and Supabase row-level security | 15 | 1 | 10 | 4 | 5 | 9 | 1 | 0 |
-| [api](api.md) | API abuse, input handling and rate limits | 27 | 8 | 12 | 7 | 4 | 12 | 9 | 2 |
+| [api](api.md) | API abuse, input handling and rate limits | 29 | 9 | 13 | 7 | 4 | 13 | 9 | 3 |
 | [auth](auth.md) | Authentication and sessions | 11 | 0 | 10 | 1 | 1 | 6 | 4 | 0 |
 | [browser](browser.md) | Browser security headers, cookies and client code | 23 | 12 | 7 | 4 | 0 | 8 | 13 | 2 |
 | [infra](infra.md) | Transport, DNS, email and hosting | 28 | 14 | 2 | 12 | 6 | 11 | 6 | 5 |
 | [nextjs](nextjs.md) | Next.js and Vercel | 16 | 3 | 10 | 3 | 3 | 5 | 7 | 1 |
-| **Total** | | **120** | **38** | **51** | **31** | **19** | **51** | **40** | **10** |
+| **Total** | | **122** | **39** | **52** | **31** | **19** | **52** | **40** | **11** |
 
 ## By OSI layer
 
@@ -30,7 +30,7 @@
 | 4 Transport | 3 | 2 | 0 | 1 |
 | 5 Session | 2 | 0 | 2 | 0 |
 | 6 Presentation | 5 | 5 | 0 | 0 |
-| 7 Application | 106 | 31 | 49 | 26 |
+| 7 Application | 108 | 32 | 50 | 26 |
 
 ## All checks
 
@@ -75,9 +75,11 @@
 | [API-22](api.md#api-22-api-description-not-public-unless-intended) | low | L7 | auto | API description not public unless intended |
 | [API-23](api.md#api-23-graphql-introspection-off-in-production) | medium | L7 | auto | GraphQL introspection off in production |
 | [API-24](api.md#api-24-trace-method-disabled) | low | L7 | auto | TRACE method disabled |
+| [API-25](api.md#api-25-server-banners-do-not-reveal-software-versions) | low | L7 | auto | Server banners do not reveal software versions |
 | [API-30](api.md#api-30-no-eval-new-function-or-vm-on-dynamic-strings) | critical | L7 | review | No eval, new Function or vm on dynamic strings |
 | [API-31](api.md#api-31-shell-commands-never-built-from-strings) | critical | L7 | review | Shell commands never built from strings |
 | [API-32](api.md#api-32-sql-is-parameterized-never-built-by-string-concatenation) | critical | L7 | review | SQL is parameterized, never built by string concatenation |
+| [API-33](api.md#api-33-request-bodies-are-not-written-to-the-database-whole-mass-assignment) | high | L7 | assisted | Request bodies are not written to the database whole (mass assignment) |
 | [AUTH-01](auth.md#auth-01-server-authorization-uses-a-verified-identity-not-getsession) | critical | L7 | assisted | Server authorization uses a verified identity, not getSession() |
 | [AUTH-02](auth.md#auth-02-password-policy-enforces-length-and-rejects-breached-passwords) | medium | L7 | assisted | Password policy enforces length and rejects breached passwords |
 | [AUTH-03](auth.md#auth-03-self-managed-password-hashes-use-argon2id-or-bcrypt-within-72-bytes) | high | L7 | review | Self-managed password hashes use Argon2id or bcrypt within 72 bytes |
@@ -157,6 +159,6 @@
 | [NEXT-15](nextjs.md#next-15-vercel-cron-endpoints-require-cron_secret) | medium | L7 | assisted | Vercel cron endpoints require CRON_SECRET |
 | [NEXT-16](nextjs.md#next-16-no-internal-x-middleware-headers-in-responses) | medium | L7 | assisted | No internal x-middleware headers in responses |
 
-Automated proof tests built in: 38 (ACCESS-01, API-01, API-02, API-19, API-20, API-21, API-22, API-23, API-24, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06, BROWSER-07, BROWSER-08, BROWSER-20, BROWSER-21, BROWSER-22, BROWSER-23, INFRA-01, INFRA-02, INFRA-03, INFRA-04, INFRA-05, INFRA-06, INFRA-07, INFRA-11, INFRA-12, INFRA-24, INFRA-25, INFRA-26, INFRA-27, INFRA-28, NEXT-01, NEXT-02, NEXT-03).
+Automated proof tests built in: 39 (ACCESS-01, API-01, API-02, API-19, API-20, API-21, API-22, API-23, API-24, API-25, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06, BROWSER-07, BROWSER-08, BROWSER-20, BROWSER-21, BROWSER-22, BROWSER-23, INFRA-01, INFRA-02, INFRA-03, INFRA-04, INFRA-05, INFRA-06, INFRA-07, INFRA-11, INFRA-12, INFRA-24, INFRA-25, INFRA-26, INFRA-27, INFRA-28, NEXT-01, NEXT-02, NEXT-03).
 
-Settled from source code by `asa code`: 29 (ACCESS-01, ACCESS-02, ACCESS-06, ACCESS-08, ACCESS-11, API-05, API-30, API-31, API-32, AUTH-01, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-08, BROWSER-09, INFRA-08, INFRA-13, INFRA-15, NEXT-01, NEXT-02, NEXT-03, NEXT-04, NEXT-05, NEXT-06, NEXT-07, NEXT-11, NEXT-15).
+Settled from source code by `asa code`: 31 (ACCESS-01, ACCESS-02, ACCESS-06, ACCESS-08, ACCESS-11, API-05, API-08, API-30, API-31, API-32, API-33, AUTH-01, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-08, BROWSER-09, INFRA-08, INFRA-13, INFRA-15, NEXT-01, NEXT-02, NEXT-03, NEXT-04, NEXT-05, NEXT-06, NEXT-07, NEXT-11, NEXT-15).

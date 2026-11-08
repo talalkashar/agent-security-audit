@@ -22,6 +22,7 @@ FAIL = {
     "API-20",      # directory listing at /uploads/
     "API-21",      # debug endpoint /actuator/env
     "API-24",      # TRACE echoes the request
+    "API-25",      # Server header discloses the lab's software versions
     "BROWSER-02",  # no CSP
     "BROWSER-03",  # no nosniff
     "BROWSER-04",  # framable

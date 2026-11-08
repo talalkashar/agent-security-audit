@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from .. import catalog
 from ..model import Result, errored
-from . import ci, deps, nextjs, patterns, secrets, sql
+from . import ci, deps, nextjs, patterns, request_input, secrets, sql
 from .project import Project
 
-MODULES = (secrets, sql, nextjs, patterns, ci)
+MODULES = (secrets, sql, nextjs, patterns, request_input, ci)
 # Every catalog check the code audit can settle. Docs and `asa scan` hints read this.
 CHECKS = tuple(dict.fromkeys(cid for mod in (*MODULES, deps) for cid in mod.CHECKS))
 

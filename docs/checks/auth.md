@@ -20,7 +20,7 @@
 
 ## AUTH-01 Server authorization uses a verified identity, not getSession()
 
-Severity: critical · OSI layer 7 (Application) · CWE-287, CWE-345 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs, supabase
+Severity: critical · OSI layer 7 (Application) · CWE-287, CWE-345 · OWASP A07:2021, A07:2025, API2:2023 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs, supabase
 
 ### Risk
 
@@ -44,7 +44,7 @@ Use only two test accounts you own.
 
 ## AUTH-02 Password policy enforces length and rejects breached passwords
 
-Severity: medium · OSI layer 7 (Application) · CWE-521 · Mode: assisted · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-521 · OWASP A07:2021, A07:2025, API2:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -69,7 +69,7 @@ Minimum length 8 when MFA is offered, 15 when it is not; allow at least 64 chara
 
 ## AUTH-03 Self-managed password hashes use Argon2id or bcrypt within 72 bytes
 
-Severity: high · OSI layer 7 (Application) · CWE-916, CWE-328 · Mode: review · Stacks: node
+Severity: high · OSI layer 7 (Application) · CWE-916, CWE-328 · OWASP A02:2021, A04:2025 · Mode: review · Stacks: node
 
 ### Risk
 
@@ -91,7 +91,7 @@ Skip this check if no password hashes are stored by the app.
 
 ## AUTH-04 Login, sign-up and reset do not reveal which accounts exist
 
-Severity: medium · OSI layer 7 (Application) · CWE-204 · Mode: assisted · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-204 · OWASP A07:2021, A07:2025, API2:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -116,7 +116,7 @@ Keep Supabase "Confirm email" on. Show one message per flow: login failure "Emai
 
 ## AUTH-05 Reset and magic links use a fixed site URL, not request headers
 
-Severity: high · OSI layer 7 (Application) · CWE-640, CWE-644 · Mode: assisted · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-640, CWE-644 · OWASP A07:2021, A07:2025, API2:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -139,7 +139,7 @@ Build `redirectTo` and `emailRedirectTo` from a configured value (`NEXT_PUBLIC_S
 
 ## AUTH-06 OAuth and magic-link redirect allow list is exact
 
-Severity: high · OSI layer 7 (Application) · CWE-601 · Mode: assisted · Stacks: supabase, nextjs, vercel
+Severity: high · OSI layer 7 (Application) · CWE-601 · OWASP A01:2021, A07:2021, A01:2025, A07:2025, API2:2023 · Mode: assisted · Stacks: supabase, nextjs, vercel
 
 ### Risk
 
@@ -163,7 +163,7 @@ Production Supabase project allow list: exact production URLs only. Put preview 
 
 ## AUTH-07 OAuth flow validates state and PKCE
 
-Severity: high · OSI layer 7 (Application) · CWE-352, CWE-345 · Mode: assisted · Stacks: nextjs, supabase, node
+Severity: high · OSI layer 7 (Application) · CWE-352, CWE-345 · OWASP A01:2021, A07:2021, A01:2025, A07:2025, API2:2023 · Mode: assisted · Stacks: nextjs, supabase, node
 
 ### Risk
 
@@ -185,7 +185,7 @@ Use the library flow, not a hand-written one. Supabase: `@supabase/ssr` uses PKC
 
 ## AUTH-08 Logout and password change end sessions on the server
 
-Severity: medium · OSI layer 5 (Session) · CWE-613 · Mode: assisted · Stacks: supabase, nextjs
+Severity: medium · OSI layer 5 (Session) · CWE-613 · OWASP A07:2021, A07:2025, API2:2023 · Mode: assisted · Stacks: supabase, nextjs
 
 ### Risk
 
@@ -210,7 +210,7 @@ Logout calls `supabase.auth.signOut()` on the server and clears cookies; use sco
 
 ## AUTH-09 MFA is enforced in RLS and server code, not only in the UI
 
-Severity: high · OSI layer 7 (Application) · CWE-308, CWE-287 · Mode: assisted · Stacks: supabase
+Severity: high · OSI layer 7 (Application) · CWE-308, CWE-287 · OWASP A07:2021, A07:2025, API2:2023 · Mode: assisted · Stacks: supabase
 
 ### Risk
 
@@ -233,7 +233,7 @@ For users with a verified factor, and always for admin and staff roles, add `as 
 
 ## AUTH-10 Tokens kept out of localStorage and JWTs verified with a pinned algorithm
 
-Severity: medium · OSI layer 5 (Session) · CWE-922, CWE-347 · Mode: assisted · Stacks: nextjs, supabase, node
+Severity: medium · OSI layer 5 (Session) · CWE-922, CWE-347 · OWASP A07:2021, A07:2025, API2:2023 · Mode: assisted · Stacks: nextjs, supabase, node
 
 ### Risk
 
@@ -256,7 +256,7 @@ In Next.js use `@supabase/ssr` (cookie storage), not the default `supabase-js` l
 
 ## AUTH-11 Email verified before account access or identity linking
 
-Severity: high · OSI layer 7 (Application) · CWE-287, CWE-284 · Mode: assisted · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-287, CWE-284 · OWASP A07:2021, A07:2025, API2:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
