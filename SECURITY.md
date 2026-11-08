@@ -6,6 +6,16 @@ Report it privately through GitHub's private vulnerability reporting: open the r
 
 Include what you found, how to reproduce it against the local lab (`asa lab`) or a site you own, and the version (`asa --version`). You should get a reply within 7 days.
 
+If GitHub's private reporting is unavailable to you, open an issue that says only that you have a security report and how to reach you, with no details; the maintainer will reply there with a private channel.
+
+### What happens next
+
+1. Within 7 days: a reply confirming receipt, and whether the report is accepted as a vulnerability.
+2. A fix in a new patch release, normally within 30 days for high-severity issues and 90 days for the rest. If a fix takes longer, you will hear why and when.
+3. After the release: a GitHub security advisory, with a CVE ID requested for confirmed vulnerabilities, crediting you unless you ask not to be named.
+
+Please wait for the advisory, or 90 days from your report, whichever comes first, before you disclose publicly.
+
 Examples of what to report:
 
 - The scope gate lets a scan reach a host it should refuse, or follows a redirect off the target.
@@ -29,4 +39,4 @@ This project does not handle those. Contact the site's owner, through its `/.wel
 
 ## Supported versions
 
-Only the latest release gets fixes.
+Only the latest release on PyPI gets fixes. Release files can be verified as described in [docs/TRUST.md](docs/TRUST.md#release-provenance).
