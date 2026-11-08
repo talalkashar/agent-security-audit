@@ -59,6 +59,11 @@ class OffTarget(RuntimeError):
     pass
 
 
+class ResponseTooSlow(OSError):
+    """The watchdog cut an exchange that ran past the timeout. Bytes may already have arrived, so this never means
+    "no answer" or "closed". It is deliberately not a TimeoutError, which checks may read as a silent drop."""
+
+
 CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 
 
@@ -97,7 +102,7 @@ class Response:
                 charset = v.strip('"')
         try:
             return self.body.decode(charset, errors="replace")
-        except LookupError:
+        except (LookupError, UnicodeError):  # unknown charset, or one such as idna that cannot decode a body
             return self.body.decode("utf-8", errors="replace")
 
     @property
@@ -221,7 +226,7 @@ class Client:
         try:
             conn.connect()
             if watchdog.expired:  # it fired while the socket was still being opened, so it had nothing to cut
-                raise TimeoutError(watchdog.message)
+                raise ResponseTooSlow(watchdog.message)
             conn.request(method, target_path, body=body, headers=hdrs)
             raw = conn.getresponse()
             data = raw.read(MAX_BODY + 1)
@@ -231,13 +236,13 @@ class Client:
             resp = Response(url, raw.status, raw.reason, list(raw.getheaders()), data[:MAX_BODY], len(data) > MAX_BODY)
         except Exception as exc:
             if watchdog.finish():
-                raise TimeoutError(watchdog.message) from exc
+                raise ResponseTooSlow(watchdog.message) from exc
             raise
         finally:
             watchdog.finish()
             conn.close()
         if watchdog.expired and not whole:  # a body read until close may have been cut short
-            raise TimeoutError(watchdog.message)
+            raise ResponseTooSlow(watchdog.message)
         if not verify:
             why = challenge_of(resp)
             if why:

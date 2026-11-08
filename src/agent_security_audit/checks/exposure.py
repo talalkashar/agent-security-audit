@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from urllib.parse import urljoin, urlsplit
 
 from ..crawl import crawl, next_chunks
-from ..http import BudgetExceeded, TimeBudgetExceeded
+from ..http import TIME_BUDGET_MESSAGE, BudgetExceeded, ResponseTooSlow, TimeBudgetExceeded
 from ..model import Result, failed, passed, skipped, warned
 from ..scope import same_origin
 from . import are, auto, count
@@ -112,12 +112,12 @@ def scripts(ctx):
     """[(label, text)] for inline scripts and same-origin script files on every crawled page, plus Next.js chunks
     those reference (build manifest, RSC payload). At most MAX_SCRIPTS files. Cached per run."""
     if "scripts" in ctx.cache:
-        if ctx.cache.get("scripts_time_cut"):  # built from a crawl or fetch the time budget cut short
-            ctx.cache["time_cut"] = True
+        if ctx.cache.get("scripts_cut"):  # built from a crawl or fetches a budget cut short
+            ctx.cache["data_cut"] = ctx.cache["scripts_cut"]
         return ctx.cache["scripts"]
     site = crawl(ctx)
-    if site.timed_out:
-        ctx.cache["scripts_time_cut"] = True
+    if site.cut:
+        ctx.cache["scripts_cut"] = site.cut
     home = site.pages[0].url if site.pages else None
     out, by_page = [], {}
     for page, text in site.inline:
@@ -138,10 +138,16 @@ def scripts(ctx):
         try:
             resp = ctx.client.get(url, cache=True)
         except TimeBudgetExceeded:
-            ctx.cache["scripts_time_cut"] = ctx.cache["time_cut"] = True
+            ctx.cache["scripts_cut"] = ctx.cache["data_cut"] = TIME_BUDGET_MESSAGE
             break
         except BudgetExceeded:
+            ctx.cache["scripts_cut"] = ctx.cache["data_cut"] = ("not run: request budget used up before every "
+                                                                "script was read")
             break
+        except ResponseTooSlow as exc:
+            ctx.cache["scripts_cut"] = ctx.cache["data_cut"] = (f"{urlsplit(url).path} answered too slowly to read "
+                                                                f"({exc})")
+            continue
         if resp.status == 200:
             out.append((urlsplit(url).path, resp.text))
             queue += [ctx.client.url(p) for p in next_chunks(resp.text)]

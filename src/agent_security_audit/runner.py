@@ -8,7 +8,7 @@ from urllib.parse import urljoin, urlsplit
 
 from . import catalog, code_audit
 from .checks import Context, load_all
-from .http import NETWORK_ERRORS, TIME_BUDGET_MESSAGE, Blocked, BudgetExceeded, Client, OffTarget
+from .http import NETWORK_ERRORS, Blocked, BudgetExceeded, Client, OffTarget
 from .model import Result, errored, skipped
 from .scope import ScopeError, normalize_target, owned, same_origin
 
@@ -123,7 +123,7 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
             if progress:
                 progress(done, len(chosen), check.id, "skip")
             continue
-        ctx.cache.pop("time_cut", None)
+        ctx.cache.pop("data_cut", None)
         try:
             result = fn(ctx)
         except Blocked as exc:
@@ -136,9 +136,11 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
             result = errored(check.id, f"could not reach the target: {type(exc).__name__}: {exc}")
         except Exception as exc:  # noqa: BLE001 - one broken check must not stop the scan; report it instead
             result = errored(check.id, f"check failed to run: {type(exc).__name__}: {exc}")
-        if ctx.cache.pop("time_cut", False) and result.status in ("pass", "skip"):
-            # It read a crawl or script set the time budget cut short, so "nothing found" is not proven.
-            result = errored(check.id, f"{TIME_BUDGET_MESSAGE}; it saw only part of the site, so it cannot pass")
+        cut = ctx.cache.pop("data_cut", None)
+        if cut and result.status in ("pass", "skip"):
+            # It read a crawl or script set a budget (or a page too slow to read) cut short: "nothing found" is not
+            # proven.
+            result = errored(check.id, f"{cut}; it saw only part of the site, so it cannot pass")
         if result.status in ("fail", "warn") and not result.fix:
             result.fix = check.build
         results.append(result)

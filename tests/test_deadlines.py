@@ -62,8 +62,11 @@ class ResponseDeadlineTest(unittest.TestCase):
         try:
             c = Client(url, timeout=1.0, delay=0)
             start = time.monotonic()
-            with self.assertRaises(TimeoutError) as cm:
+            with self.assertRaises(http.ResponseTooSlow) as cm:
                 c.get("/x")
+            # A cut after bytes arrived is not a silent drop: checks that read TimeoutError as "no answer" must not
+            # see it as one.
+            self.assertNotIsInstance(cm.exception, TimeoutError)
             self.assertLess(time.monotonic() - start, 2.5)
             self.assertIn("no complete response within 1 s", str(cm.exception))
         finally:
@@ -90,7 +93,7 @@ class ResponseDeadlineTest(unittest.TestCase):
                 close()
             url, close = serve_drip(fast_root=True, root=unframed)
             try:
-                with self.assertRaises(TimeoutError):  # read until close: a cut cannot be told from the end
+                with self.assertRaises(http.ResponseTooSlow):  # read until close: a cut cannot be told from the end
                     Client(url, timeout=1.0, delay=0).get("/")
             finally:
                 close()

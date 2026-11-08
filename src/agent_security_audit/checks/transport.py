@@ -6,6 +6,7 @@ import ssl
 from datetime import UTC, datetime
 from urllib.parse import urljoin, urlsplit
 
+from ..http import ResponseTooSlow
 from ..model import Result, errored, failed, passed, skipped, warned
 from ..scope import is_local_host
 from . import auto
@@ -37,6 +38,10 @@ def https_redirect(ctx):
     except ConnectionRefusedError:
         return passed("INFRA-01", "Port 80 refuses connections, so nothing is served without TLS.",
                       [f"{plain}: connection refused"])
+    except ResponseTooSlow as exc:
+        # The watchdog cut a reply that was still arriving: port 80 answered, so this is not a silent drop.
+        return errored("INFRA-01", f"Port 80 answered too slowly to read in full ({exc}), so what it serves is not "
+                       "known. Open http:// in a browser and confirm it redirects to HTTPS.")
     except TimeoutError:
         # A silent drop looks the same as a network problem between this machine and the site, so it proves nothing.
         return Result("INFRA-01", "manual", "Port 80 did not answer in time: a firewall drop or a network problem on "

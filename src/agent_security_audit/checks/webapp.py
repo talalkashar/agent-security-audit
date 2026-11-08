@@ -99,7 +99,8 @@ def subresource_integrity(ctx):
                       "Subresource Integrity, so a compromised CDN could change what runs on the site.", ev)
     return passed("BROWSER-21", f"{count(len(ok), 'third-party script or stylesheet', 'third-party scripts and stylesheets')} "
                   f"{'carries' if len(ok) == 1 else 'carry'} an integrity hash"
-                  + (f"; {count(len(exempt), 'versionless vendor loader')} cannot use one" if exempt else "") + ".", ev)
+                  + (f"; {count(len(exempt), 'versionless vendor loader')} cannot use one" if exempt else "")
+                  + f" ({count(len(site.pages), 'crawled page')} examined).", ev)
 
 
 # --- BROWSER-22 password forms --------------------------------------------------------------------------------------
@@ -128,7 +129,7 @@ def password_forms(ctx):
     if problems:
         return failed("BROWSER-22", "Password forms are not safe in transit: " + "; ".join(problems) + ".", ev)
     return passed("BROWSER-22", f"{count(len(forms), 'password form')} {are(len(forms))} served and submitted over HTTPS (or a local "
-                  "development host) with POST.", ev)
+                  f"development host) with POST ({count(len(site.pages), 'crawled page')} examined).", ev)
 
 
 # --- BROWSER-23 known-vulnerable client libraries -------------------------------------------------------------------
@@ -199,7 +200,7 @@ def vulnerable_libraries(ctx):
     for label, text in texts:
         found += find_libraries(label, text=text)
     if not found and not texts and not any(r.kind == "script" for r in site.resources):
-        return skipped("BROWSER-23", f"No scripts on {len(site.pages)} crawled page(s).")
+        return skipped("BROWSER-23", f"No scripts on {count(len(site.pages), 'crawled page')}.")
     bad, eol, ok, seen = [], [], [], set()
     for key, version, where in found:
         if (key, version) in seen:
@@ -289,7 +290,7 @@ def open_redirect(ctx):
     candidates = [(path, name, url) for (path, name), url in site.params().items() if REDIRECT_PARAM.match(name)]
     if not candidates:
         return skipped("API-19", f"No redirect-style query parameters (next, url, return..., redirect..., "
-                       f"continue, dest...) in links on {len(site.pages)} crawled page(s). Test login and logout "
+                       f"continue, dest...) in links on {count(len(site.pages), 'crawled page')}. Test login and logout "
                        "redirects by hand (see the proof steps).")
     open_, ev = [], []
     for path, name, url in candidates[:MAX_REDIRECT_PROBES]:
@@ -404,7 +405,7 @@ def _api_doc(resp):
         data = None
     if isinstance(data, dict) and ("openapi" in data or "swagger" in data) and isinstance(data.get("paths"), dict):
         return f"{'OpenAPI ' + str(data.get('openapi')) if 'openapi' in data else 'Swagger 2'} document, " \
-               f"{len(data['paths'])} path(s)"
+               f"{count(len(data['paths']), 'path')}"
     text = resp.text[:20000]
     if 'id="swagger-ui"' in text and "swagger-ui-bundle" in text:
         return "Swagger UI page"
@@ -474,7 +475,7 @@ def graphql_introspection(ctx):
             types = len(schema.get("types") or [])
             mutations = "with mutations" if schema.get("mutationType") else "no mutations"
             open_.append(path)
-            ev.append(f"POST {path} -> {resp.status}, introspection answered: {types} type(s), {mutations} "
+            ev.append(f"POST {path} -> {resp.status}, introspection answered: {count(types, 'type')}, {mutations} "
                       "(names not shown)")
         elif _graphql_refusal(resp, data) == "proven":
             closed.append(path)

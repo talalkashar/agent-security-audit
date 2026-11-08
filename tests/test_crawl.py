@@ -183,6 +183,57 @@ class CrawlTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_request_budget_cut_marks_crawl_incomplete(self):
+        from agent_security_audit.http import BudgetExceeded
+
+        def broke(*_):
+            raise BudgetExceeded("request budget used up")
+        c = ctx({"/": html('<a href="/a">a</a>'), "/a": broke})
+        site = crawl_mod.crawl(c)
+        self.assertIn("request budget", site.cut)
+        self.assertIn("request budget", c.cache["data_cut"])
+
+    def test_slow_page_marks_crawl_incomplete(self):
+        from agent_security_audit.http import ResponseTooSlow
+
+        def slow(*_):
+            raise ResponseTooSlow("no complete response within 1 s")
+        c = ctx({"/": html('<a href="/a">a</a>'), "/a": slow})
+        self.assertIn("/a answered too slowly", crawl_mod.crawl(c).cut)
+
+    def test_script_budget_cut_blocks_a_pass(self):
+        from agent_security_audit.http import BudgetExceeded
+
+        def broke(*_):
+            raise BudgetExceeded("request budget used up")
+        c = ctx({"/": html('<script src="/a.js"></script>'), "/a.js": broke})
+        exposure.scripts(c)
+        self.assertIn("request budget", c.cache["data_cut"])
+        c.cache.pop("data_cut")
+        exposure.scripts(c)  # cached: a later check reading the same partial set is flagged too
+        self.assertIn("request budget", c.cache["data_cut"])
+
+    def test_runner_turns_pass_on_cut_data_into_error(self):
+        from unittest import mock
+        from urllib.parse import urlsplit
+
+        from agent_security_audit.http import BudgetExceeded
+        server, url = lab.serve("fixed", 0)
+        try:
+            real = Client.request
+
+            def req(self, method, path="/", **kw):
+                if urlsplit(self.url(path)).path not in ("", "/"):
+                    raise BudgetExceeded("request budget used up")
+                return real(self, method, path, **kw)
+            with mock.patch.object(Client, "request", req):
+                _, results = runner.run(url, ids=["BROWSER-22"], delay=0)
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(results[0].status, "error")
+        self.assertIn("request budget", results[0].summary)
+
     def test_next_chunks(self):
         text = ('"static/chunks/pages/about-1a2b.js" \\"static/chunks/app/page-9f.js\\" '
                 '"/_next/static/chunks/main-77.js" "https://cdn.other.test/_next/static/chunks/x.js" '

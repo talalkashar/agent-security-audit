@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urldefrag, urljoin, urlsplit
 
-from .http import NETWORK_ERRORS, BudgetExceeded, TimeBudgetExceeded
+from .http import NETWORK_ERRORS, TIME_BUDGET_MESSAGE, BudgetExceeded, ResponseTooSlow, TimeBudgetExceeded
 from .scope import same_origin
 
 DEFAULT_MAX_PAGES = 25
@@ -71,6 +71,7 @@ class Site:
     skipped: list = field(default_factory=list)     # URLs not requested because they look state-changing
     notes: list = field(default_factory=list)       # limits reached, errors
     timed_out: bool = False                         # the scan's time budget cut the crawl short
+    cut: str = ""                                   # why the crawl is incomplete (time or request budget, a slow page)
 
     def params(self):
         """{(path, name): example_url} for query parameters on same-origin links."""
@@ -82,7 +83,8 @@ class Site:
         return out
 
     def summary(self):
-        text = f"crawl: {len(self.pages)} page(s), {len(self.resources)} subresource reference(s), {len(self.forms)} form(s)"
+        text = (f"crawl: {_count(len(self.pages), 'page')}, {_count(len(self.resources), 'subresource reference')}, "
+                f"{_count(len(self.forms), 'form')}")
         return text + ("; " + "; ".join(self.notes) if self.notes else "")
 
 
@@ -255,9 +257,14 @@ class _Crawler:
             return self.client.get(url, cache=True)
         except TimeBudgetExceeded:
             self.site.timed_out = True
+            self.site.cut = self.site.cut or TIME_BUDGET_MESSAGE
             self.stop("time budget used up")
         except BudgetExceeded:
+            self.site.cut = self.site.cut or "not run: request budget used up before the crawl finished"
             self.stop("request budget used up")
+        except ResponseTooSlow as exc:  # the page answered but could not be read in full: coverage has a hole
+            self.site.cut = self.site.cut or f"{urlsplit(url).path or '/'} answered too slowly to read ({exc})"
+            self.site.notes.append(f"{urlsplit(url).path or '/'}: {type(exc).__name__}")
         except NETWORK_ERRORS as exc:
             self.site.notes.append(f"{urlsplit(url).path or '/'}: {type(exc).__name__}")
         return None
@@ -323,21 +330,26 @@ class _Crawler:
             elif resp.status == 200 and is_html(resp):
                 self.add_page(resp, depth)
         if self.queue and len(self.site.pages) >= self.max_pages:
-            self.site.notes.append(f"page limit {self.max_pages} reached, {len(self.queue)} queued link(s) not "
-                                   "visited (raise it with --max-pages)")
+            self.site.notes.append(f"page limit {self.max_pages} reached, {_count(len(self.queue), 'queued link')} "
+                                   "not visited (raise it with --max-pages)")
         if self.site.skipped:
-            self.site.notes.append(f"{len(self.site.skipped)} logout or state-changing link(s) not requested")
+            self.site.notes.append(f"{_count(len(self.site.skipped), 'logout or state-changing link')} not requested")
         return self.site
 
 
 def crawl(ctx):
-    """The shared Site for this run. Crawls on first use. A check that reads a crawl the time budget cut short
-    is flagged (ctx.cache["time_cut"]) so the runner never reports a pass built on part of the site."""
+    """The shared Site for this run. Crawls on first use. A check that reads a crawl the time or request budget cut
+    short (or with a page too slow to read) is flagged (ctx.cache["data_cut"]) so the runner never reports a pass
+    built on part of the site."""
     if "crawl" not in ctx.cache:
         ctx.cache["crawl"] = _Crawler(ctx).run()
-    if ctx.cache["crawl"].timed_out:
-        ctx.cache["time_cut"] = True
+    if ctx.cache["crawl"].cut:
+        ctx.cache["data_cut"] = ctx.cache["crawl"].cut
     return ctx.cache["crawl"]
+
+
+def _count(n, one):
+    return f"{n} {one if n == 1 else one + 's'}"
 
 
 # Next.js lists route chunks in its build manifest and in the RSC payload of each page.

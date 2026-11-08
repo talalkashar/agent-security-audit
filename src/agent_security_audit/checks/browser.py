@@ -77,12 +77,12 @@ def per_page(ctx, judge):
     page, worst = min(judged, key=lambda pr: RANK.get(pr[1].status, 3))
     same = [_page_path(p) for p, r in judged if (r.status, r.summary) == (worst.status, worst.summary)]
     worst.evidence = [f"page: {_page_path(page)}"] + worst.evidence
-    if len(pages) > 1:
-        if worst.status == "pass":
-            worst.summary = worst.summary.rstrip(".") + f" (all {len(pages)} crawled pages)."
-        else:
-            listed = ", ".join(same[:5]) + (", ..." if len(same) > 5 else "")
-            worst.summary += f" Seen on {len(same)} of {count(len(pages), 'crawled page')}: {listed}."
+    if worst.status == "pass":  # say how much of the site the pass covers
+        worst.summary = worst.summary.rstrip(".") + (f" (all {len(pages)} crawled pages)." if len(pages) > 1
+                                                     else " (1 page examined).")
+    elif len(pages) > 1:
+        listed = ", ".join(same[:5]) + (", ..." if len(same) > 5 else "")
+        worst.summary += f" Seen on {len(same)} of {count(len(pages), 'crawled page')}: {listed}."
     return worst
 
 

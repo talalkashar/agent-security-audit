@@ -15,7 +15,7 @@ from urllib.parse import quote, urlsplit
 from ..http import NETWORK_ERRORS
 from ..model import Result, errored, failed, passed, skipped, warned
 from ..scope import is_local_host
-from . import auto
+from . import auto, count
 from .dns_email import DEFAULT_RESOLVER, QUOTED, SHARED_PLATFORMS, mail_domain, organizational_domain
 
 # --- exposed ports (layer 4) -------------------------------------------------------------------------------------
@@ -300,7 +300,7 @@ def dnssec(ctx):
         return warned("INFRA-27", f"{zone} is not signed with DNSSEC (no DS record at the parent), so resolvers "
                       "cannot detect forged answers. Enable it only with automatic key rollover.",
                       [f"DS {zone}: none"])
-    ev = [f"DS {zone}: {len(ds)} record(s)"]
+    ev = [f"DS {zone}: {count(len(ds), 'record')}"]
     checked = dns_query(ctx, host, "A")
     if checked.get("Status") == 2:
         unchecked = dns_query(ctx, host, "A", cd=True)

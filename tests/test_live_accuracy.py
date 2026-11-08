@@ -167,6 +167,10 @@ class HttpsRedirectTest(unittest.TestCase):
     def test_timeout_is_not_a_pass(self):
         self.assertEqual(self.run_check(TimeoutError("timed out")).status, "manual")
 
+    def test_slow_drip_cut_is_not_a_pass(self):
+        from agent_security_audit.http import ResponseTooSlow
+        self.assertEqual(self.run_check(ResponseTooSlow("no complete response within 1 s")).status, "error")
+
     def test_refused_passes(self):
         self.assertEqual(self.run_check(ConnectionRefusedError()).status, "pass")
 
