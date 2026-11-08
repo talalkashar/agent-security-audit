@@ -94,6 +94,33 @@ class GraphqlProofTest(unittest.TestCase):
                 body = {"errors": [{"message": f"invalid body: {query}", "value": query}]}
                 self.assertNotEqual(self.run_check(status, body).status, "pass")
 
+    def test_status_comes_before_media_type(self):
+        gql = "application/graphql-response+json"
+        self.assertEqual(self.run_check(404, {"errors": [{"message": "x"}]}, gql).status, "skip")
+        for status in (401, 403, 429, 503):
+            with self.subTest(status=status):
+                self.assertEqual(self.run_check(status, {"errors": [{"message": "x"}]}, gql).status, "manual")
+                self.assertEqual(self.run_check(status, {"errors": [{"message": "GraphQL introspection is not allowed"}]})
+                                 .status, "manual")
+
+    def test_challenge_answer_is_manual(self):
+        r = resp(400, [("Content-Type", "application/graphql-response+json"), ("cf-mitigated", "challenge")],
+                 json.dumps({"errors": [{"message": "x"}]}))
+        self.assertEqual(webapp.graphql_introspection(ctx({"/graphql": r})).status, "manual")
+
+    def test_echoed_probe_alone_is_manual(self):
+        query = json.loads(webapp.INTROSPECTION)["query"]
+        for status in (200, 400, 422):
+            with self.subTest(status=status):
+                self.assertEqual(self.run_check(status, {"errors": [{"message": query}]}).status, "manual")
+                self.assertEqual(self.run_check(status, {"errors": [{"message": "AsaIntrospectionProbe failed"}]})
+                                 .status, "manual")
+
+    def test_graphql_media_type_with_parameters_passes(self):
+        self.assertEqual(self.run_check(400, {"errors": [{"message": "x"}]},
+                                        "application/graphql-response+json; charset=utf-8").status, "pass")
+        self.assertEqual(self.run_check(400, {"errors": [{"message": "x"}]}, "text/x-graphql-ish").status, "manual")
+
     def test_graphql_media_type_or_error_passes(self):
         self.assertEqual(self.run_check(400, {"errors": [{"message": "x"}]}, "application/graphql-response+json").status,
                          "pass")
