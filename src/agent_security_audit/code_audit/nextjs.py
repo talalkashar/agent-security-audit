@@ -27,8 +27,20 @@ DB = re.compile(r"(?<!Array)(?<!Buffer)(?<!Object)\.from\(\s*['\"`][\w.-]+['\"`]
 AUTH = re.compile(r"\.auth\.(?:getUser|getClaims|getSession)\(|getServerSession\(|\bauth\(\s*\)|\bcurrentUser\(|"
                   r"\bgetAuth\(|\bauth\.protect\(|\b(?:require|ensure|assert|verify|check|get|validate|with)\w*"
                   r"(?:User|Auth|Session|Admin|Role|Owner|Permission|Signature|Secret|Token|Claims)\w*\s*\(|"
-                  r"\bauthorization\b|CRON_SECRET|constructEvent\(|timingSafeEqual|jwtVerify\(|jwt\.verify\(",
+                  r"CRON_SECRET|constructEvent\(|timingSafeEqual|jwtVerify\(|jwt\.verify\(",
                   re.IGNORECASE)
+# Reading the Authorization header counts as a guard; the word inside a message ("authorization required") does not.
+AUTH_HEADER = re.compile(r"""(?:\.get|getHeader|header)\(\s*(['"`])authorization\1|"""
+                         r"""headers\s*(?:\.\s*authorization\b|\[\s*(['"`])authorization\2\s*\])""", re.IGNORECASE)
+STRING_OR_COMMENT = re.compile(r"""//[^\n]*|/\*.*?\*/|'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`""",
+                               re.DOTALL)
+
+
+def _has_auth(code):
+    """An auth, session or secret call in code, not counting words inside string literals or comments."""
+    if AUTH_HEADER.search(code):
+        return True
+    return bool(AUTH.search(STRING_OR_COMMENT.sub(lambda m: " " * len(m.group()), code)))
 SERVICE = re.compile(r"SERVICE_ROLE|service_role|SUPABASE_SECRET_KEY|\bsb_secret_|createAdminClient|"
                      r"createServiceRoleClient|\bsupabaseAdmin\b")
 SERVER_ONLY = re.compile(r"""import\s+['"]server-only['"]""")
@@ -135,15 +147,18 @@ def _depths(code):
             if stack and stack[-1] == "{":
                 stack.pop()
         i += 1
-    out[len(code)] = depth
+    out[len(code)] = depth + len(stack)  # non-zero: the scan ended inside a block, string or template
     return out
 
 
 def _blocks(code, rx):
-    """[(name, start, end)] for each top-level declaration rx finds, ending where the next top-level one starts."""
+    """[(name, start, end)] for each top-level declaration rx finds, ending where the next top-level one starts.
+    When the depth scan ends unbalanced (a regex literal or odd string fooled it), every line that starts like a
+    declaration ends the block before it, so a sibling declaration is never read as part of a handler."""
     depth = _depths(code)
+    balanced = depth[-1] == 0
     tops = [m.start() for m in TOP_LEVEL.finditer(code)
-            if depth[m.start()] == 0 or code.startswith("export", m.start())] + [len(code)]
+            if not balanced or depth[m.start()] == 0 or code.startswith("export", m.start())] + [len(code)]
     out = []
     for m in rx.finditer(code):
         end = next(t for t in tops if t > m.start())
@@ -154,17 +169,19 @@ def _blocks(code, rx):
 def _route_methods(code):
     """Judge each exported HTTP method on its own, so an auth call in POST does not cover GET. A method touches data
     when it, or a helper in the file it calls, reaches the database; it is guarded when it, or such a helper, calls
-    an auth check. Returns ([(offset, note)] for unguarded methods, guarded count, data-touching count)."""
+    an auth check. Returns ([(offset, note)] for unguarded methods, guarded count, data-touching count, unsure
+    count). In a file whose braces could not be matched, a guard is not trusted: the method counts as unsure."""
+    balanced = _depths(code)[-1] == 0
     methods = _blocks(code, METHOD)
     if not methods:  # pages/api default handler, or methods re-exported: judge the file as one handler
         db = DB.search(code)
         if not db:
-            return [], 0, 0
-        if AUTH.search(code):
-            return [], 1, 1
-        return [(db.start(), "touches data with no auth or session call in the handler")], 0, 1
+            return [], 0, 0, 0
+        if _has_auth(code):
+            return [], 1, 1, 0
+        return [(db.start(), "touches data with no auth or session call in the handler")], 0, 1, 0
     helpers = {name: code[a:b] for name, a, b in _blocks(code, DECL) if (a, b) not in {(x, y) for _, x, y in methods}}
-    open_, guarded, touching = [], 0, 0
+    open_, guarded, touching, unsure = [], 0, 0, 0
     for name, a, b in methods:
         seg = code[a:b]
         called = [h for h in helpers if re.search(r"(?<![\w$.])" + re.escape(h) + r"\s*\(", seg)]
@@ -172,32 +189,42 @@ def _route_methods(code):
         if not db and not any(DB.search(helpers[h]) for h in called):
             continue
         touching += 1
-        if AUTH.search(seg) or any(AUTH.search(helpers[h]) for h in called):
-            guarded += 1
-        elif AUTH.search(code):
+        if _has_auth(seg) or any(_has_auth(helpers[h]) for h in called):
+            if balanced:
+                guarded += 1
+            else:
+                unsure += 1
+        elif _has_auth(code):
             open_.append((a + (db.start() if db else 0), (f"{name} touches data; the file has an auth call, but not "
                           f"in {name} or a helper it calls")))
         else:
             open_.append((a + (db.start() if db else 0), f"{name} touches data with no auth or session call"))
-    return open_, guarded, touching
+    return open_, guarded, touching, unsure
 
 
 def route_handlers(project):
     routes = [f for f in project.code_files() if ROUTE.search(f)]
     if not routes:
         return []
-    open_routes, guarded, touching = [], 0, 0
+    open_routes, guarded, touching, unsure = [], 0, 0, []
     for rel in routes:
         code = _code(project, rel)
-        found, ok, n = _route_methods(code)
+        found, ok, n, maybe = _route_methods(code)
         guarded += ok
         touching += n
+        if maybe:
+            unsure.append(rel)
         open_routes += [_at(project, rel, code, off, note) for off, note in found]
     if open_routes:
         n = len(open_routes)
         return [make("NEXT-05", "warn", SUSPECTED + f"{plural(n, 'route handler')} "
                      f"{'reads or writes' if n == 1 else 'read or write'} data without an auth, session or secret "
                      "check in that handler. Middleware alone does not protect a route handler.", open_routes)]
+    if unsure:
+        return [make("NEXT-05", "manual", f"{plural(len(unsure), 'route file')} could not be split into handlers "
+                     "reliably (unbalanced braces, strings, template or regex literals), so an auth call there may "
+                     "belong to another declaration. Confirm each handler checks the caller: " + ", ".join(unsure[:5])
+                     + ".")]
     if not touching:  # nothing seen is not proof: data reached through imported modules is not traced
         return [make("NEXT-05", "manual", f"No route handler in {plural(len(routes), 'route file')} reaches data "
                      "directly in its file. Handlers that reach data through imported modules are not traced; "
@@ -218,14 +245,14 @@ def server_actions(project):
                 segment = code[m.start():end]
                 actions += 1
                 db = DB.search(segment)
-                if db and not AUTH.search(segment):
+                if db and not _has_auth(segment):
                     name = next((g for g in m.groups() if g), "default")
                     open_actions.append(_at(project, rel, code, m.start() + db.start(),
                                             f"Server Action {name} touches data with no auth or session call"))
         elif INLINE_SERVER.search(code) and _directive(code) != "client":
             actions += 1
             db = DB.search(code)
-            if db and not AUTH.search(code):
+            if db and not _has_auth(code):
                 open_actions.append(_at(project, rel, code, db.start(), "inline Server Action file touches data with "
                                         "no auth or session call"))
     if not actions:

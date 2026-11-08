@@ -573,6 +573,26 @@ class AccuracyTest(unittest.TestCase):
         r = audit_files({"app/api/ping/route.ts": "export function GET() {\n  return Response.json({ ok: 1 });\n}\n"})
         self.assertEqual(r["NEXT-05"].status, "manual")  # no data seen is not proof that every handler is guarded
 
+    def test_authorization_word_in_a_string_is_not_a_guard(self):
+        code = ("export async function GET() {\n  if (!ok) return Response.json({ error: \"authorization required\" });\n"
+                "  return supabase.from('notes').select();\n}\n")
+        r = audit_files({"app/api/notes/route.ts": code})
+        self.assertEqual(r["NEXT-05"].status, "warn")
+        code = ("export async function GET(req) {\n  if (req.headers.get('authorization') !== key) return deny();\n"
+                "  return supabase.from('notes').select();\n}\n")
+        self.assertEqual(audit_files({"app/api/notes/route.ts": code})["NEXT-05"].status, "pass")
+
+    def test_unbalanced_scan_never_lends_a_sibling_guard(self):
+        # The regex literal holds a quote, so the depth scan stays inside a "string" and the sibling declaration
+        # below would look nested in GET. Its auth call must not count as GET's guard.
+        code = ("export async function GET() {\n  const re = /'/;\n  return supabase.from('notes').select();\n}\n"
+                "async function requireUser() { return supabase.auth.getUser(); }\n")
+        r = audit_files({"app/api/notes/route.ts": code})
+        self.assertIn(r["NEXT-05"].status, ("warn", "manual"))
+        code = ("export async function GET() {\n  const re = /'/;\n  await supabase.auth.getUser();\n"
+                "  return supabase.from('notes').select();\n}\n")
+        self.assertEqual(audit_files({"app/api/notes/route.ts": code})["NEXT-05"].status, "manual")
+
     def test_file_cap_makes_passes_manual(self):
         files = {f"lib/f{i}.ts": "export const x = 1;\n" for i in range(4)}
         with mock.patch.object(project, "MAX_FILES", 2):
