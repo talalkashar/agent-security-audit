@@ -9,7 +9,6 @@ import json
 import posixpath
 import re
 
-from ..checks import Context
 from ..checks import browser as live
 from ..http import Response
 from .base import SUSPECTED, make, plural
@@ -42,16 +41,16 @@ EXPORT = re.compile(r"^export\s+(?:default\s+)?(?:async\s+function\*?\s*(\w*)|fu
 NEXT_CONFIG = re.compile(r"(^|/)next\.config\.(?:[cm]?js|[cm]?ts)$")
 HEADER_FILES = re.compile(r"(^|/)(next\.config\.(?:[cm]?js|[cm]?ts)|vercel\.json|netlify\.toml|_headers|"
                           r"(src/)?(middleware|proxy)" + EXT[:-1] + r")$")
-# Each header check is settled by the live check's own logic, run on the values the code sets.
+# Each header check is settled by the live check's per-response logic, run on the values the code sets.
 HEADERS = [
-    ("BROWSER-01", "Strict-Transport-Security", ("strict-transport-security",), live.hsts),
-    ("BROWSER-02", "Content-Security-Policy", ("content-security-policy",), live.csp),
-    ("BROWSER-03", "X-Content-Type-Options", ("x-content-type-options",), live.nosniff),
+    ("BROWSER-01", "Strict-Transport-Security", ("strict-transport-security",), live._hsts),
+    ("BROWSER-02", "Content-Security-Policy", ("content-security-policy",), live._csp),
+    ("BROWSER-03", "X-Content-Type-Options", ("x-content-type-options",), live._nosniff),
     ("BROWSER-04", "X-Frame-Options or frame-ancestors", ("x-frame-options", "content-security-policy"),
-     live.framing),
-    ("BROWSER-05", "Referrer-Policy", ("referrer-policy",), live.referrer),
+     live._framing),
+    ("BROWSER-05", "Referrer-Policy", ("referrer-policy",), live._referrer),
     ("BROWSER-08", "Permissions-Policy and Cross-Origin-Opener-Policy",
-     ("permissions-policy", "cross-origin-opener-policy"), live.isolation),
+     ("permissions-policy", "cross-origin-opener-policy"), live._isolation),
 ]
 HEADER_NAMES = sorted({n for _, _, names, _ in HEADERS for n in names}, key=len, reverse=True)
 QUOTED_NAME = r"""(['"`])(""" + "|".join(re.escape(n) for n in HEADER_NAMES) + r")\1"
@@ -517,14 +516,6 @@ def _route(rx, text, offset):
     return starts[-1] if starts else -1
 
 
-class _Static:
-    def __init__(self, resp):
-        self.resp = resp
-
-    def home(self):
-        return self.resp
-
-
 _RANK = {"fail": 0, "warn": 1, "manual": 2, "pass": 3}
 
 
@@ -590,8 +581,7 @@ def _judge(check, values):
             if all(s == "pass" for s, _ in judged):
                 return "manual", "sets too many value combinations to judge them all. Confirm it on the live site."
             break
-        r = check(Context("https://code-audit.invalid/", _Static(Response("https://code-audit.invalid/", 200, "OK",
-                                                                            list(combo)))))
+        r = check(Response("https://code-audit.invalid/", 200, "OK", list(combo)))
         judged.append((r.status if r.status in _RANK else "manual", r.summary))
     return min(judged, key=lambda x: _RANK[x[0]])
 
