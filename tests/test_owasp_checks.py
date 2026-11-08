@@ -1,9 +1,13 @@
 """Checks added to close OWASP gaps: API-25 (version banners, live), API-08 (SSRF, code) and API-33 (mass
 assignment, code). Each has pass, fail or warn, and manual fixtures."""
 
+import time
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 from agent_security_audit.checks import exposure
+from agent_security_audit.code_audit import request_input
 from tests.test_checks import ctx_for, home_with, resp
 from tests.test_code_audit import audit_files
 
@@ -168,6 +172,115 @@ class MassAssignmentCodeTest(unittest.TestCase):
 
     def test_no_writes_says_nothing(self):
         self.assertIsNone(self.status("export async function GET(req) { return Response.json(req.query); }\n"))
+
+
+class RequestInputBoundsTest(unittest.TestCase):
+    """Offline bounds checks exercise both analyzers without unrelated audit checks or network access."""
+
+    def results(self, code):
+        project = SimpleNamespace(code_files=lambda: [ROUTE], text=lambda _: code)
+        return {r.check_id: r.status for analyzer in request_input.ANALYZERS for r in analyzer(project)}
+
+    def test_malformed_50kb_destructure_is_manual_under_one_second(self):
+        code = "const { " + " a" * 25_000 + "\nfetch(target);\nsupabase.from('t').insert(payload);"
+        self.assertGreater(len(code), 50_000)
+        started = time.perf_counter()
+        self.assertEqual(self.results(code), {"API-08": "manual", "API-33": "manual"})
+        self.assertLess(time.perf_counter() - started, 1.0)
+
+    def test_50kb_mutual_assignment_fanout_is_manual_under_one_second(self):
+        names = [f"x{i}" for i in range(64)]
+        expression = " + ".join(names)
+        self.assertLess(len(expression), 400)  # Exercise graph traversal, not just argument truncation.
+        code = "\n".join(f"let {name} = {expression};\n{name} = {expression};" for name in names)
+        code = code.ljust(50_000) + "\nfetch(x0);\nsupabase.from('t').insert(x0);"
+        started = time.perf_counter()
+        self.assertEqual(self.results(code), {"API-08": "manual", "API-33": "manual"})
+        self.assertLess(time.perf_counter() - started, 1.0)
+
+    def test_cycles_and_depth_cutoffs_are_manual(self):
+        for declarations, name in (
+            ("const a = b; const b = a;", "a"),
+            ("const a = { ...b }; const b = { ...a };", "a"),
+            ("const a = b; const b = c; const c = d; const d = e; const e = source;", "a"),
+        ):
+            with self.subTest(declarations=declarations):
+                code = declarations + f" fetch({name}); supabase.from('t').insert({name});"
+                self.assertEqual(self.results(code), {"API-08": "manual", "API-33": "manual"})
+
+    def test_repeated_safe_spreads_keep_their_proof(self):
+        code = "const row = { title: 'x' }; const payload = { ...row, ...row };"
+        self.assertEqual(self.results(code + "supabase.from('t').insert(payload);"), {"API-33": "pass"})
+
+    def test_payload_budget_boundary_and_per_payload_reset(self):
+        names = list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") + [f"a{i}" for i in range(13)]
+        declarations = "\n".join(f"const {name} = {{ title: 'x' }};" for name in names)
+        for count, expected in ((64, "pass"), (65, "manual")):
+            value = "{" + ",".join(f"...{name}" for name in names[:count]) + "}"
+            self.assertLess(len(value), 400)
+            with self.subTest(count=count):
+                code = declarations + f"supabase.from('t').insert({value});supabase.from('t').insert({value});"
+                self.assertEqual(self.results(code), {"API-33": expected})
+
+    def test_fetch_phases_share_budget_but_calls_reset_it(self):
+        # Fixed-URL resolution spends one lookup on target; tracing its assignment needs target and body.
+        code = "const body = req.body; const target = body.url; fetch(target); fetch(target);"
+        for budget, expected in ((2, "manual"), (3, "warn")):
+            with self.subTest(budget=budget), mock.patch.object(request_input, "_LOOKUP_BUDGET", budget):
+                self.assertEqual(self.results(code), {"API-08": expected})
+
+    def test_exhausted_budget_never_proves_safe(self):
+        budget = request_input._Budget()
+        budget.exhausted = True
+        walk = request_input._Walk(request_input._Memo(""), budget)
+        self.assertFalse(request_input._fixed_url("", "'https://example.com/'", walk=walk))
+        self.assertEqual(request_input._payload_kind("", "{ title: 'x' }", walk=walk), "unknown")
+
+    def test_reassignment_limit_leaves_unread_tail_manual(self):
+        code = "let target = 'https://example.com/'; let payload = { title: 'x' };\n"
+        code += "target = 'https://example.com/'; payload = { title: 'x' };\n" * 64
+        code += "target = req.body.url; payload = req.body;\nfetch(target);supabase.from('t').insert(payload);"
+        self.assertEqual(self.results(code), {"API-08": "manual", "API-33": "manual"})
+
+    def test_raw_evidence_before_truncation_remains_warning(self):
+        code = "let target = req.body.url; let payload = req.body;\n"
+        code += "target = other; payload = other;\n" * 65
+        code += "fetch(target);supabase.from('t').insert(payload);"
+        self.assertEqual(self.results(code), {"API-08": "warn", "API-33": "warn"})
+
+    def test_reassigned_payloads_cannot_reuse_stale_safe_declaration(self):
+        for rhs, expected in (("req.body", "warn"), ("load()", "manual"), ("{ title: 'x' }", "pass")):
+            with self.subTest(rhs=rhs):
+                code = f"let payload = Schema.parse(req.body); payload = {rhs};supabase.from('t').insert(payload);"
+                self.assertEqual(self.results(code), {"API-33": expected})
+
+    def test_capped_arguments_and_assignments_are_manual(self):
+        value = "{ title: 'x', " + " " * 400 + "...req.body }"
+        for code in (
+            f"supabase.from('t').insert({value});",
+            f"const payload = {value};supabase.from('t').insert(payload);",
+            f"prisma.user.create({{ data: {value} }});",
+            "prisma.user.create({ data: { title: 'x' }, " + " " * 2000 + "update: req.body });",
+        ):
+            with self.subTest(code=code[:60]):
+                self.assertEqual(self.results(code), {"API-33": "manual"})
+        self.assertEqual(self.results("fetch(`https://example.com/" + "a" * 400 + "`);"), {"API-08": "manual"})
+        # An unread assignment must not fall back to a different declaration with the same name.
+        code = "const target = " + "x + " * 101 + "x; const { target } = process.env; fetch(target);"
+        self.assertEqual(self.results(code), {"API-08": "manual"})
+
+    def test_overlong_destructure_is_unknown_but_short_one_still_traces(self):
+        for padding, expected in (("", "warn"), (" " * 401, "manual")):
+            with self.subTest(padding=len(padding)):
+                code = f"const {{ target, {padding}...payload }} = req.body;"
+                code += "fetch(target);supabase.from('t').insert(payload);"
+                self.assertEqual(self.results(code), {"API-08": expected, "API-33": expected})
+
+    def test_file_memos_are_isolated(self):
+        sources = {ROUTE: "const target = 'https://example.com/';fetch(target);",
+                   "app/api/y/route.ts": "const target = req.body.url;fetch(target);"}
+        project = SimpleNamespace(code_files=lambda: sources, text=sources.__getitem__)
+        self.assertEqual(request_input.outbound_requests(project)[0].status, "warn")
 
 
 if __name__ == "__main__":
