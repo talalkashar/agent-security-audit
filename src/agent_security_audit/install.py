@@ -409,7 +409,9 @@ def describe(changes, wrote):
     for c in changes:
         verb = {"create": "created" if wrote else "would create", "update": "updated" if wrote else "would update",
                 "unchanged": "already set up", "conflict": "left as is"}[c.action]
-        note = c.note or (f"backup: {c.path.name}.bak" if c.action == "update" and c.path.exists() else "")
+        # The backup sits beside the real file, so a symlinked config names the resolved backup path.
+        bak = f"{os.path.realpath(c.path)}.bak" if c.path.is_symlink() else f"{c.path.name}.bak"
+        note = c.note or (f"backup: {bak}" if c.action == "update" and c.path.exists() else "")
         out.append(f"{verb}: {c.path}" + (f" ({note})" if note else ""))
         if c.action in ("create", "update", "conflict"):
             out += ["    " + line for line in c.added.splitlines()]
