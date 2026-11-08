@@ -267,7 +267,7 @@ def build_parser():
     ins.add_argument("agent", choices=install.AGENTS)
     ins.add_argument("--yes", action="store_true", help="write the change (default: dry run that prints it)")
     ins.add_argument("--uvx", action="store_true",
-                     help="run the server with `uvx --from git+<repo> asa-mcp` instead of the installed asa-mcp")
+                     help="run the server with `uvx --from agent-security-audit==<version> asa-mcp` (the pinned PyPI release) instead of the installed asa-mcp")
     return p
 
 
