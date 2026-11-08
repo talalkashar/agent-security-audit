@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -193,12 +194,21 @@ def apply(changes):
     for c in changes:
         if c.new_text is None or c.action not in ("create", "update"):
             continue
-        c.path.parent.mkdir(parents=True, exist_ok=True)
-        if c.path.exists():
-            shutil.copy2(c.path, c.path.with_name(c.path.name + ".bak"))
-        tmp = c.path.with_name(c.path.name + ".asa-tmp")
-        tmp.write_text(c.new_text, encoding="utf-8")
-        os.replace(tmp, c.path)
+        # A symlinked config (stow, chezmoi) is written at the file it points to, so the link stays a link.
+        target = c.path.resolve() if c.path.is_symlink() else c.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        mode = None
+        if target.exists():
+            mode = stat.S_IMODE(target.stat().st_mode)
+            shutil.copy2(target, c.path.with_name(c.path.name + ".bak"))
+        tmp = target.with_name(target.name + ".asa-tmp")
+        tmp.unlink(missing_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600 if mode is not None else 0o666)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(c.new_text)
+        if mode is not None:
+            os.chmod(tmp, mode)  # keep the original's access: these configs often hold API keys in "env"
+        os.replace(tmp, target)
 
 
 def describe(changes, wrote):

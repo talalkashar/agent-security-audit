@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import stat
 import tempfile
 import tomllib
 import unittest
@@ -100,6 +101,35 @@ class InstallTest(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         self.assertIn('"café"', text)
         self.assertNotIn("\\u00e9", text)
+
+    @unittest.skipIf(os.name == "nt", "POSIX file modes")
+    def test_private_config_stays_private(self):
+        path = self.home / ".cursor" / "mcp.json"
+        path.parent.mkdir()
+        path.write_text('{"mcpServers": {"other": {"command": "x", "env": {"API_KEY": "k"}}}}')
+        path.chmod(0o600)
+        self.asa("cursor", "--yes")
+        self.assertIn("agent-security-audit", json.loads(path.read_text())["mcpServers"])
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE((path.parent / "mcp.json.bak").stat().st_mode), 0o600)
+
+    def test_symlinked_config_is_written_through_the_link(self):
+        dotfiles = self.home / "dotfiles"
+        dotfiles.mkdir()
+        real = dotfiles / "config.toml"
+        real.write_text('model = "x"\n')
+        link = self.home / ".codex" / "config.toml"
+        link.parent.mkdir()
+        try:
+            link.symlink_to(real)
+        except OSError:
+            self.skipTest("symlinks not available")
+        code, _ = self.asa("codex", "--yes")
+        self.assertEqual(code, 0)
+        self.assertTrue(link.is_symlink())
+        self.assertIn("agent-security-audit", tomllib.loads(real.read_text())["mcp_servers"])
+        self.assertEqual((link.parent / "config.toml.bak").read_text(), 'model = "x"\n')
+        self.assertEqual(sorted(p.name for p in dotfiles.iterdir()), ["config.toml"])
 
     def test_vscode_uses_servers_with_type(self):
         self.asa("vscode", "--yes")
