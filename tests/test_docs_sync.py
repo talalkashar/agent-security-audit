@@ -111,10 +111,11 @@ class ReadmeCommandsTest(unittest.TestCase):
                     argv = ["scan", *argv]  # the `asa <url>` shortcut, as cli.main applies it
                 stderr = io.StringIO()
                 try:
-                    with contextlib.redirect_stderr(stderr):
+                    with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
                         cli.build_parser().parse_args(argv)
-                except SystemExit:
-                    self.fail(stderr.getvalue())
+                except SystemExit as exc:
+                    if exc.code not in (0, None):  # `asa --version` and `--help` exit 0 after printing
+                        self.fail(stderr.getvalue())
 
     def test_parser_rejects_unknown_flags(self):
         # Guard for the test above: a made-up flag must not parse.
