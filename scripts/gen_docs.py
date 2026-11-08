@@ -28,6 +28,7 @@ AREAS = {
     "api": "API abuse, input handling and rate limits",
     "auth": "Authentication and sessions",
     "browser": "Browser security headers, cookies and client code",
+    "cms": "CMS versions, support and public login/API markers",
     "infra": "Transport, DNS, email and hosting",
     "nextjs": "Next.js and Vercel",
 }

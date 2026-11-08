@@ -2,7 +2,7 @@
 
 # Check catalog
 
-120 checks in 6 areas. Each check has a risk, a build rule the agent follows while writing code, a proof test that shows the defense working on the running site, and sources.
+124 checks in 7 areas. Each check has a risk, a build rule the agent follows while writing code, a proof test that shows the defense working on the running site, and sources.
 
 - **auto**: `asa scan` runs the proof test and reports pass or fail with evidence.
 - **assisted**: the agent checks the code first, then runs a logged-in test itself if the code does not settle it.
@@ -16,9 +16,10 @@
 | [api](api.md) | API abuse, input handling and rate limits | 27 | 8 | 12 | 7 | 4 | 12 | 9 | 2 |
 | [auth](auth.md) | Authentication and sessions | 11 | 0 | 10 | 1 | 1 | 6 | 4 | 0 |
 | [browser](browser.md) | Browser security headers, cookies and client code | 23 | 12 | 7 | 4 | 0 | 8 | 13 | 2 |
+| [cms](cms.md) | CMS versions, support and public login/API markers | 4 | 4 | 0 | 0 | 0 | 1 | 1 | 2 |
 | [infra](infra.md) | Transport, DNS, email and hosting | 28 | 14 | 2 | 12 | 6 | 11 | 6 | 5 |
 | [nextjs](nextjs.md) | Next.js and Vercel | 16 | 3 | 10 | 3 | 3 | 5 | 7 | 1 |
-| **Total** | | **120** | **38** | **51** | **31** | **19** | **51** | **40** | **10** |
+| **Total** | | **124** | **42** | **51** | **31** | **19** | **52** | **41** | **12** |
 
 ## By OSI layer
 
@@ -30,7 +31,7 @@
 | 4 Transport | 3 | 2 | 0 | 1 |
 | 5 Session | 2 | 0 | 2 | 0 |
 | 6 Presentation | 5 | 5 | 0 | 0 |
-| 7 Application | 106 | 31 | 49 | 26 |
+| 7 Application | 110 | 35 | 49 | 26 |
 
 ## All checks
 
@@ -112,6 +113,10 @@
 | [BROWSER-21](browser.md#browser-21-third-party-scripts-and-styles-pinned-with-subresource-integrity) | low | L7 | auto | Third-party scripts and styles pinned with Subresource Integrity |
 | [BROWSER-22](browser.md#browser-22-password-forms-served-and-submitted-over-https-with-post) | high | L7 | auto | Password forms served and submitted over HTTPS with POST |
 | [BROWSER-23](browser.md#browser-23-no-known-vulnerable-client-javascript-libraries) | medium | L7 | auto | No known-vulnerable client JavaScript libraries |
+| [CMS-01](cms.md#cms-01-cms-version-disclosure-reviewed) | low | L7 | auto | CMS version disclosure reviewed |
+| [CMS-02](cms.md#cms-02-cms-core-on-a-supported-release-line) | high | L7 | auto | CMS core on a supported release line |
+| [CMS-03](cms.md#cms-03-wordpress-rest-and-xml-rpc-exposure-needs-review) | medium | L7 | auto | WordPress REST and XML-RPC exposure needs review |
+| [CMS-04](cms.md#cms-04-public-cms-login-links-reviewed) | low | L7 | auto | Public CMS login links reviewed |
 | [INFRA-01](infra.md#infra-01-http-redirects-to-https) | high | L6 | auto | HTTP redirects to HTTPS |
 | [INFRA-02](infra.md#infra-02-tls-certificate-valid-and-not-near-expiry) | high | L6 | auto | TLS certificate valid and not near expiry |
 | [INFRA-03](infra.md#infra-03-legacy-tls-10-and-11-refused) | medium | L6 | auto | Legacy TLS 1.0 and 1.1 refused |
@@ -157,6 +162,6 @@
 | [NEXT-15](nextjs.md#next-15-vercel-cron-endpoints-require-cron_secret) | medium | L7 | assisted | Vercel cron endpoints require CRON_SECRET |
 | [NEXT-16](nextjs.md#next-16-no-internal-x-middleware-headers-in-responses) | medium | L7 | assisted | No internal x-middleware headers in responses |
 
-Automated proof tests built in: 38 (ACCESS-01, API-01, API-02, API-19, API-20, API-21, API-22, API-23, API-24, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06, BROWSER-07, BROWSER-08, BROWSER-20, BROWSER-21, BROWSER-22, BROWSER-23, INFRA-01, INFRA-02, INFRA-03, INFRA-04, INFRA-05, INFRA-06, INFRA-07, INFRA-11, INFRA-12, INFRA-24, INFRA-25, INFRA-26, INFRA-27, INFRA-28, NEXT-01, NEXT-02, NEXT-03).
+Automated proof tests built in: 42 (ACCESS-01, API-01, API-02, API-19, API-20, API-21, API-22, API-23, API-24, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06, BROWSER-07, BROWSER-08, BROWSER-20, BROWSER-21, BROWSER-22, BROWSER-23, CMS-01, CMS-02, CMS-03, CMS-04, INFRA-01, INFRA-02, INFRA-03, INFRA-04, INFRA-05, INFRA-06, INFRA-07, INFRA-11, INFRA-12, INFRA-24, INFRA-25, INFRA-26, INFRA-27, INFRA-28, NEXT-01, NEXT-02, NEXT-03).
 
 Settled from source code by `asa code`: 29 (ACCESS-01, ACCESS-02, ACCESS-06, ACCESS-08, ACCESS-11, API-05, API-30, API-31, API-32, AUTH-01, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-08, BROWSER-09, INFRA-08, INFRA-13, INFRA-15, NEXT-01, NEXT-02, NEXT-03, NEXT-04, NEXT-05, NEXT-06, NEXT-07, NEXT-11, NEXT-15).
