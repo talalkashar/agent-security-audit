@@ -13,16 +13,16 @@ Source: <https://owasp.org/Top10/2021/>
 
 | Category | Checks | Live test | From code | Guided | Gap |
 |---|---:|---:|---:|---:|---|
-| [A01:2021 Broken Access Control](#a012021) | 32 | 4 | 9 | 20 | Mostly guided. |
+| [A01:2021 Broken Access Control](#a012021) | 33 | 4 | 10 | 20 | Mostly guided. |
 | [A02:2021 Cryptographic Failures](#a022021) | 12 | 8 | 3 | 3 | - |
 | [A03:2021 Injection](#a032021) | 14 | 1 | 6 | 8 | Mostly guided. |
 | [A04:2021 Insecure Design](#a042021) | 12 | 0 | 1 | 11 | No live proof test; code audit and guided steps only. Design flaws show up in business logic; the checks here cover named patterns, not a design review. |
-| [A05:2021 Security Misconfiguration](#a052021) | 35 | 23 | 9 | 11 | - |
+| [A05:2021 Security Misconfiguration](#a052021) | 36 | 24 | 9 | 11 | - |
 | [A06:2021 Vulnerable and Outdated Components](#a062021) | 3 | 1 | 2 | 0 | - |
 | [A07:2021 Identification and Authentication Failures](#a072021) | 21 | 4 | 5 | 13 | Mostly guided. |
-| [A08:2021 Software and Data Integrity Failures](#a082021) | 7 | 1 | 2 | 4 | Mostly guided. |
+| [A08:2021 Software and Data Integrity Failures](#a082021) | 8 | 1 | 3 | 4 | - |
 | [A09:2021 Security Logging and Monitoring Failures](#a092021) | 1 | 0 | 0 | 1 | Guided only: no automated proof. Logging and alerting live on the server and in the hosting dashboard; nothing outside can see them. |
-| [A10:2021 Server-Side Request Forgery (SSRF)](#a102021) | 2 | 0 | 1 | 1 | No live proof test; code audit and guided steps only. A live SSRF test needs a request that makes the server fetch an address; the tool sends none. |
+| [A10:2021 Server-Side Request Forgery (SSRF)](#a102021) | 2 | 0 | 2 | 0 | No live proof test; code audit and guided steps only. A live SSRF test needs a request that makes the server fetch an address; the tool sends none. |
 
 ## OWASP Top 10:2025
 
@@ -30,14 +30,14 @@ Source: <https://owasp.org/Top10/2025/>
 
 | Category | Checks | Live test | From code | Guided | Gap |
 |---|---:|---:|---:|---:|---|
-| [A01:2025 Broken Access Control](#a012025) | 34 | 4 | 10 | 21 | Mostly guided. |
-| [A02:2025 Security Misconfiguration](#a022025) | 35 | 23 | 9 | 11 | - |
+| [A01:2025 Broken Access Control](#a012025) | 35 | 4 | 12 | 20 | Mostly guided. |
+| [A02:2025 Security Misconfiguration](#a022025) | 36 | 24 | 9 | 11 | - |
 | [A03:2025 Software Supply Chain Failures](#a032025) | 7 | 2 | 3 | 2 | - |
 | [A04:2025 Cryptographic Failures](#a042025) | 12 | 8 | 3 | 3 | - |
 | [A05:2025 Injection](#a052025) | 14 | 1 | 6 | 8 | Mostly guided. |
 | [A06:2025 Insecure Design](#a062025) | 11 | 0 | 1 | 10 | No live proof test; code audit and guided steps only. Design flaws show up in business logic; the checks here cover named patterns, not a design review. |
 | [A07:2025 Authentication Failures](#a072025) | 21 | 4 | 5 | 13 | Mostly guided. |
-| [A08:2025 Software or Data Integrity Failures](#a082025) | 5 | 1 | 1 | 3 | Mostly guided. |
+| [A08:2025 Software or Data Integrity Failures](#a082025) | 6 | 1 | 2 | 3 | - |
 | [A09:2025 Security Logging and Alerting Failures](#a092025) | 1 | 0 | 0 | 1 | Guided only: no automated proof. Logging and alerting live on the server and in the hosting dashboard; nothing outside can see them. |
 | [A10:2025 Mishandling of Exceptional Conditions](#a102025) | 2 | 1 | 0 | 1 | - |
 
@@ -49,12 +49,12 @@ Source: <https://owasp.org/API-Security/editions/2023/en/0x11-t10/>
 |---|---:|---:|---:|---:|---|
 | [API1:2023 Broken Object Level Authorization](#api12023) | 9 | 1 | 4 | 5 | Mostly guided. |
 | [API2:2023 Broken Authentication](#api22023) | 12 | 1 | 1 | 10 | Mostly guided. |
-| [API3:2023 Broken Object Property Level Authorization](#api32023) | 3 | 0 | 0 | 3 | Guided only: no automated proof. |
+| [API3:2023 Broken Object Property Level Authorization](#api32023) | 4 | 0 | 1 | 3 | No live proof test; code audit and guided steps only. |
 | [API4:2023 Unrestricted Resource Consumption](#api42023) | 7 | 1 | 1 | 5 | Mostly guided. |
 | [API5:2023 Broken Function Level Authorization](#api52023) | 8 | 0 | 4 | 4 | No live proof test; code audit and guided steps only. |
 | [API6:2023 Unrestricted Access to Sensitive Business Flows](#api62023) | 2 | 0 | 0 | 2 | Guided only: no automated proof. Which flows are sensitive (sign-up, checkout, SMS) depends on the business; the proof is assisted. |
-| [API7:2023 Server Side Request Forgery](#api72023) | 2 | 0 | 1 | 1 | No live proof test; code audit and guided steps only. |
-| [API8:2023 Security Misconfiguration](#api82023) | 21 | 21 | 8 | 0 | - |
+| [API7:2023 Server Side Request Forgery](#api72023) | 2 | 0 | 2 | 0 | No live proof test; code audit and guided steps only. |
+| [API8:2023 Security Misconfiguration](#api82023) | 22 | 22 | 8 | 0 | - |
 | [API9:2023 Improper Inventory Management](#api92023) | 4 | 1 | 0 | 3 | Mostly guided. |
 | [API10:2023 Unsafe Consumption of APIs](#api102023) | 2 | 0 | 0 | 2 | Guided only: no automated proof. Third-party responses are only visible in the code and at runtime on the server. |
 
@@ -62,7 +62,7 @@ Source: <https://owasp.org/API-Security/editions/2023/en/0x11-t10/>
 
 ### A01:2021
 
-Broken Access Control. 32 checks.
+Broken Access Control. 33 checks.
 
 - [ACCESS-01](checks/access.md#access-01-supabase-tables-not-readable-with-the-public-anon-key) Supabase tables not readable with the public anon key (live + code)
 - [ACCESS-02](checks/access.md#access-02-rls-policies-restrict-rows-to-their-owner-not-any-signed-in-user) RLS policies restrict rows to their owner, not any signed-in user (code)
@@ -81,6 +81,7 @@ Broken Access Control. 32 checks.
 - [API-07](checks/api.md#api-07-database-functions-are-not-over-exposed-or-injectable) Database functions are not over-exposed or injectable (guided)
 - [API-16](checks/api.md#api-16-authorization-code-fails-closed-on-errors-and-missing-config) Authorization code fails closed on errors and missing config (guided)
 - [API-19](checks/api.md#api-19-no-open-redirects-in-redirect-parameters) No open redirects in redirect parameters (live)
+- [API-33](checks/api.md#api-33-request-bodies-are-not-written-to-the-database-whole-mass-assignment) Request bodies are not written to the database whole (mass assignment) (code)
 - [AUTH-06](checks/auth.md#auth-06-oauth-and-magic-link-redirect-allow-list-is-exact) OAuth and magic-link redirect allow list is exact (guided)
 - [AUTH-07](checks/auth.md#auth-07-oauth-flow-validates-state-and-pkce) OAuth flow validates state and PKCE (guided)
 - [BROWSER-07](checks/browser.md#browser-07-cors-does-not-reflect-arbitrary-origins-with-credentials) CORS does not reflect arbitrary origins with credentials (live)
@@ -152,7 +153,7 @@ Insecure Design. 12 checks.
 
 ### A05:2021
 
-Security Misconfiguration. 35 checks.
+Security Misconfiguration. 36 checks.
 
 - [ACCESS-09](checks/access.md#access-09-storage-buckets-private-unlistable-and-scoped-to-each-users-folder) Storage buckets private, unlistable and scoped to each user's folder (guided)
 - [API-02](checks/api.md#api-02-errors-do-not-leak-stack-traces-or-internals) Errors do not leak stack traces or internals (live)
@@ -162,6 +163,7 @@ Security Misconfiguration. 35 checks.
 - [API-22](checks/api.md#api-22-api-description-not-public-unless-intended) API description not public unless intended (live)
 - [API-23](checks/api.md#api-23-graphql-introspection-off-in-production) GraphQL introspection off in production (live)
 - [API-24](checks/api.md#api-24-trace-method-disabled) TRACE method disabled (live)
+- [API-25](checks/api.md#api-25-server-banners-do-not-reveal-software-versions) Server banners do not reveal software versions (live)
 - [BROWSER-01](checks/browser.md#browser-01-hsts-sent-with-a-long-max-age-and-includesubdomains) HSTS sent with a long max-age and includeSubDomains (live + code)
 - [BROWSER-02](checks/browser.md#browser-02-content-security-policy-without-unsafe-inline-scripts) Content-Security-Policy without unsafe-inline scripts (live + code)
 - [BROWSER-03](checks/browser.md#browser-03-x-content-type-options-set-to-nosniff) X-Content-Type-Options set to nosniff (live + code)
@@ -226,10 +228,11 @@ Identification and Authentication Failures. 21 checks.
 
 ### A08:2021
 
-Software and Data Integrity Failures. 7 checks.
+Software and Data Integrity Failures. 8 checks.
 
 - [ACCESS-05](checks/access.md#access-05-privileged-columns-not-writable-by-their-row-owner) Privileged columns not writable by their row owner (guided)
 - [API-06](checks/api.md#api-06-webhooks-verify-signatures-and-reject-replays) Webhooks verify signatures and reject replays (guided)
+- [API-33](checks/api.md#api-33-request-bodies-are-not-written-to-the-database-whole-mass-assignment) Request bodies are not written to the database whole (mass assignment) (code)
 - [BROWSER-18](checks/browser.md#browser-18-third-party-scripts-are-pinned-with-sri-or-inventoried) Third-party scripts are pinned with SRI or inventoried (guided)
 - [BROWSER-21](checks/browser.md#browser-21-third-party-scripts-and-styles-pinned-with-subresource-integrity) Third-party scripts and styles pinned with Subresource Integrity (live)
 - [INFRA-13](checks/infra.md#infra-13-dependencies-locked-audited-and-install-scripts-restricted) Dependencies locked, audited and install scripts restricted (code)
@@ -246,12 +249,12 @@ Security Logging and Monitoring Failures. 1 checks.
 
 Server-Side Request Forgery (SSRF). 2 checks.
 
-- [API-08](checks/api.md#api-08-server-side-url-fetches-cannot-reach-internal-addresses) Server-side URL fetches cannot reach internal addresses (guided)
+- [API-08](checks/api.md#api-08-server-side-url-fetches-cannot-reach-internal-addresses) Server-side URL fetches cannot reach internal addresses (code)
 - [NEXT-11](checks/nextjs.md#next-11-image-optimizer-limited-to-exact-remote-sources) Image optimizer limited to exact remote sources (code)
 
 ### A01:2025
 
-Broken Access Control. 34 checks.
+Broken Access Control. 35 checks.
 
 - [ACCESS-01](checks/access.md#access-01-supabase-tables-not-readable-with-the-public-anon-key) Supabase tables not readable with the public anon key (live + code)
 - [ACCESS-02](checks/access.md#access-02-rls-policies-restrict-rows-to-their-owner-not-any-signed-in-user) RLS policies restrict rows to their owner, not any signed-in user (code)
@@ -268,9 +271,10 @@ Broken Access Control. 34 checks.
 - [ACCESS-13](checks/access.md#access-13-tenants-cannot-reach-each-others-data) Tenants cannot reach each other's data (guided)
 - [ACCESS-14](checks/access.md#access-14-supabase-realtime-and-graphql-expose-no-more-than-rest) Supabase Realtime and GraphQL expose no more than REST (guided)
 - [API-07](checks/api.md#api-07-database-functions-are-not-over-exposed-or-injectable) Database functions are not over-exposed or injectable (guided)
-- [API-08](checks/api.md#api-08-server-side-url-fetches-cannot-reach-internal-addresses) Server-side URL fetches cannot reach internal addresses (guided)
+- [API-08](checks/api.md#api-08-server-side-url-fetches-cannot-reach-internal-addresses) Server-side URL fetches cannot reach internal addresses (code)
 - [API-16](checks/api.md#api-16-authorization-code-fails-closed-on-errors-and-missing-config) Authorization code fails closed on errors and missing config (guided)
 - [API-19](checks/api.md#api-19-no-open-redirects-in-redirect-parameters) No open redirects in redirect parameters (live)
+- [API-33](checks/api.md#api-33-request-bodies-are-not-written-to-the-database-whole-mass-assignment) Request bodies are not written to the database whole (mass assignment) (code)
 - [AUTH-06](checks/auth.md#auth-06-oauth-and-magic-link-redirect-allow-list-is-exact) OAuth and magic-link redirect allow list is exact (guided)
 - [AUTH-07](checks/auth.md#auth-07-oauth-flow-validates-state-and-pkce) OAuth flow validates state and PKCE (guided)
 - [BROWSER-07](checks/browser.md#browser-07-cors-does-not-reflect-arbitrary-origins-with-credentials) CORS does not reflect arbitrary origins with credentials (live)
@@ -290,7 +294,7 @@ Broken Access Control. 34 checks.
 
 ### A02:2025
 
-Security Misconfiguration. 35 checks.
+Security Misconfiguration. 36 checks.
 
 - [ACCESS-09](checks/access.md#access-09-storage-buckets-private-unlistable-and-scoped-to-each-users-folder) Storage buckets private, unlistable and scoped to each user's folder (guided)
 - [API-02](checks/api.md#api-02-errors-do-not-leak-stack-traces-or-internals) Errors do not leak stack traces or internals (live)
@@ -300,6 +304,7 @@ Security Misconfiguration. 35 checks.
 - [API-22](checks/api.md#api-22-api-description-not-public-unless-intended) API description not public unless intended (live)
 - [API-23](checks/api.md#api-23-graphql-introspection-off-in-production) GraphQL introspection off in production (live)
 - [API-24](checks/api.md#api-24-trace-method-disabled) TRACE method disabled (live)
+- [API-25](checks/api.md#api-25-server-banners-do-not-reveal-software-versions) Server banners do not reveal software versions (live)
 - [BROWSER-01](checks/browser.md#browser-01-hsts-sent-with-a-long-max-age-and-includesubdomains) HSTS sent with a long max-age and includeSubDomains (live + code)
 - [BROWSER-02](checks/browser.md#browser-02-content-security-policy-without-unsafe-inline-scripts) Content-Security-Policy without unsafe-inline scripts (live + code)
 - [BROWSER-03](checks/browser.md#browser-03-x-content-type-options-set-to-nosniff) X-Content-Type-Options set to nosniff (live + code)
@@ -420,10 +425,11 @@ Authentication Failures. 21 checks.
 
 ### A08:2025
 
-Software or Data Integrity Failures. 5 checks.
+Software or Data Integrity Failures. 6 checks.
 
 - [ACCESS-05](checks/access.md#access-05-privileged-columns-not-writable-by-their-row-owner) Privileged columns not writable by their row owner (guided)
 - [API-06](checks/api.md#api-06-webhooks-verify-signatures-and-reject-replays) Webhooks verify signatures and reject replays (guided)
+- [API-33](checks/api.md#api-33-request-bodies-are-not-written-to-the-database-whole-mass-assignment) Request bodies are not written to the database whole (mass assignment) (code)
 - [BROWSER-18](checks/browser.md#browser-18-third-party-scripts-are-pinned-with-sri-or-inventoried) Third-party scripts are pinned with SRI or inventoried (guided)
 - [BROWSER-21](checks/browser.md#browser-21-third-party-scripts-and-styles-pinned-with-subresource-integrity) Third-party scripts and styles pinned with Subresource Integrity (live)
 - [INFRA-13](checks/infra.md#infra-13-dependencies-locked-audited-and-install-scripts-restricted) Dependencies locked, audited and install scripts restricted (code)
@@ -474,10 +480,11 @@ Broken Authentication. 12 checks.
 
 ### API3:2023
 
-Broken Object Property Level Authorization. 3 checks.
+Broken Object Property Level Authorization. 4 checks.
 
 - [ACCESS-05](checks/access.md#access-05-privileged-columns-not-writable-by-their-row-owner) Privileged columns not writable by their row owner (guided)
 - [ACCESS-07](checks/access.md#access-07-shared-tables-expose-only-intended-columns) Shared tables expose only intended columns (guided)
+- [API-33](checks/api.md#api-33-request-bodies-are-not-written-to-the-database-whole-mass-assignment) Request bodies are not written to the database whole (mass assignment) (code)
 - [NEXT-08](checks/nextjs.md#next-08-rsc-payload-and-client-props-carry-only-needed-fields) RSC payload and client props carry only needed fields (guided)
 
 ### API4:2023
@@ -516,12 +523,12 @@ Unrestricted Access to Sensitive Business Flows. 2 checks.
 
 Server Side Request Forgery. 2 checks.
 
-- [API-08](checks/api.md#api-08-server-side-url-fetches-cannot-reach-internal-addresses) Server-side URL fetches cannot reach internal addresses (guided)
+- [API-08](checks/api.md#api-08-server-side-url-fetches-cannot-reach-internal-addresses) Server-side URL fetches cannot reach internal addresses (code)
 - [NEXT-11](checks/nextjs.md#next-11-image-optimizer-limited-to-exact-remote-sources) Image optimizer limited to exact remote sources (code)
 
 ### API8:2023
 
-Security Misconfiguration. 21 checks.
+Security Misconfiguration. 22 checks.
 
 - [API-02](checks/api.md#api-02-errors-do-not-leak-stack-traces-or-internals) Errors do not leak stack traces or internals (live)
 - [API-20](checks/api.md#api-20-no-directory-listings) No directory listings (live)
@@ -529,6 +536,7 @@ Security Misconfiguration. 21 checks.
 - [API-22](checks/api.md#api-22-api-description-not-public-unless-intended) API description not public unless intended (live)
 - [API-23](checks/api.md#api-23-graphql-introspection-off-in-production) GraphQL introspection off in production (live)
 - [API-24](checks/api.md#api-24-trace-method-disabled) TRACE method disabled (live)
+- [API-25](checks/api.md#api-25-server-banners-do-not-reveal-software-versions) Server banners do not reveal software versions (live)
 - [BROWSER-01](checks/browser.md#browser-01-hsts-sent-with-a-long-max-age-and-includesubdomains) HSTS sent with a long max-age and includeSubDomains (live + code)
 - [BROWSER-02](checks/browser.md#browser-02-content-security-policy-without-unsafe-inline-scripts) Content-Security-Policy without unsafe-inline scripts (live + code)
 - [BROWSER-03](checks/browser.md#browser-03-x-content-type-options-set-to-nosniff) X-Content-Type-Options set to nosniff (live + code)

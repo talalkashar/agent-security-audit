@@ -22,7 +22,7 @@ class CatalogCommandsTest(unittest.TestCase):
     def test_list(self):
         code, out, _ = call("list")
         self.assertEqual(code, 0)
-        self.assertEqual(len(out.strip().splitlines()), 120)
+        self.assertEqual(len(out.strip().splitlines()), 122)
         self.assertTrue(out.startswith("ACCESS-01"))
 
     def test_list_json_filters(self):
@@ -52,7 +52,7 @@ class CatalogCommandsTest(unittest.TestCase):
         self.assertIn("ACCESS-01", out)
         _, all_rules, _ = call("rules")
         self.assertLess(out.count("\n- **"), all_rules.count("\n- **"))
-        self.assertEqual(all_rules.count("\n- **"), 120)
+        self.assertEqual(all_rules.count("\n- **"), 122)
 
 
 class ScanCommandTest(unittest.TestCase):
@@ -77,7 +77,7 @@ class ScanCommandTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(data["tool"], "agent-security-audit")
         self.assertGreater(data["counts"]["fail"], 5)
-        self.assertEqual(len(data["results"]), 38)
+        self.assertEqual(len(data["results"]), 39)
         self.assertEqual(data["results"][0]["status"], "fail")
 
     def test_sarif(self):

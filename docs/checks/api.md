@@ -2,7 +2,7 @@
 
 # api: API abuse, input handling and rate limits
 
-27 checks. Read one in the terminal with `asa show <ID>`.
+29 checks. Read one in the terminal with `asa show <ID>`.
 
 | ID | Severity | Layer | Mode | Title |
 |---|---|---|---|---|
@@ -30,9 +30,11 @@
 | [API-22](#api-22-api-description-not-public-unless-intended) | low | L7 | auto | API description not public unless intended |
 | [API-23](#api-23-graphql-introspection-off-in-production) | medium | L7 | auto | GraphQL introspection off in production |
 | [API-24](#api-24-trace-method-disabled) | low | L7 | auto | TRACE method disabled |
+| [API-25](#api-25-server-banners-do-not-reveal-software-versions) | low | L7 | auto | Server banners do not reveal software versions |
 | [API-30](#api-30-no-eval-new-function-or-vm-on-dynamic-strings) | critical | L7 | review | No eval, new Function or vm on dynamic strings |
 | [API-31](#api-31-shell-commands-never-built-from-strings) | critical | L7 | review | Shell commands never built from strings |
 | [API-32](#api-32-sql-is-parameterized-never-built-by-string-concatenation) | critical | L7 | review | SQL is parameterized, never built by string concatenation |
+| [API-33](#api-33-request-bodies-are-not-written-to-the-database-whole-mass-assignment) | high | L7 | assisted | Request bodies are not written to the database whole (mass assignment) |
 
 ## API-01 Login endpoint is rate limited (429 + Retry-After)
 
@@ -219,7 +221,7 @@ Whether definer functions and views bypass RLS, and EXECUTE grants to anon, are 
 
 ## API-08 Server-side URL fetches cannot reach internal addresses
 
-Severity: high · OSI layer 7 (Application) · CWE-918 · OWASP A10:2021, A01:2025, API7:2023 · Mode: assisted · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-918 · OWASP A10:2021, A01:2025, API7:2023 · Mode: assisted (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -231,11 +233,12 @@ Keep next patched. In next.config images.remotePatterns list exact trusted hostn
 
 ### Proof test
 
-1. On the user's own app's URL-taking feature, submit http://127.0.0.1/, http://169.254.169.254/, http://[::1]/ and http://localhost:3000/.
-2. Submit a URL on a request-catcher the owner controls that redirects to 127.0.0.1.
-3. Pass: all are rejected with 400 before any outbound connection; the catcher sees no follow-up. Fail: 200 with content, or response time/body shows an internal fetch.
-4. The Next.js image optimizer (/_next/image) allow list is owned by NEXT-11.
-5. Do not probe anyone else's network.
+1. Run `asa code <path>` first. It reads route handlers, Server Actions and request-handling files for `fetch`, `axios`, `got`, `ky` and `http(s).get/request` calls. Warn (suspected): a URL built from request input (query, body, params, form data) with no host check in the file. Manual: a URL it could not trace, or a request URL with a host check to confirm. Pass for the code: every outbound URL has an origin fixed in the source (a literal scheme and host followed by `/`, a constant or an environment variable). A code pass does not cover SDKs or headless browsers that fetch URLs; steps 2 to 4 settle those.
+2. On the user's own app's URL-taking feature, submit http://127.0.0.1/, http://169.254.169.254/, http://[::1]/ and http://localhost:3000/.
+3. Submit a URL on a request-catcher the owner controls that redirects to 127.0.0.1.
+4. Pass: all are rejected with 400 before any outbound connection; the catcher sees no follow-up. Fail: 200 with content, or response time/body shows an internal fetch.
+5. The Next.js image optimizer (/_next/image) allow list is owned by NEXT-11.
+6. Do not probe anyone else's network.
 
 ### Sources
 
@@ -634,6 +637,34 @@ Turn TRACE off: `TraceEnable off` in Apache, and in other servers and proxies al
 - [RFC 9110 HTTP Semantics (TRACE)](https://www.rfc-editor.org/rfc/rfc9110)
 - [Apache HTTP Server core: TraceEnable](https://httpd.apache.org/docs/2.4/mod/core.html)
 
+## API-25 Server banners do not reveal software versions
+
+Severity: low · OSI layer 7 (Application) · CWE-497 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
+
+### Risk
+
+A `Server: nginx/1.18.0 (Ubuntu)`, `Server: Apache/2.4.41` or `X-AspNet-Version: 4.0.30319` header tells every visitor the exact product and version, so an attacker can match it to published CVEs without probing. It also shows the server was deployed with defaults. Hiding the version does not fix an unpatched server; it removes the free shortcut. `X-Powered-By` is NEXT-03.
+
+### Build rule
+
+Send no version in response headers. nginx: `server_tokens off;`. Apache: `ServerTokens Prod` and `ServerSignature Off`. IIS / ASP.NET: remove the `Server` header (`removeServerHeader="true"` in requestFiltering) and set `<httpRuntime enableVersionHeader="false" />`, and drop `X-AspNetMvc-Version` (`MvcHandler.DisableMvcResponseHeader = true`). Node servers: do not set a `Server` header with a version. Keep the software patched regardless (INFRA-13, NEXT-04).
+
+### Proof test
+
+1. The tool reads the response headers of the home page (one normal GET, following same-origin redirects).
+2. Fail: `Server`, `X-AspNet-Version` or `X-AspNetMvc-Version` carries a version number (a digit-dot-digit such as `1.18` or `nginx/1.25.3`); the evidence shows the header.
+3. Pass: the home page answered below 400 and none of those headers carries a version (absent, or a bare name such as `nginx`, `cloudflare` or `Vercel`).
+4. Manual: the home page answered 400 or above with no version shown; an error or challenge page may come from a proxy, so the origin's own headers were not observed.
+5. Manual extra: check error pages and API routes too, which some servers answer with a different banner.
+
+### Sources
+
+- [OWASP WSTG: Fingerprint Web Server](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/02-Fingerprint_Web_Server)
+- [OWASP HTTP Headers Cheat Sheet (Server, X-AspNet-Version)](https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html)
+- [CWE-497: Exposure of Sensitive System Information to an Unauthorized Control Sphere](https://cwe.mitre.org/data/definitions/497.html)
+- [nginx: server_tokens](https://nginx.org/en/docs/http/ngx_http_core_module.html#server_tokens)
+- [Apache HTTP Server core: ServerTokens](https://httpd.apache.org/docs/2.4/mod/core.html#servertokens)
+
 ## API-30 No eval, new Function or vm on dynamic strings
 
 Severity: critical · OSI layer 7 (Application) · CWE-95 · OWASP A03:2021, A05:2025 · Mode: review (code audit built in: `asa code`) · Stacks: any, node, nextjs
@@ -700,3 +731,28 @@ Pass: none. Fail: any query built from strings; warn: SQL-shaped strings with in
 
 - [CWE-89: SQL Injection](https://cwe.mitre.org/data/definitions/89.html)
 - [OWASP Query Parameterization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html)
+
+## API-33 Request bodies are not written to the database whole (mass assignment)
+
+Severity: high · OSI layer 7 (Application) · CWE-915 · OWASP A01:2021, A08:2021, A01:2025, A08:2025, API3:2023 · Mode: assisted (code audit built in: `asa code`) · Stacks: any, nextjs, supabase, node
+
+### Risk
+
+A handler that passes the parsed request body straight into an insert or update (`.insert(await req.json())`, `prisma.user.update({ data: body })`, `{ ...body, user_id }`) stores every field the caller sends, not only the ones the form shows. A caller adds `role: "admin"`, `user_id` of another account, `price: 0` or `email_verified: true`, and the database accepts it unless column grants or RLS refuse it (ACCESS-05).
+
+### Build rule
+
+Build every write from named fields: `.insert({ title: input.title, body: input.body, user_id: user.id })`. Parse the body with a schema that drops unknown keys first (zod `z.object({...}).parse(body)` strips them by default; do not use `.passthrough()`), and set owner, role, price and status fields on the server, never from input. In Supabase also revoke UPDATE on privileged columns (ACCESS-05) so the database refuses them even if code slips.
+
+### Proof test
+
+1. Run `asa code <path>` first. It reads Supabase (`.from(t).insert/upsert/update`), Drizzle (`.insert(t).values`, `.update(t).set`) and Prisma (`data:`) writes in server code. Warn (suspected): the payload is the request body as a whole, directly, through a variable, through `...rest` destructuring or spread into an object. Manual: a payload the read could not trace. Pass for the code: every payload is an object of named fields or a schema-parsed value.
+2. If the code does not settle it, sign in as test account A on the user's own site and submit the create or edit form once with one extra field that A should not control (for example `role`, `is_admin` or `user_id` set to A's own id with a changed value of a harmless field), using the same request the page sends.
+3. Pass: the extra field is ignored or the request is refused, and the stored row shows only the fields the form allows. Fail: the stored row takes the extra value. Change only account A's own rows, and set them back after the test.
+
+### Sources
+
+- [OWASP Mass Assignment Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Mass_Assignment_Cheat_Sheet.html)
+- [OWASP API3:2023 Broken Object Property Level Authorization](https://owasp.org/API-Security/editions/2023/en/0xa3-broken-object-property-level-authorization/)
+- [CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes](https://cwe.mitre.org/data/definitions/915.html)
+- [Zod: object parsing strips unknown keys](https://zod.dev/api#objects)

@@ -259,6 +259,27 @@ def powered_by(ctx):
     return passed("NEXT-03", "No X-Powered-By header.")
 
 
+BANNERS = ("server", "x-aspnet-version", "x-aspnetmvc-version")
+VERSION = re.compile(r"\d+\.\d+")
+
+
+@auto("API-25")
+def version_banners(ctx):
+    resp = ctx.client.home()
+    seen = [(name, resp.get(name)) for name in BANNERS if resp.get(name)]
+    versioned = [f"{name}: {value}" for name, value in seen if VERSION.search(value)]
+    if versioned:
+        return failed("API-25", f"{count(len(versioned), 'response header')} {are(len(versioned))} giving away the "
+                      "server software version, which maps straight to known CVEs.", versioned)
+    shown = [f"{name}: {value}" for name, value in seen] or ["no Server, X-AspNet-Version or X-AspNetMvc-Version header"]
+    if resp.status >= 400:
+        return Result("API-25", "manual", f"Not proven: the home page answered {resp.status}, which a proxy or "
+                      "firewall may have sent, so the origin's own headers were not observed.",
+                      [f"GET / -> {resp.status}"] + shown)
+    return passed("API-25", "No version number in the Server or ASP.NET version headers.",
+                  [f"GET / -> {resp.status}"] + shown)
+
+
 LEAK_MARKERS = [
     ("Python traceback", re.compile(r"Traceback \(most recent call last\)")),
     ("JavaScript stack frame", re.compile(r"\n\s+at [\w$.<>\[\] ]+ \(?(?:/|[A-Za-z]:\\|file:|webpack:|node:)[^\n)]*:\d+:\d+")),

@@ -129,6 +129,10 @@ class LabHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # keep test output quiet
         pass
 
+    def version_string(self):
+        # The vulnerable lab names its server and Python versions in Server (API-25); the fixed lab sends a bare name.
+        return super().version_string() if self.mode == "vulnerable" else "asa-lab"
+
     # --- helpers -------------------------------------------------------------------------------------------------
     def _send(self, status, body=b"", ctype="text/html; charset=utf-8", extra=None):
         if isinstance(body, str):
