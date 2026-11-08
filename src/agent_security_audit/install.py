@@ -16,6 +16,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -23,8 +24,6 @@ from pathlib import Path
 NAME = "agent-security-audit"
 REPO = "https://github.com/talalkashar/agent-security-audit"
 AGENTS = ("claude-code", "claude-desktop", "cursor", "vscode", "windsurf", "codex", "gemini", "antigravity")
-CODEX_TABLE = re.compile(r'^\s*\[\s*mcp_servers\s*\.\s*(?:"agent-security-audit"|agent-security-audit)\s*\]',
-                         re.MULTILINE)
 INLINE_SERVERS = re.compile(r"^\s*mcp_servers\s*=", re.MULTILINE)
 
 
@@ -157,13 +156,25 @@ def toml_change(path, command, args):
     added = "\n".join(lines) + "\n"
     if text is None:
         return Change(path, "create", added, added)
-    if CODEX_TABLE.search(text):
-        return Change(path, "unchanged", added, note=f"[mcp_servers.{NAME}] is already in the file; it was left as is")
-    if INLINE_SERVERS.search(text):
-        return Change(path, "conflict", added, note="mcp_servers is an inline table there, so a table cannot be "
-                      "appended; it was left as is (add the server to that inline table by hand)")
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise InstallError(f"{path} is not valid TOML ({exc}); it was left as is. Add this by hand:\n{added}") from exc
+    servers = data.get("mcp_servers")
+    if isinstance(servers, dict) and NAME in servers:  # a [mcp_servers.<name>] table, a dotted key or an inline table
+        return Change(path, "unchanged", added, note=f"mcp_servers.{NAME} is already in the file; it was left as is")
     body = text if not text or text.endswith("\n") else text + "\n"
-    return Change(path, "update", added, body + ("\n" if body.strip() else "") + added)
+    new_text = body + ("\n" if body.strip() else "") + added
+    try:
+        tomllib.loads(new_text)
+    except tomllib.TOMLDecodeError:
+        if INLINE_SERVERS.search(text):
+            note = ("mcp_servers is an inline table there, so a table cannot be appended; it was left as is (add the "
+                    "server to that inline table by hand)")
+        else:
+            note = "the file would not parse with the table appended; it was left as is (add the server by hand)"
+        return Change(path, "conflict", added, note=note)
+    return Change(path, "update", added, new_text)
 
 
 def skill_change(path, text):

@@ -189,6 +189,35 @@ class InstallTest(unittest.TestCase):
         self.assertIn("inline table", out)
         self.assertEqual(path.read_text(), 'mcp_servers = { other = { command = "o" } }\n')
 
+    def test_codex_server_already_under_an_mcp_servers_table_is_not_declared_twice(self):
+        path = self.home / ".codex" / "config.toml"
+        path.parent.mkdir()
+        for original in ('[mcp_servers]\nagent-security-audit = { command = "x" }\n',
+                         '[mcp_servers]\nagent-security-audit.command = "x"\n',
+                         'mcp_servers.agent-security-audit.command = "x"\n'):
+            path.write_text(original)
+            code, out = self.asa("codex", "--yes")
+            self.assertEqual(code, 0, original)
+            self.assertIn("already set up", out)
+            self.assertEqual(path.read_text(), original)
+
+    def test_codex_never_writes_toml_that_does_not_parse(self):
+        path = self.home / ".codex" / "config.toml"
+        path.parent.mkdir()
+        original = '[mcp_servers]\nother = { command = "o" }\n[mcp_servers.other.env]\nK = "v"\n'
+        self.assertRaises(tomllib.TOMLDecodeError, tomllib.loads, original)
+        path.write_text(original)
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            code, _ = self.asa("codex", "--yes")
+        self.assertEqual(code, 2)
+        self.assertIn("not valid TOML", err.getvalue())
+        self.assertEqual(path.read_text(), original)
+        path.write_text('model = "x"\n')  # appended text that would not parse is never written
+        with mock.patch.object(install.tomllib, "loads", side_effect=[{}, tomllib.TOMLDecodeError("x")]):
+            change = install.toml_change(path, "c", [])
+        self.assertEqual((change.action, change.new_text), ("conflict", None))
+
     def test_throwaway_uvx_environment_is_not_written_into_configs(self):
         # Run through `uvx --from ... asa install`, the only asa-mcp on PATH is in uv's cache and may vanish.
         cached = str(Path.home() / ".cache/uv/archive-v0/abc/bin/asa-mcp")
