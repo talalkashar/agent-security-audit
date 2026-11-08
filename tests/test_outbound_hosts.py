@@ -53,6 +53,7 @@ URL_HOSTS = {
     "{}{}": "lab sitemap entries built from the request's Host header (lab.py)",
     "code-audit.invalid": "placeholder URL for an in-memory Response in the static code audit (code_audit/nextjs.py)",
     "localhost:3000": "example value in an MCP tool description (mcp_server.py)",
+    "127.0.0.1:8642": "the default lab address in the `asa --help` examples (cli.py)",
     "cdn.asa-lab.invalid": "script URL inside a lab page (lab.py); the scanner never leaves the target origin",
     "login.asa-lab.invalid": "form action inside a lab page (lab.py)",
     "www.sitemaps.org": "XML namespace in the lab sitemap (lab.py); never fetched",
@@ -77,6 +78,9 @@ HOST_LITERALS = {
     "challenges.cloudflare.com", "connect.facebook.net", "fonts.googleapis.com", "js.hs-scripts.com", "js.stripe.com",
     "plausible.io", "static.cloudflareinsights.com", "va.vercel-scripts.com", "www.google-analytics.com",
     "www.google.com", "www.googletagmanager.com", "www.gstatic.com",
+    # Cloud metadata service names a scan refuses as its target (scope.py METADATA_HOSTS); never contacted.
+    "metadata.google.internal", "metadata.goog", "instance-data.ec2.internal", "metadata.tencentyun.com",
+    "metadata.platformequinix.com",
     # Open-redirect probe value placed in query parameters (checks/webapp.py REDIRECT_HOST); .invalid never
     # resolves (RFC 6761) and redirects are never followed.
     "asa-redirect-probe.invalid",
