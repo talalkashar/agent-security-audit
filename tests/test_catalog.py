@@ -7,7 +7,7 @@ from collections import defaultdict
 from agent_security_audit import catalog
 from agent_security_audit.checks import load_all
 
-PREFIX = {"access": "ACCESS", "api": "API", "auth": "AUTH", "browser": "BROWSER", "infra": "INFRA", "nextjs": "NEXT"}
+PREFIX = {"access": "ACCESS", "api": "API", "auth": "AUTH", "browser": "BROWSER", "cms": "CMS", "infra": "INFRA", "nextjs": "NEXT"}
 
 
 class CatalogTest(unittest.TestCase):
@@ -16,7 +16,7 @@ class CatalogTest(unittest.TestCase):
         cls.checks = catalog.load()
 
     def test_loads_all_areas(self):
-        self.assertEqual(len(self.checks), 122)
+        self.assertEqual(len(self.checks), 126)
         self.assertEqual({c.area for c in self.checks}, set(PREFIX))
 
     def test_ids_unique(self):
@@ -58,7 +58,7 @@ class CatalogTest(unittest.TestCase):
         registry = load_all()
         auto_ids = {c.id for c in self.checks if c.mode == "auto"}
         self.assertEqual(set(registry), auto_ids)
-        self.assertEqual(len(auto_ids), 39)
+        self.assertEqual(len(auto_ids), 43)
         for cid, fn in registry.items():
             self.assertEqual(fn.check_id, cid)
 

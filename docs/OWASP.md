@@ -573,6 +573,10 @@ Unsafe Consumption of APIs. 2 checks.
 
 These checks map to no category above:
 
+- [CMS-01](checks/cms.md#cms-01-cms-version-disclosure-reviewed) CMS version disclosure reviewed
+- [CMS-02](checks/cms.md#cms-02-cms-core-on-a-supported-release-line) CMS core on a supported release line
+- [CMS-03](checks/cms.md#cms-03-wordpress-rest-and-xml-rpc-exposure-needs-review) WordPress REST and XML-RPC exposure needs review
+- [CMS-04](checks/cms.md#cms-04-public-cms-login-links-reviewed) Public CMS login links reviewed
 - [INFRA-05](checks/infra.md#infra-05-securitytxt-published) security.txt published
 - [INFRA-06](checks/infra.md#infra-06-spf-record-restricts-senders) SPF record restricts senders
 - [INFRA-07](checks/infra.md#infra-07-dmarc-policy-enforced) DMARC policy enforced

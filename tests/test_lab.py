@@ -10,7 +10,8 @@ from agent_security_audit.checks import load_all
 # never leads a practice scan off the machine.
 SKIP_LOCAL = {"INFRA-01", "INFRA-02", "INFRA-03", "INFRA-06", "INFRA-07", "BROWSER-01", "BROWSER-20", "ACCESS-01",
               "INFRA-11", "INFRA-12", "INFRA-24", "INFRA-25", "INFRA-26", "INFRA-27", "INFRA-28"}
-MANUAL = set()
+SKIP_LOCAL.update({"CMS-02", "CMS-03"})  # This lab is not a CMS; CMS fixtures live in test_cms.py.
+MANUAL = {"CMS-01", "CMS-04"}  # No CMS markers: absence does not prove disclosure/login protection.
 
 
 def scan(url):

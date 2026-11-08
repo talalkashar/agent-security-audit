@@ -51,5 +51,5 @@ def are(n):
 
 def load_all():
     """Import every check module so its @auto functions register."""
-    from . import browser, dns_email, exposure, network, ratelimit, supabase, transport, webapp  # noqa: F401
+    from . import browser, cms, dns_email, exposure, network, ratelimit, supabase, transport, webapp  # noqa: F401
     return REGISTRY

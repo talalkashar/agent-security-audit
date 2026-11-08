@@ -44,6 +44,7 @@ URL_HOSTS = {
     "github.com": "project homepage in the User-Agent string (http.py) and the SARIF tool URI (report.py)",
     "json.schemastore.org": "SARIF $schema value in report.py; never fetched",
     "docs.astral.sh": "uv installation help printed by install.py; never fetched",
+    "api.w.org": "WordPress discovery-link rel value matched by checks/cms.py; never fetched",
     "asa-origin-probe.invalid": "Origin header value for the CORS check (checks/browser.py); .invalid never "
                                 "resolves (RFC 6761)",
     "{}.asa-origin-probe.invalid": "Origin header value, suffix form (checks/browser.py)",

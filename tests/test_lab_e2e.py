@@ -64,7 +64,12 @@ GAPS = {
     "INFRA-28": "DNS/email: a local host has no public DNS",
     "INFRA-24": "open database ports are expected on a dev machine, so local hosts skip",
     "INFRA-25": "open admin ports are expected on a dev machine, so local hosts skip",
+    "CMS-02": "the lab is not a self-hosted CMS; version fixtures are in test_cms.py",
+    "CMS-03": "the lab is not WordPress; API-marker fixtures are in test_cms.py",
 }
+
+# No CMS markers means these observations remain unproven, rather than passing or skipping.
+MANUAL_GAPS = {"CMS-01", "CMS-04"}
 
 # These pass with the observation in the summary only ("No X-Powered-By header", "2 map URLs probed") and an empty
 # evidence list. Owned by the check modules, not the lab; listed so a new empty-evidence pass is caught.
@@ -101,9 +106,10 @@ class LabEndToEnd(unittest.TestCase):
 
     def test_buckets_cover_every_auto_check_once(self):
         auto = {c.id for c in catalog.load() if c.mode == "auto" and c.id in load_all()}
-        buckets = [FAIL, WARN_ONLY, set(GAPS)]
-        self.assertEqual(sum(len(b) for b in buckets), len(FAIL | WARN_ONLY | set(GAPS)), "a check is in two buckets")
-        self.assertEqual(FAIL | WARN_ONLY | set(GAPS), auto)
+        buckets = [FAIL, WARN_ONLY, set(GAPS), MANUAL_GAPS]
+        covered = FAIL | WARN_ONLY | set(GAPS) | MANUAL_GAPS
+        self.assertEqual(sum(len(b) for b in buckets), len(covered), "a check is in two buckets")
+        self.assertEqual(covered, auto)
         for mode in lab.MODES:
             self.assertEqual(set(self.results[mode]), auto)
 
@@ -136,6 +142,12 @@ class LabEndToEnd(unittest.TestCase):
             for cid in GAPS:
                 with self.subTest(mode=mode, check=cid):
                     self.assertEqual(self.results[mode][cid]["status"], "skip")
+
+    def test_cms_absence_requires_manual_review_in_both_modes(self):
+        for mode in lab.MODES:
+            for cid in MANUAL_GAPS:
+                with self.subTest(mode=mode, check=cid):
+                    self.assertEqual(self.results[mode][cid]["status"], "manual")
 
     def test_evidence_has_no_secret_values(self):
         for mode in lab.MODES:
