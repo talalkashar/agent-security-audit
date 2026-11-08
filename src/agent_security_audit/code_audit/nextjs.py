@@ -458,7 +458,7 @@ def cron_secret(project):
         if isinstance(config, dict) else []
     if not crons:
         return []
-    bad, ok = [], []
+    bad, ok, unsure = [], [], []
     for path in crons:
         segs = [re.escape(s) for s in path.split("?")[0].strip("/").split("/") if s]
         group = r"(?:/\([^/]+\))*"
@@ -467,15 +467,56 @@ def cron_secret(project):
         files = [f for f in project.files if rx.search(f)]
         if not files:
             bad.append(Finding("vercel.json", 1, f"cron path {path} has no route file in the project"))
-        elif "CRON_SECRET" in project.text(files[0]):
-            ok.append(files[0])
         else:
-            bad.append(Finding(files[0], 1, f"cron route {path} never checks CRON_SECRET"))
+            rel = files[0]
+            code = _code(project, rel)
+            if (at := _cron_check(code)) is not None:
+                ok.append(_at(project, rel, code, at, f"cron route {path} compares CRON_SECRET with the request "
+                              "and rejects a mismatch here"))
+            elif (at := code.find("CRON_SECRET")) >= 0 or (at := _guard_at(code)) is not None:
+                unsure.append(_at(project, rel, code, at, f"cron route {path} has a secret or auth reference, but "
+                                  "no condition that compares CRON_SECRET with the request and rejects it"))
+            else:
+                bad.append(Finding(rel, 1, f"cron route {path} never checks CRON_SECRET"))
     if bad:
         return [make("NEXT-15", "fail", f"{plural(len(bad), 'cron route')} "
                      f"{'runs' if len(bad) == 1 else 'run'} for anyone who calls the URL. Compare "
-                     "the Authorization header with Bearer ${CRON_SECRET}.", bad)]
-    return [make("NEXT-15", "pass", f"Every cron route ({len(ok)}) checks CRON_SECRET.", evidence=ok)]
+                     "the Authorization header with Bearer ${CRON_SECRET}.", bad + unsure + ok)]
+    if unsure:
+        return [make("NEXT-15", "manual", f"Not proven: {plural(len(unsure), 'cron route')} "
+                     f"{'mentions' if len(unsure) == 1 else 'mention'} a secret or auth check, but the read found no "
+                     "condition that compares CRON_SECRET with the Authorization header and rejects the request. "
+                     "Confirm a call without the secret gets 401.", unsure + ok)]
+    # Never a pass: if CRON_SECRET is unset in the deployment, the comparison can match "Bearer undefined".
+    return [make("NEXT-15", "manual", f"Not proven: every cron route ({len(ok)}) compares CRON_SECRET with the "
+                 "request and rejects a mismatch. Confirm CRON_SECRET is set in the deployment and a call without "
+                 "it gets 401.", ok)]
+
+
+CRON_ASSIGN = re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]*)")
+REQUEST_VALUE = r"\b(?:headers|authorization|searchParams|query)\b"
+REJECTS = re.compile(r"!==?|!\s*(?:await\s+)?[\w$.]*(?:timingSafeEqual|[Ee]qual|[Cc]ompare)[\w$]*\s*\(")
+
+
+def _cron_check(code):
+    """Offset of an if whose condition compares CRON_SECRET (or a name holding it) with a request value (the
+    Authorization header, another header, the query, or a name holding one) on the mismatch side and whose body
+    returns or throws, or None."""
+    secret, request = [r"\bCRON_SECRET\b"], [REQUEST_VALUE]
+    for m in CRON_ASSIGN.finditer(code):
+        if "CRON_SECRET" in m.group(2):
+            secret.append(r"(?<![\w$.])" + re.escape(m.group(1)) + r"(?![\w$])")
+        if re.search(REQUEST_VALUE, m.group(2)):
+            request.append(r"(?<![\w$.])" + re.escape(m.group(1)) + r"(?![\w$])")
+    secret_rx = re.compile("|".join(secret))
+    request_rx = re.compile("|".join(request))
+    for h in COND_HEAD.finditer(code):
+        cond = _paren(code, h.end())
+        body = code[h.end() + len(cond) + 1:h.end() + len(cond) + 200]
+        if secret_rx.search(cond) and request_rx.search(cond) and REJECTS.search(cond) and \
+                re.match(r"\s*\{?\s*(?:return|throw)\b", body):
+            return h.start()
+    return None
 
 
 def next_config(project):

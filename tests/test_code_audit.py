@@ -91,18 +91,21 @@ class FixtureTest(unittest.TestCase):
         results = by_id(self.fixed_results)
         bad = {cid: r.summary for cid, r in results.items() if r.status in ("fail", "warn", "error")}
         self.assertEqual(bad, {})
-        for cid in ("NEXT-01", "NEXT-15", "NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02", "BROWSER-03",
+        for cid in ("NEXT-01", "NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02", "BROWSER-03",
                     "BROWSER-04", "BROWSER-05", "BROWSER-08", "BROWSER-09", "API-30", "API-31", "API-32", "API-05",
                     "INFRA-13", "NEXT-04", "INFRA-15"):
             with self.subTest(check=cid):
                 self.assertEqual(results[cid].status, "pass", results[cid].summary)
         # Guards and RLS found by a static read are evidence, not proof: manual, never pass.
-        for cid in ("ACCESS-01", "ACCESS-02", "ACCESS-06", "NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01"):
+        for cid in ("ACCESS-01", "ACCESS-02", "ACCESS-06", "NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01",
+                    "NEXT-15"):
             with self.subTest(check=cid):
                 self.assertEqual(results[cid].status, "manual", results[cid].summary)
                 self.assertTrue(results[cid].summary.startswith("Not proven:"), results[cid].summary)
         self.assertTrue(any(e.startswith("app/api/notes/route.ts:6:") for e in results["NEXT-05"].evidence))
         self.assertIn("app/actions.ts:7:", results["NEXT-06"].evidence[0])
+        self.assertIn("app/api/cron/cleanup/route.ts:4:", results["NEXT-15"].evidence[0])
+        self.assertIn("rejects a mismatch here", results["NEXT-15"].evidence[0])
         # Server-side secret-key use is listed for review, not passed.
         self.assertEqual(results["ACCESS-08"].status, "manual")
         # A clean working tree says nothing about git history, so INFRA-08 is never a pass from the code.

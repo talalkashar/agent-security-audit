@@ -19,7 +19,8 @@ MODULES = (secrets, sql, nextjs, patterns, request_input, ci)
 CHECKS = tuple(dict.fromkeys(cid for mod in (*MODULES, deps) for cid in mod.CHECKS))
 # Checks a static read can never pass: it finds an auth call or an RLS statement, not proof that it gates every
 # request on the running system. The analyzers report these as manual with the evidence; run() enforces it.
-NO_STATIC_PASS = frozenset({"NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01", "ACCESS-01", "ACCESS-02", "ACCESS-06"})
+NO_STATIC_PASS = frozenset({"NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01", "ACCESS-01", "ACCESS-02", "ACCESS-06",
+                            "NEXT-15"})
 
 
 def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=None):

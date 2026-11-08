@@ -154,6 +154,47 @@ class SqlTest(unittest.TestCase):
         self.assertEqual(r.status, "manual", r.summary)
 
 
+def cron(body):
+    return audit({"vercel.json": json.dumps({"crons": [{"path": "/api/cron/job"}]}),
+                  "app/api/cron/job/route.ts": f"export async function GET(req) {{\n{body}\n"
+                                               "  return Response.json({ ok: true });\n}\n"})["NEXT-15"]
+
+
+class CronSecretTest(unittest.TestCase):
+    def test_mere_mention_of_cron_secret_is_not_a_check(self):
+        for body in ("  console.log(Boolean(process.env.CRON_SECRET));",
+                     "  const secret = process.env.CRON_SECRET;\n  await run(secret);",
+                     "  // TODO: check CRON_SECRET\n  const s = 'CRON_SECRET';",
+                     # compared, but the mismatch is not rejected
+                     ("  if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {\n"
+                     "    console.warn('bad secret');\n  }"),
+                     # compared with a constant, not the request
+                     "  if (process.env.CRON_SECRET !== 'x') return new Response(null, { status: 401 });"):
+            with self.subTest(body=body):
+                r = cron(body)
+                self.assertNotEqual(r.status, "pass", r.summary)
+                self.assertIn(r.status, ("manual", "fail"), r.summary)
+
+    def test_comment_only_mention_fails(self):
+        r = cron("  // TODO: check CRON_SECRET")
+        self.assertEqual(r.status, "fail", r.summary)
+
+    def test_real_check_is_manual_with_location(self):
+        for body in (("  if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {\n"
+                     "    return new Response('Unauthorized', { status: 401 });\n  }"),
+                     ("  const auth = req.headers.get('authorization');\n  const secret = process.env.CRON_SECRET;\n"
+                     "  if (!secret || auth !== `Bearer ${secret}`) return new Response(null, { status: 401 });"),
+                     ("  const token = req.headers.get('authorization') ?? '';\n"
+                     "  if (!timingSafeEqual(Buffer.from(token), Buffer.from(`Bearer ${process.env.CRON_SECRET}`)))"
+                     " throw new Error('unauthorized');")):
+            with self.subTest(body=body):
+                r = cron(body)
+                self.assertEqual(r.status, "manual", r.summary)
+                self.assertTrue(r.summary.startswith("Not proven:"))
+                self.assertTrue(r.evidence[0].startswith("app/api/cron/job/route.ts:"), r.evidence)
+                self.assertIn("rejects a mismatch here", r.evidence[0])
+
+
 class StructuralTest(unittest.TestCase):
     def test_run_downgrades_a_static_pass_on_heuristic_checks(self):
         def guess(project):
@@ -164,8 +205,8 @@ class StructuralTest(unittest.TestCase):
         self.assertEqual(r["API-30"].status, "pass")
 
     def test_no_static_pass_covers_the_heuristic_checks(self):
-        self.assertTrue({"NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01", "ACCESS-01", "ACCESS-02", "ACCESS-06"}
-                        <= code_audit.NO_STATIC_PASS)
+        self.assertTrue({"NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01", "ACCESS-01", "ACCESS-02", "ACCESS-06",
+                         "NEXT-15"} <= code_audit.NO_STATIC_PASS)
 
     def test_merge_keeps_live_manual_and_error_over_code_pass(self):
         for live in ("manual", "error"):
