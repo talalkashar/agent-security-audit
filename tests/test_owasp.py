@@ -112,6 +112,11 @@ class OwaspDocsTest(unittest.TestCase):
         self.assertIn("<!-- owasp:start", readme)
         self.assertIn("A09:2021 Security Logging and Monitoring Failures", readme)
 
+    def test_skill_coverage_sentence_generated(self):
+        text = self.outputs["skills/agent-security-audit/SKILL.md"]
+        self.assertIn(f"Coverage: {len(catalog.load())} checks", text)
+        self.assertIn("every category in them has at least one check", text)
+
     def test_gap_notes(self):
         none = {"total": 0, "live": 0, "code": 0, "guided": 0}
         self.assertTrue(self.gen.owasp_gap("A02:2021", none).startswith("Not covered"))
