@@ -14,6 +14,19 @@ from urllib.parse import urlsplit
 LOCAL_SUFFIXES = (".localhost", ".test")
 DEFAULT_PORTS = {"http": 80, "https": 443}
 
+# Cloud instance metadata services. A scan (even a passive one) must never be pointed at them: they hand out
+# credentials and internal configuration, and a page the scan reads could talk an agent into trying.
+METADATA_HOSTS = frozenset({
+    "metadata", "metadata.google.internal", "metadata.goog", "instance-data", "instance-data.ec2.internal",
+    "metadata.tencentyun.com", "metadata.platformequinix.com",
+})
+METADATA_ADDRESSES = frozenset(ipaddress.ip_address(a) for a in (
+    "169.254.169.254",  # AWS, GCP, Azure, Oracle, DigitalOcean, OpenStack
+    "169.254.170.2",    # AWS ECS task metadata
+    "fd00:ec2::254",    # AWS IMDS over IPv6
+    "100.100.100.200",  # Alibaba Cloud
+))
+
 
 class ScopeError(ValueError):
     pass
@@ -68,6 +81,72 @@ def _resolves_off_machine(host: str) -> str | None:
         if not (addr.is_loopback or addr.is_private):
             return str(addr)
     return None
+
+
+def _forbidden_address(addr) -> str | None:
+    """Why a scan may not connect to this address, or None. Link-local covers 169.254.0.0/16 and fe80::/10."""
+    if addr.version == 6 and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    if addr in METADATA_ADDRESSES:
+        return "a cloud metadata service address"
+    if addr.is_link_local:
+        return "a link-local address"
+    return None
+
+
+def _refuse(host: str, why: str) -> ScopeError:
+    return ScopeError(f"refusing to scan {host}: it is {why}. asa scans websites, never cloud metadata or "
+                      "link-local services, with or without --authorized.")
+
+
+def check_target_allowed(target: str, resolve: bool = True) -> None:
+    """Raise ScopeError when the target is a cloud metadata service or a link-local address, by name, by literal
+    address, or (with resolve) by any address its name resolves to. Loopback and private addresses stay allowed:
+    local and LAN dev servers are normal targets. A name that does not resolve passes (the scan will fail to
+    connect). The lookup runs once, before the scan; a resolver that changes its answer later is not covered."""
+    host = urlsplit(target).hostname or ""
+    name = host.strip("[]").lower().rstrip(".")
+    if name in METADATA_HOSTS:
+        raise _refuse(host, "a cloud metadata service name")
+    try:
+        addr = ipaddress.ip_address(name.split("%")[0])
+    except ValueError:
+        addr = None
+    if addr is not None:
+        why = _forbidden_address(addr)
+        if why:
+            raise _refuse(host, why)
+        return
+    if not resolve:
+        return
+    try:
+        infos = socket.getaddrinfo(name, None)
+    except (OSError, UnicodeError):
+        return
+    for info in infos:
+        try:
+            resolved = ipaddress.ip_address(str(info[4][0]).split("%")[0])
+        except ValueError:
+            continue
+        why = _forbidden_address(resolved)
+        if why:
+            raise _refuse(host, f"a name that resolves to {resolved}, {why}")
+
+
+def check_dns_resolver(url: str) -> str:
+    """A DNS-over-HTTPS endpoint the DNS and email checks may send the target's names to: https, a host, no
+    credentials, and not a metadata or link-local address. Returns the URL, or raises ScopeError."""
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018 - raises ValueError on a bad port
+    except ValueError as exc:
+        raise ScopeError("the DNS resolver must be an https:// URL") from exc
+    if parts.scheme != "https" or not parts.hostname:
+        raise ScopeError("the DNS resolver must be an https:// URL, e.g. https://cloudflare-dns.com/dns-query")
+    if parts.username or parts.password:
+        raise ScopeError("credentials in the DNS resolver URL are not allowed")
+    check_target_allowed(url)
+    return url
 
 
 def owned(target: str, authorized: bool) -> bool:
