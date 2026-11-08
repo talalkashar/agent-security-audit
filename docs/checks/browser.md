@@ -32,7 +32,7 @@
 
 ## BROWSER-01 HSTS sent with a long max-age and includeSubDomains
 
-Severity: medium · OSI layer 7 (Application) · CWE-319, CWE-523 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-319, CWE-523 · OWASP A02:2021, A05:2021, A02:2025, A04:2025, API8:2023 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -59,7 +59,7 @@ Send `Strict-Transport-Security: max-age=63072000; includeSubDomains` on every H
 
 ## BROWSER-02 Content-Security-Policy without unsafe-inline scripts
 
-Severity: high · OSI layer 7 (Application) · CWE-693, CWE-79 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-693, CWE-79 · OWASP A03:2021, A05:2021, A02:2025, A05:2025, API8:2023 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any, nextjs
 
 ### Risk
 
@@ -85,7 +85,7 @@ For dynamic App Router pages, build the policy in `proxy.ts` (`middleware.ts` be
 
 ## BROWSER-03 X-Content-Type-Options set to nosniff
 
-Severity: medium · OSI layer 7 (Application) · CWE-430 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-430 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -109,7 +109,7 @@ Send `X-Content-Type-Options: nosniff` on all responses (`next.config` `headers(
 
 ## BROWSER-04 Clickjacking protection with frame-ancestors or X-Frame-Options
 
-Severity: medium · OSI layer 7 (Application) · CWE-1021 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-1021 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -134,7 +134,7 @@ Send CSP `frame-ancestors 'none'` (or `'self'` if the app frames itself) on all 
 
 ## BROWSER-05 Referrer-Policy limits what leaks to other sites
 
-Severity: medium · OSI layer 7 (Application) · CWE-200, CWE-598 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-200, CWE-598 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -157,7 +157,7 @@ Send `Referrer-Policy: strict-origin-when-cross-origin` site-wide (OWASP cheat s
 
 ## BROWSER-06 Cookies set with Secure, HttpOnly and SameSite
 
-Severity: medium · OSI layer 7 (Application) · CWE-614, CWE-1004, CWE-1275 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-614, CWE-1004, CWE-1275 · OWASP A05:2021, A07:2021, A02:2025, A07:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -182,7 +182,7 @@ Every cookie the app sets carries `Secure` in production and an explicit `SameSi
 
 ## BROWSER-07 CORS does not reflect arbitrary origins with credentials
 
-Severity: high · OSI layer 7 (Application) · CWE-942, CWE-346 · Mode: auto (proof test built in) · Stacks: any, nextjs, node
+Severity: high · OSI layer 7 (Application) · CWE-942, CWE-346 · OWASP A01:2021, A05:2021, A01:2025, A02:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any, nextjs, node
 
 ### Risk
 
@@ -207,7 +207,7 @@ Prefer no CORS: a Next.js front end and its route handlers are same-origin. If c
 
 ## BROWSER-08 Permissions-Policy and Cross-Origin-Opener-Policy set
 
-Severity: low · OSI layer 7 (Application) · CWE-693, CWE-1021 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
+Severity: low · OSI layer 7 (Application) · CWE-693, CWE-1021 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: any
 
 ### Risk
 
@@ -232,7 +232,7 @@ Send `Cross-Origin-Opener-Policy: same-origin` (`same-origin-allow-popups` if th
 
 ## BROWSER-09 No unsanitized HTML through dangerouslySetInnerHTML or innerHTML
 
-Severity: high · OSI layer 7 (Application) · CWE-79 · Mode: review (code audit built in: `asa code`) · Stacks: any, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-79 · OWASP A03:2021, A05:2025 · Mode: review (code audit built in: `asa code`) · Stacks: any, nextjs
 
 ### Risk
 
@@ -257,7 +257,7 @@ Do not use `dangerouslySetInnerHTML` for anything not authored by the developer 
 
 ## BROWSER-10 User-supplied links and navigations allow only safe URL schemes
 
-Severity: high · OSI layer 7 (Application) · CWE-79, CWE-83 · Mode: assisted · Stacks: any, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-79, CWE-83 · OWASP A03:2021, A05:2025 · Mode: assisted · Stacks: any, nextjs
 
 ### Risk
 
@@ -282,7 +282,7 @@ Parse every user-supplied URL with `new URL(value, base)` and allow only `https:
 
 ## BROWSER-11 Markdown renderers do not pass raw HTML unsanitized
 
-Severity: high · OSI layer 7 (Application) · CWE-79 · Mode: review · Stacks: any, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-79 · OWASP A03:2021, A05:2025 · Mode: review · Stacks: any, nextjs
 
 ### Risk
 
@@ -305,7 +305,7 @@ Use react-markdown without `rehype-raw` for untrusted content. If raw HTML is re
 
 ## BROWSER-12 CSP nonce is fresh per response and never cached
 
-Severity: medium · OSI layer 7 (Application) · CWE-330, CWE-693 · Mode: assisted · Stacks: nextjs, vercel
+Severity: medium · OSI layer 7 (Application) · CWE-330, CWE-693 · OWASP A03:2021, A05:2021, A02:2025, A05:2025 · Mode: assisted · Stacks: nextjs, vercel
 
 ### Risk
 
@@ -329,7 +329,7 @@ Any route whose CSP contains `'nonce-` must be dynamically rendered (`await conn
 
 ## BROWSER-13 User-uploaded files are never served as active content
 
-Severity: medium · OSI layer 7 (Application) · CWE-430, CWE-79, CWE-434 · Mode: assisted · Stacks: any, nextjs, supabase
+Severity: medium · OSI layer 7 (Application) · CWE-430, CWE-79, CWE-434 · OWASP A03:2021, A04:2021, A05:2025, A06:2025 · Mode: assisted · Stacks: any, nextjs, supabase
 
 ### Risk
 
@@ -354,7 +354,7 @@ Route handlers that return files set `Content-Type` from a server-side allowlist
 
 ## BROWSER-14 Cookie-authenticated route handlers reject cross-site requests
 
-Severity: high · OSI layer 7 (Application) · CWE-352 · Mode: assisted · Stacks: nextjs, supabase
+Severity: high · OSI layer 7 (Application) · CWE-352 · OWASP A01:2021, A01:2025 · Mode: assisted · Stacks: nextjs, supabase
 
 ### Risk
 
@@ -380,7 +380,7 @@ Keep Next.js patched. Never change state in GET handlers or during render. In `p
 
 ## BROWSER-15 Login, logout and callback redirects stay on the site's origin
 
-Severity: medium · OSI layer 7 (Application) · CWE-601 · Mode: assisted · Stacks: any, nextjs, supabase
+Severity: medium · OSI layer 7 (Application) · CWE-601 · OWASP A01:2021, A01:2025 · Mode: assisted · Stacks: any, nextjs, supabase
 
 ### Risk
 
@@ -405,7 +405,7 @@ Accept only relative destinations: parse with `new URL(next, origin)`, require `
 
 ## BROWSER-16 Reset, invite and auth-code URLs do not leak through Referer
 
-Severity: medium · OSI layer 7 (Application) · CWE-598, CWE-200 · Mode: assisted · Stacks: any, supabase
+Severity: medium · OSI layer 7 (Application) · CWE-598, CWE-200 · OWASP A07:2021, A07:2025, API2:2023 · Mode: assisted · Stacks: any, supabase
 
 ### Risk
 
@@ -430,7 +430,7 @@ Send `Referrer-Policy: no-referrer` on auth callback, reset and invite routes (s
 
 ## BROWSER-17 Auth cookies after login are scoped to the host, not the parent domain
 
-Severity: medium · OSI layer 7 (Application) · CWE-1004, CWE-614, CWE-1275 · Mode: assisted · Stacks: any, supabase
+Severity: medium · OSI layer 7 (Application) · CWE-1004, CWE-614, CWE-1275 · OWASP A05:2021, A07:2021, A02:2025, A07:2025 · Mode: assisted · Stacks: any, supabase
 
 ### Risk
 
@@ -454,7 +454,7 @@ App-owned session and CSRF cookies: `__Host-` prefix, `Secure; HttpOnly; SameSit
 
 ## BROWSER-18 Third-party scripts are pinned with SRI or inventoried
 
-Severity: high · OSI layer 7 (Application) · CWE-829, CWE-353 · Mode: review · Stacks: any, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-829, CWE-353 · OWASP A08:2021, A03:2025, A08:2025 · Mode: review · Stacks: any, nextjs
 
 ### Risk
 
@@ -479,7 +479,7 @@ Bundle dependencies from npm instead of runtime CDNs where possible. For pinned,
 
 ## BROWSER-19 postMessage listeners check the sender's origin
 
-Severity: medium · OSI layer 7 (Application) · CWE-346, CWE-79 · Mode: review · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-346, CWE-79 · OWASP A01:2021, A03:2021, A01:2025, A05:2025 · Mode: review · Stacks: any
 
 ### Risk
 
@@ -503,7 +503,7 @@ Every `message` listener checks `event.origin` by exact string equality against 
 
 ## BROWSER-20 No mixed content on HTTPS pages
 
-Severity: medium · OSI layer 7 (Application) · CWE-319 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-319 · OWASP A02:2021, A05:2021, A02:2025, A04:2025 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -527,7 +527,7 @@ Reference every subresource with `https://` or a relative or protocol-relative U
 
 ## BROWSER-21 Third-party scripts and styles pinned with Subresource Integrity
 
-Severity: low · OSI layer 7 (Application) · CWE-353, CWE-829 · Mode: auto (proof test built in) · Stacks: any
+Severity: low · OSI layer 7 (Application) · CWE-353, CWE-829 · OWASP A08:2021, A03:2025, A08:2025 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -550,7 +550,7 @@ Prefer self-hosting libraries through the bundler. When a fixed-version file mus
 
 ## BROWSER-22 Password forms served and submitted over HTTPS with POST
 
-Severity: high · OSI layer 7 (Application) · CWE-319, CWE-598 · Mode: auto (proof test built in) · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-319, CWE-598 · OWASP A02:2021, A07:2021, A04:2025, A07:2025 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -573,7 +573,7 @@ Serve every page that has a password field over HTTPS only, and give each form a
 
 ## BROWSER-23 No known-vulnerable client JavaScript libraries
 
-Severity: medium · OSI layer 7 (Application) · CWE-1395, CWE-1104 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-1395, CWE-1104 · OWASP A06:2021, A03:2025 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 

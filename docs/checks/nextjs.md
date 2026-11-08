@@ -25,7 +25,7 @@
 
 ## NEXT-01 No secret keys in client JavaScript
 
-Severity: critical · OSI layer 7 (Application) · CWE-798, CWE-200 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-798, CWE-200 · OWASP A02:2021, A07:2021, A04:2025, A07:2025 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -49,7 +49,7 @@ Only public values may use `NEXT_PUBLIC_`: the Supabase URL, the Supabase publis
 
 ## NEXT-02 No production source maps
 
-Severity: medium · OSI layer 7 (Application) · CWE-540 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: nextjs
+Severity: medium · OSI layer 7 (Application) · CWE-540 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -72,7 +72,7 @@ Keep `productionBrowserSourceMaps` unset or false in `next.config.*`. If error t
 
 ## NEXT-03 Framework not advertised (X-Powered-By)
 
-Severity: low · OSI layer 7 (Application) · CWE-200 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: nextjs
+Severity: low · OSI layer 7 (Application) · CWE-200 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -93,7 +93,7 @@ Set `poweredByHeader: false` in `next.config.*`. Do not add other headers that n
 
 ## NEXT-04 Next.js, React and sharp on a patched release
 
-Severity: critical · OSI layer 7 (Application) · CWE-1395 · Mode: review (code audit built in: `asa code`) · Stacks: nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-1395 · OWASP A06:2021, A03:2025 · Mode: review (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -127,7 +127,7 @@ HTTP alone cannot prove this: `X-Powered-By` (NEXT-03) shows the framework, not 
 
 ## NEXT-05 Authorization enforced beyond middleware or proxy.ts
 
-Severity: critical · OSI layer 7 (Application) · CWE-863, CWE-288 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-863, CWE-288 · OWASP A01:2021, A01:2025, API5:2023 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -151,7 +151,7 @@ Treat middleware or `proxy.ts` as an early redirect only. Enforce session and ro
 
 ## NEXT-06 Every Server Action checks the caller and resource ownership
 
-Severity: high · OSI layer 7 (Application) · CWE-862, CWE-639 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
+Severity: high · OSI layer 7 (Application) · CWE-862, CWE-639 · OWASP A01:2021, A01:2025, API1:2023, API5:2023 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -175,7 +175,7 @@ Start every action with `const user = await requireUser()` from a `server-only` 
 
 ## NEXT-07 Server Action origin check not weakened
 
-Severity: medium · OSI layer 7 (Application) · CWE-352, CWE-346 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
+Severity: medium · OSI layer 7 (Application) · CWE-352, CWE-346 · OWASP A01:2021, A05:2021, A01:2025, A02:2025 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -200,7 +200,7 @@ Leave `serverActions.allowedOrigins` unset unless a known proxy needs it; then l
 
 ## NEXT-08 RSC payload and client props carry only needed fields
 
-Severity: high · OSI layer 7 (Application) · CWE-213, CWE-200 · Mode: assisted · Stacks: nextjs
+Severity: high · OSI layer 7 (Application) · CWE-213, CWE-200 · OWASP A01:2021, A01:2025, API3:2023 · Mode: assisted · Stacks: nextjs
 
 ### Risk
 
@@ -223,7 +223,7 @@ Fetch through a `server-only` DAL that returns DTOs with only the fields the UI 
 
 ## NEXT-09 Per-user data never stored in a shared cache
 
-Severity: high · OSI layer 7 (Application) · CWE-524, CWE-359 · Mode: assisted · Stacks: nextjs, vercel
+Severity: high · OSI layer 7 (Application) · CWE-524, CWE-359 · OWASP A01:2021, A05:2021, A01:2025, A02:2025 · Mode: assisted · Stacks: nextjs, vercel
 
 ### Risk
 
@@ -247,7 +247,7 @@ Do not put per-user data in a shared cache; use `'use cache: private'` or no cac
 
 ## NEXT-10 Caches vary on RSC request headers
 
-Severity: medium · OSI layer 7 (Application) · CWE-349, CWE-524 · Mode: assisted · Stacks: nextjs
+Severity: medium · OSI layer 7 (Application) · CWE-349, CWE-524 · OWASP A05:2021, A02:2025 · Mode: assisted · Stacks: nextjs
 
 ### Risk
 
@@ -269,7 +269,7 @@ Stay patched (NEXT-04). With a CDN in front of Next.js, forward and vary on `RSC
 
 ## NEXT-11 Image optimizer limited to exact remote sources
 
-Severity: high · OSI layer 7 (Application) · CWE-918, CWE-400 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
+Severity: high · OSI layer 7 (Application) · CWE-918, CWE-400 · OWASP A10:2021, A01:2025, API4:2023, API7:2023 · Mode: assisted (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -294,7 +294,7 @@ Do not test internal IPs against production.
 
 ## NEXT-12 Redirect parameters stay on the site's origin
 
-Severity: medium · OSI layer 7 (Application) · CWE-601 · Mode: review · Stacks: nextjs
+Severity: medium · OSI layer 7 (Application) · CWE-601 · OWASP A01:2021, A01:2025 · Mode: review · Stacks: nextjs
 
 ### Risk
 
@@ -316,7 +316,7 @@ For every `next`, `returnTo`, `redirect_to` and `callbackUrl` value, including t
 
 ## NEXT-13 Draft Mode endpoint requires a strong secret
 
-Severity: medium · OSI layer 7 (Application) · CWE-306 · Mode: assisted · Stacks: nextjs
+Severity: medium · OSI layer 7 (Application) · CWE-306 · OWASP A01:2021, A07:2021, A01:2025, A07:2025, API5:2023 · Mode: assisted · Stacks: nextjs
 
 ### Risk
 
@@ -338,7 +338,7 @@ Read the draft secret from a server env var (never `NEXT_PUBLIC_`), at least 32 
 
 ## NEXT-14 Vercel previews protected and isolated from production secrets
 
-Severity: high · OSI layer 7 (Application) · CWE-284, CWE-200 · Mode: review · Stacks: vercel
+Severity: high · OSI layer 7 (Application) · CWE-284, CWE-200 · OWASP A05:2021, A02:2025, API9:2023 · Mode: review · Stacks: vercel
 
 ### Risk
 
@@ -362,7 +362,7 @@ Set Deployment Protection to Standard (or All Deployments for internal apps), as
 
 ## NEXT-15 Vercel cron endpoints require CRON_SECRET
 
-Severity: medium · OSI layer 7 (Application) · CWE-306 · Mode: assisted (code audit built in: `asa code`) · Stacks: vercel
+Severity: medium · OSI layer 7 (Application) · CWE-306 · OWASP A01:2021, A07:2021, A01:2025, A07:2025, API5:2023 · Mode: assisted (code audit built in: `asa code`) · Stacks: vercel
 
 ### Risk
 
@@ -385,7 +385,7 @@ Run on staging or against a no-op job if the job has side effects.
 
 ## NEXT-16 No internal x-middleware headers in responses
 
-Severity: medium · OSI layer 7 (Application) · CWE-1004, CWE-200 · Mode: assisted · Stacks: nextjs
+Severity: medium · OSI layer 7 (Application) · CWE-1004, CWE-200 · OWASP A05:2021, A02:2025 · Mode: assisted · Stacks: nextjs
 
 ### Risk
 

@@ -36,7 +36,7 @@
 
 ## API-01 Login endpoint is rate limited (429 + Retry-After)
 
-Severity: high · OSI layer 7 (Application) · CWE-307, CWE-770 · Mode: auto (proof test built in) · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-307, CWE-770 · OWASP A07:2021, A07:2025, API2:2023, API4:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -63,7 +63,7 @@ Use Supabase Auth's built-in endpoints where possible and keep its limits on. Fo
 
 ## API-02 Errors do not leak stack traces or internals
 
-Severity: medium · OSI layer 7 (Application) · CWE-209, CWE-215 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-209, CWE-215 · OWASP A05:2021, A02:2025, A10:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -90,7 +90,7 @@ Route every route handler and Server Action through one handleError() helper: lo
 
 ## API-03 SMS and OTP sending is capped against toll fraud
 
-Severity: high · OSI layer 7 (Application) · CWE-799, CWE-770 · Mode: assisted · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-799, CWE-770 · OWASP A04:2021, A06:2025, API4:2023, API6:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -117,7 +117,7 @@ Put a server-verified CAPTCHA (Turnstile or hCaptcha) before any SMS send. Rate-
 
 ## API-04 Input is schema-validated before use
 
-Severity: high · OSI layer 7 (Application) · CWE-20 · Mode: assisted · Stacks: nextjs, supabase
+Severity: high · OSI layer 7 (Application) · CWE-20 · OWASP A03:2021, A05:2025 · Mode: assisted · Stacks: nextjs, supabase
 
 ### Risk
 
@@ -145,7 +145,7 @@ Writing privileged columns (role, is_admin, plan) through an update is owned by 
 
 ## API-05 User input never builds PostgREST filter strings
 
-Severity: high · OSI layer 7 (Application) · CWE-89, CWE-943 · Mode: assisted (code audit built in: `asa code`) · Stacks: supabase
+Severity: high · OSI layer 7 (Application) · CWE-89, CWE-943 · OWASP A03:2021, A05:2025 · Mode: assisted (code audit built in: `asa code`) · Stacks: supabase
 
 ### Risk
 
@@ -170,7 +170,7 @@ Pass user values only as arguments to typed builder methods: .eq('id', id), .ili
 
 ## API-06 Webhooks verify signatures and reject replays
 
-Severity: critical · OSI layer 7 (Application) · CWE-345, CWE-290, CWE-294 · Mode: assisted · Stacks: any
+Severity: critical · OSI layer 7 (Application) · CWE-345, CWE-290, CWE-294 · OWASP A08:2021, A08:2025, API10:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -195,7 +195,7 @@ In the webhook route read await req.text() and pass it with the Stripe-Signature
 
 ## API-07 Database functions are not over-exposed or injectable
 
-Severity: high · OSI layer 7 (Application) · CWE-89, CWE-250, CWE-285 · Mode: review · Stacks: supabase
+Severity: high · OSI layer 7 (Application) · CWE-89, CWE-250, CWE-285 · OWASP A01:2021, A03:2021, A01:2025, A05:2025, API5:2023 · Mode: review · Stacks: supabase
 
 ### Risk
 
@@ -219,7 +219,7 @@ Whether definer functions and views bypass RLS, and EXECUTE grants to anon, are 
 
 ## API-08 Server-side URL fetches cannot reach internal addresses
 
-Severity: high · OSI layer 7 (Application) · CWE-918 · Mode: assisted · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-918 · OWASP A10:2021, A01:2025, API7:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -246,7 +246,7 @@ Keep next patched. In next.config images.remotePatterns list exact trusted hostn
 
 ## API-09 List endpoints cap page size and query cost
 
-Severity: medium · OSI layer 7 (Application) · CWE-770, CWE-400 · Mode: assisted · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-770, CWE-400 · OWASP A04:2021, A06:2025, API4:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -272,7 +272,7 @@ Validate paging with zod: limit = z.coerce.number().int().min(1).max(100).defaul
 
 ## API-10 File uploads are restricted by type and size
 
-Severity: high · OSI layer 7 (Application) · CWE-434, CWE-400 · Mode: assisted · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-434, CWE-400 · OWASP A04:2021, A06:2025, API4:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -298,7 +298,7 @@ How stored files are served (attachment, nosniff, separate origin) is owned by B
 
 ## API-11 Public forms verify CAPTCHA tokens on the server
 
-Severity: medium · OSI layer 7 (Application) · CWE-799, CWE-602 · Mode: assisted · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-799, CWE-602 · OWASP A04:2021, A06:2025, API6:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -322,7 +322,7 @@ Every public form handler first POSTs the token to siteverify with the secret an
 
 ## API-12 LLM endpoints have auth, rate, token and spend caps
 
-Severity: high · OSI layer 7 (Application) · CWE-770, CWE-400, CWE-799 · Mode: assisted · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-770, CWE-400, CWE-799 · OWASP A04:2021, A06:2025, API4:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -346,7 +346,7 @@ Require a session or a server-verified CAPTCHA token on every LLM route. Rate-li
 
 ## API-13 LLM output cannot exfiltrate data or trigger unapproved actions
 
-Severity: high · OSI layer 7 (Application) · CWE-1427, CWE-200, CWE-77 · Mode: assisted · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-1427, CWE-200, CWE-77 · OWASP A03:2021, A04:2021, A05:2025, A06:2025 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -373,7 +373,7 @@ Treat model output as untrusted: render plain text or sanitized markdown with im
 
 ## API-14 Rate limits key on a client IP that cannot be spoofed
 
-Severity: medium · OSI layer 7 (Application) · CWE-348, CWE-290 · Mode: assisted · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-348, CWE-290 · OWASP A04:2021, A06:2025, API4:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -396,7 +396,7 @@ On Vercel use ipAddress(request) from @vercel/functions or the x-vercel-forwarde
 
 ## API-15 Prices and amounts are set on the server, never taken from the client
 
-Severity: high · OSI layer 7 (Application) · CWE-472, CWE-602 · Mode: assisted · Stacks: any, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-472, CWE-602 · OWASP A04:2021, A06:2025 · Mode: assisted · Stacks: any, nextjs
 
 ### Risk
 
@@ -424,7 +424,7 @@ Use test mode only; never complete a real payment.
 
 ## API-16 Authorization code fails closed on errors and missing config
 
-Severity: high · OSI layer 7 (Application) · CWE-636, CWE-703 · Mode: review · Stacks: any, nextjs, supabase
+Severity: high · OSI layer 7 (Application) · CWE-636, CWE-703 · OWASP A01:2021, A04:2021, A01:2025, A10:2025 · Mode: review · Stacks: any, nextjs, supabase
 
 ### Risk
 
@@ -449,7 +449,7 @@ Pass: each has a startup or in-place check that denies when the value is missing
 
 ## API-17 Every live API route is known, documented and still needed
 
-Severity: medium · OSI layer 7 (Application) · CWE-1059 · Mode: review · Stacks: any, nextjs, vercel
+Severity: medium · OSI layer 7 (Application) · CWE-1059 · OWASP A05:2021, A02:2025, API9:2023 · Mode: review · Stacks: any, nextjs, vercel
 
 ### Risk
 
@@ -472,7 +472,7 @@ Pass: every live route is documented with an auth rule, and every documented rou
 
 ## API-18 Responses from third-party APIs are validated before use
 
-Severity: medium · OSI layer 7 (Application) · CWE-20 · Mode: review · Stacks: any, nextjs
+Severity: medium · OSI layer 7 (Application) · CWE-20 · OWASP A04:2021, A06:2025, API10:2023 · Mode: review · Stacks: any, nextjs
 
 ### Risk
 
@@ -495,7 +495,7 @@ Pass: the response goes through a schema parse, and the call has a timeout and h
 
 ## API-19 No open redirects in redirect parameters
 
-Severity: medium · OSI layer 7 (Application) · CWE-601 · Mode: auto (proof test built in) · Stacks: any, nextjs, node
+Severity: medium · OSI layer 7 (Application) · CWE-601 · OWASP A01:2021, A01:2025 · Mode: auto (proof test built in) · Stacks: any, nextjs, node
 
 ### Risk
 
@@ -518,7 +518,7 @@ Only redirect to relative paths: accept a value that starts with a single `/` an
 
 ## API-20 No directory listings
 
-Severity: medium · OSI layer 7 (Application) · CWE-548 · Mode: auto (proof test built in) · Stacks: any
+Severity: medium · OSI layer 7 (Application) · CWE-548 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -542,7 +542,7 @@ Turn automatic indexes off: `autoindex off;` in nginx, `Options -Indexes` in Apa
 
 ## API-21 No public debug or status endpoints
 
-Severity: high · OSI layer 7 (Application) · CWE-489, CWE-215 · Mode: auto (proof test built in) · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-489, CWE-215 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -567,7 +567,7 @@ Do not deploy debug tools to production. Restrict Apache `mod_status` and `mod_i
 
 ## API-22 API description not public unless intended
 
-Severity: low · OSI layer 7 (Application) · CWE-200 · Mode: auto (proof test built in) · Stacks: any, node
+Severity: low · OSI layer 7 (Application) · CWE-200 · OWASP A05:2021, A02:2025, API8:2023, API9:2023 · Mode: auto (proof test built in) · Stacks: any, node
 
 ### Risk
 
@@ -589,7 +589,7 @@ Publish the API description only for APIs that are public by design. Otherwise s
 
 ## API-23 GraphQL introspection off in production
 
-Severity: medium · OSI layer 7 (Application) · CWE-200 · Mode: auto (proof test built in) · Stacks: any, node
+Severity: medium · OSI layer 7 (Application) · CWE-200 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any, node
 
 ### Risk
 
@@ -612,7 +612,7 @@ Disable introspection in production (for example `introspection: false` in Apoll
 
 ## API-24 TRACE method disabled
 
-Severity: low · OSI layer 7 (Application) · CWE-200 · Mode: auto (proof test built in) · Stacks: any
+Severity: low · OSI layer 7 (Application) · CWE-200 · OWASP A05:2021, A02:2025, API8:2023 · Mode: auto (proof test built in) · Stacks: any
 
 ### Risk
 
@@ -636,7 +636,7 @@ Turn TRACE off: `TraceEnable off` in Apache, and in other servers and proxies al
 
 ## API-30 No eval, new Function or vm on dynamic strings
 
-Severity: critical · OSI layer 7 (Application) · CWE-95 · Mode: review (code audit built in: `asa code`) · Stacks: any, node, nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-95 · OWASP A03:2021, A05:2025 · Mode: review (code audit built in: `asa code`) · Stacks: any, node, nextjs
 
 ### Risk
 
@@ -659,7 +659,7 @@ Pass: none. Fail: any listed call. For each, trace where the string comes from; 
 
 ## API-31 Shell commands never built from strings
 
-Severity: critical · OSI layer 7 (Application) · CWE-78 · Mode: review (code audit built in: `asa code`) · Stacks: any, node, nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-78 · OWASP A03:2021, A05:2025 · Mode: review (code audit built in: `asa code`) · Stacks: any, node, nextjs
 
 ### Risk
 
@@ -681,7 +681,7 @@ Pass: none. Fail: any listed call; rewrite it with an argument array.
 
 ## API-32 SQL is parameterized, never built by string concatenation
 
-Severity: critical · OSI layer 7 (Application) · CWE-89 · Mode: review (code audit built in: `asa code`) · Stacks: any, node, nextjs, supabase
+Severity: critical · OSI layer 7 (Application) · CWE-89 · OWASP A03:2021, A05:2025 · Mode: review (code audit built in: `asa code`) · Stacks: any, node, nextjs, supabase
 
 ### Risk
 

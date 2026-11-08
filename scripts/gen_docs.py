@@ -1,7 +1,8 @@
 """Generate the check reference from the catalog.
 
-Writes docs/checks/<area>.md (every check in full), docs/checks/README.md (the index) and the generated blocks
-in README.md (the headline counts, the OSI layer table and the catalog summary), each between its markers.
+Writes docs/checks/<area>.md (every check in full), docs/checks/README.md (the index), docs/OWASP.md (coverage of
+the OWASP Top 10 and API Security Top 10 lists) and the generated blocks in README.md (the headline counts, the OSI
+layer table, the OWASP table and the catalog summary), each between its markers.
 
     python3 scripts/gen_docs.py          # write the files
     python3 scripts/gen_docs.py --check  # exit 1 if any file is out of date
@@ -61,6 +62,8 @@ def render_check(c, automated):
     meta = [f"Severity: {c.severity}", f"OSI layer {c.layer} ({LAYERS[c.layer]})", ", ".join(c.cwe) or "no CWE"]
     if c.asvs:
         meta.append("ASVS " + ", ".join(c.asvs))
+    if c.owasp:
+        meta.append("OWASP " + ", ".join(c.owasp))
     mode = c.mode + (" (proof test built in)" if c.id in automated else "")
     mode += " (code audit built in: `asa code`)" if c.id in code_audit.CHECKS else ""
     meta += [f"Mode: {mode}", "Stacks: " + ", ".join(c.stacks)]
@@ -146,11 +149,111 @@ def osi_block(checks, automated):
     return "\n".join(lines)
 
 
+OWASP_SOURCES = {
+    "2021": "https://owasp.org/Top10/2021/",
+    "2025": "https://owasp.org/Top10/2025/",
+    "API2023": "https://owasp.org/API-Security/editions/2023/en/0x11-t10/",
+}
+# Limits of what any tool can see for a category, stated in the gap note next to the computed one.
+OWASP_LIMITS = {
+    "A04:2021": "Design flaws show up in business logic; the checks here cover named patterns, not a design review.",
+    "A06:2025": "Design flaws show up in business logic; the checks here cover named patterns, not a design review.",
+    "A09:2021": "Logging and alerting live on the server and in the hosting dashboard; nothing outside can see them.",
+    "A09:2025": "Logging and alerting live on the server and in the hosting dashboard; nothing outside can see them.",
+    "A10:2021": "A live SSRF test needs a request that makes the server fetch an address; the tool sends none.",
+    "API6:2023": "Which flows are sensitive (sign-up, checkout, SMS) depends on the business; the proof is assisted.",
+    "API10:2023": "Third-party responses are only visible in the code and at runtime on the server.",
+}
+
+
+def owasp_rows(checks, automated):
+    """One row per OWASP category: (id, title, coverage counts, check ids)."""
+    rows = []
+    for oid, title in catalog.OWASP.items():
+        group = [c for c in checks if oid in c.owasp]
+        rows.append((oid, title, coverage(group, automated), [c.id for c in group]))
+    return rows
+
+
+def owasp_gap(oid, n):
+    if n["total"] == 0:
+        note = "Not covered."
+    elif n["live"] == 0 and n["code"] == 0:
+        note = "Guided only: no automated proof."
+    elif n["live"] == 0:
+        note = "No live proof test; code audit and guided steps only."
+    elif n["total"] - n["guided"] < n["guided"]:
+        note = "Mostly guided."
+    else:
+        note = ""
+    limit = OWASP_LIMITS.get(oid, "")
+    return " ".join(x for x in (note, limit) if x)
+
+
+def _owasp_table(checks, automated, list_key, link):
+    lines = ["| Category | Checks | Live test | From code | Guided | Gap |", "|---|---:|---:|---:|---:|---|"]
+    for oid, title, n, ids in owasp_rows(checks, automated):
+        if catalog.owasp_list(oid) != list_key:
+            continue
+        name = f"[{oid} {title}]({link}#{_owasp_anchor(oid)})" if link is not None else f"{oid} {title}"
+        lines.append(f"| {name} | {n['total']} | {n['live']} | {n['code']} | {n['guided']} | "
+                     f"{_cell(owasp_gap(oid, n)) or '-'} |")
+    return lines
+
+
+def _owasp_anchor(oid):
+    return oid.lower().replace(":", "")
+
+
+def owasp_block(checks, automated):
+    lines = []
+    for key, name in catalog.OWASP_LISTS.items():
+        lines += [f"**{name}**", ""] + _owasp_table(checks, automated, key, "docs/OWASP.md") + [""]
+    unmapped = [c.id for c in checks if not c.owasp]
+    lines.append(f"{len(checks) - len(unmapped)} of {len(checks)} checks map to at least one category; the other "
+                 f"{len(unmapped)} ({', '.join(unmapped)}) sit outside these lists. A count is how many checks touch a category, not a score: one category is never fully "
+                 "proven by a scan.")
+    return "\n".join(lines)
+
+
+def render_owasp(checks, automated):
+    lines = [GENERATED, "", "# OWASP coverage", "",
+             ("How the catalog maps to the OWASP Top 10 (2021 and 2025) and the OWASP API Security Top 10 (2023). "
+              "A check can map to several categories or to none. List the checks for one category with "
+              "`asa list --owasp A01` (every list that has an A01) or `asa list --owasp A01:2021`."), "",
+             ("- **Live test**: `asa scan` proves it on the running site. **From code**: `asa code` settles it from "
+              "the source. **Guided**: the agent follows the written proof steps (`asa show <ID>`)."),
+             ("- A count says how many checks touch a category. It is not a score, and no category is fully proven by "
+              "a scan: a pass means the defense was observed working on that target at that time."), ""]
+    for key, name in catalog.OWASP_LISTS.items():
+        lines += [f"## {name}", "", f"Source: <{OWASP_SOURCES[key]}>", ""]
+        lines += _owasp_table(checks, automated, key, "") + [""]
+    lines += ["## Checks per category", ""]
+    by_id = {c.id: c for c in checks}
+    for oid, title, n, ids in owasp_rows(checks, automated):
+        lines += [f"### {oid}", "", f"{title}. {n['total']} checks.", ""]
+        for cid in ids:
+            c = by_id[cid]
+            how = ("live" if cid in automated else "") + (" + code" if cid in code_audit.CHECKS else "")
+            how = how.strip(" +") or "guided"
+            lines.append(f"- [{cid}](checks/{c.area}.md#{_anchor(c)}) {_cell(c.title)} ({how})")
+        if not ids:
+            lines.append("- None.")
+        lines.append("")
+    unmapped = [c for c in checks if not c.owasp]
+    lines += ["## Outside the OWASP lists", "",
+              "These checks map to no category above:", ""]
+    lines += [f"- [{c.id}](checks/{c.area}.md#{_anchor(c)}) {_cell(c.title)}" for c in unmapped]
+    return "\n".join(lines) + "\n"
+
+
 # Other generated README blocks: (start marker, end marker, render function).
 BLOCKS = (
     ("<!-- headline:start (generated by scripts/gen_docs.py, do not edit by hand) -->", "<!-- headline:end -->",
      headline_block),
     ("<!-- osi:start (generated by scripts/gen_docs.py, do not edit by hand) -->", "<!-- osi:end -->", osi_block),
+    ("<!-- owasp:start (generated by scripts/gen_docs.py, do not edit by hand) -->", "<!-- owasp:end -->",
+     owasp_block),
 )
 
 
@@ -186,7 +289,7 @@ def outputs():
     """Map of repo-relative path to the exact text that file should hold."""
     checks = catalog.load()
     automated = {cid for cid in load_all() if catalog.by_id().get(cid)}
-    files = {"docs/checks/README.md": render_index(checks, automated)}
+    files = {"docs/checks/README.md": render_index(checks, automated), "docs/OWASP.md": render_owasp(checks, automated)}
     for area, group in _areas(checks).items():
         files[f"docs/checks/{area}.md"] = render_area(area, group, automated)
     readme = (ROOT / "README.md").read_text(encoding="utf-8")

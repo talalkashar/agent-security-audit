@@ -24,7 +24,7 @@
 
 ## ACCESS-01 Supabase tables not readable with the public anon key
 
-Severity: critical · OSI layer 7 (Application) · CWE-862, CWE-284 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: supabase
+Severity: critical · OSI layer 7 (Application) · CWE-862, CWE-284 · OWASP A01:2021, A01:2025, API1:2023 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: supabase
 
 ### Risk
 
@@ -55,7 +55,7 @@ Pass: every table answers 401 or 403. Fail: any table shows one or more rows. Wa
 
 ## ACCESS-02 RLS policies restrict rows to their owner, not any signed-in user
 
-Severity: critical · OSI layer 7 (Application) · CWE-863, CWE-639 · Mode: assisted (code audit built in: `asa code`) · Stacks: supabase
+Severity: critical · OSI layer 7 (Application) · CWE-863, CWE-639 · OWASP A01:2021, A01:2025, API1:2023 · Mode: assisted (code audit built in: `asa code`) · Stacks: supabase
 
 ### Risk
 
@@ -79,7 +79,7 @@ Pass: step 2 returns no rows and the step 3 count equals A's own rows. Fail: B's
 
 ## ACCESS-03 Insert and update policies stop rows being assigned to another user
 
-Severity: high · OSI layer 7 (Application) · CWE-639, CWE-863 · Mode: assisted · Stacks: supabase
+Severity: high · OSI layer 7 (Application) · CWE-639, CWE-863 · OWASP A01:2021, A01:2025, API1:2023 · Mode: assisted · Stacks: supabase
 
 ### Risk
 
@@ -104,7 +104,7 @@ Pass: both are rejected (403 / RLS violation 42501) or change 0 rows. Fail: eith
 
 ## ACCESS-04 Authorization never trusts user_metadata
 
-Severity: high · OSI layer 7 (Application) · CWE-807, CWE-269 · Mode: assisted · Stacks: supabase
+Severity: high · OSI layer 7 (Application) · CWE-807, CWE-269 · OWASP A01:2021, A01:2025, API5:2023 · Mode: assisted · Stacks: supabase
 
 ### Risk
 
@@ -128,7 +128,7 @@ Pass: still denied (401/403/redirect or no rows). Fail: admin access granted.
 
 ## ACCESS-05 Privileged columns not writable by their row owner
 
-Severity: high · OSI layer 7 (Application) · CWE-915 · Mode: assisted · Stacks: supabase, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-915 · OWASP A01:2021, A08:2021, A01:2025, A08:2025, API3:2023 · Mode: assisted · Stacks: supabase, nextjs
 
 ### Risk
 
@@ -153,7 +153,7 @@ Pass: the request is rejected or the privileged column is unchanged. Fail: it ch
 
 ## ACCESS-06 Views and security definer functions do not bypass RLS
 
-Severity: high · OSI layer 7 (Application) · CWE-863, CWE-250 · Mode: review (code audit built in: `asa code`) · Stacks: supabase
+Severity: high · OSI layer 7 (Application) · CWE-863, CWE-250 · OWASP A01:2021, A01:2025, API1:2023 · Mode: review (code audit built in: `asa code`) · Stacks: supabase
 
 ### Risk
 
@@ -176,7 +176,7 @@ Pass: none found, or each is justified in writing and its EXECUTE is revoked fro
 
 ## ACCESS-07 Shared tables expose only intended columns
 
-Severity: high · OSI layer 7 (Application) · CWE-200, CWE-213 · Mode: assisted · Stacks: supabase, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-200, CWE-213 · OWASP A01:2021, A01:2025, API3:2023 · Mode: assisted · Stacks: supabase, nextjs
 
 ### Risk
 
@@ -200,7 +200,7 @@ Pass: no columns named like email, phone, address, dob, token, stripe_*, ssn or 
 
 ## ACCESS-08 Secret-key client used only off user request paths
 
-Severity: critical · OSI layer 7 (Application) · CWE-250, CWE-862 · Mode: review (code audit built in: `asa code`) · Stacks: supabase, nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-250, CWE-862 · OWASP A01:2021, A04:2021, A01:2025, A06:2025 · Mode: review (code audit built in: `asa code`) · Stacks: supabase, nextjs
 
 ### Risk
 
@@ -224,7 +224,7 @@ Pass: every use is a webhook, cron or admin job, or is ownership-checked. Fail: 
 
 ## ACCESS-09 Storage buckets private, unlistable and scoped to each user's folder
 
-Severity: high · OSI layer 7 (Application) · CWE-284, CWE-552 · Mode: assisted · Stacks: supabase
+Severity: high · OSI layer 7 (Application) · CWE-284, CWE-552 · OWASP A01:2021, A05:2021, A01:2025, A02:2025, API1:2023 · Mode: assisted · Stacks: supabase
 
 ### Risk
 
@@ -250,7 +250,7 @@ Pass: step 1 returns an error or empty for private-data buckets, step 2 returns 
 
 ## ACCESS-10 Records fetched by id are checked against the caller (IDOR)
 
-Severity: critical · OSI layer 7 (Application) · CWE-639, CWE-862 · Mode: assisted · Stacks: any
+Severity: critical · OSI layer 7 (Application) · CWE-639, CWE-862 · OWASP A01:2021, A01:2025, API1:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -276,7 +276,7 @@ Pass: 403/404/empty and B's objects unchanged. Fail: B's data returned or modifi
 
 ## ACCESS-11 Server Actions check session and permission before acting
 
-Severity: high · OSI layer 7 (Application) · CWE-862, CWE-306 · Mode: review (code audit built in: `asa code`) · Stacks: nextjs
+Severity: high · OSI layer 7 (Application) · CWE-862, CWE-306 · OWASP A01:2021, A07:2021, A01:2025, A07:2025, API5:2023 · Mode: review (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -299,7 +299,7 @@ Pass: every action does. Fail: any action reaches the database first, or skips t
 
 ## ACCESS-12 Admin and internal endpoints require the right role or secret
 
-Severity: high · OSI layer 7 (Application) · CWE-285, CWE-269 · Mode: assisted · Stacks: any
+Severity: high · OSI layer 7 (Application) · CWE-285, CWE-269 · OWASP A01:2021, A01:2025, API5:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -322,7 +322,7 @@ Pass: 401/403/redirect and no admin data in the body or RSC payload. Fail: 200 w
 
 ## ACCESS-13 Tenants cannot reach each other's data
 
-Severity: critical · OSI layer 7 (Application) · CWE-639, CWE-668 · Mode: assisted · Stacks: any
+Severity: critical · OSI layer 7 (Application) · CWE-639, CWE-668 · OWASP A01:2021, A01:2025, API1:2023 · Mode: assisted · Stacks: any
 
 ### Risk
 
@@ -346,7 +346,7 @@ Pass: 403/404/empty everywhere and the insert is rejected. Fail: any Org2 data r
 
 ## ACCESS-14 Supabase Realtime and GraphQL expose no more than REST
 
-Severity: medium · OSI layer 7 (Application) · CWE-200, CWE-862 · Mode: assisted · Stacks: supabase
+Severity: medium · OSI layer 7 (Application) · CWE-200, CWE-862 · OWASP A01:2021, A01:2025, API1:2023, API9:2023 · Mode: assisted · Stacks: supabase
 
 ### Risk
 
@@ -369,7 +369,7 @@ Pass: step 1 returns an error or only intended types; A receives nothing in step
 
 ## ACCESS-15 Stored secrets and tokens are encrypted at rest and never client-readable
 
-Severity: high · OSI layer 7 (Application) · CWE-311, CWE-312 · Mode: review · Stacks: supabase, nextjs
+Severity: high · OSI layer 7 (Application) · CWE-311, CWE-312 · OWASP A02:2021, A04:2025 · Mode: review · Stacks: supabase, nextjs
 
 ### Risk
 
