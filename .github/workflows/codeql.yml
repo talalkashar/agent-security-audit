@@ -11,8 +11,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # One run per branch or PR; a new push cancels the stale run.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   analyze:
+    name: CodeQL (python)
     runs-on: ubuntu-latest
     permissions:
       contents: read

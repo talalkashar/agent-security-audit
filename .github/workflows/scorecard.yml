@@ -3,6 +3,8 @@ name: scorecard
 # OpenSSF Scorecard grades the repo's supply-chain practices (pinned actions,
 # token permissions, branch protection, ...). It only publishes results and the
 # badge once the repository is public; on a private repo the run reports nothing.
+# publish_results only accepts a minimal workflow (no top-level env/defaults,
+# a fixed set of actions), so this file stays deliberately bare: no concurrency block.
 
 on:
   push:
@@ -15,6 +17,7 @@ permissions: {}
 
 jobs:
   analysis:
+    name: Scorecard analysis
     runs-on: ubuntu-latest
     permissions:
       contents: read
