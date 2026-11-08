@@ -8,6 +8,10 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 - README: honest headline counts (live proof tests, checks settled from code, guided checks) and the OSI layer table are now generated from the catalog by `scripts/gen_docs.py` and checked by the docs-sync test; real terminal output from the practice site; a screenshot of the HTML report; every `asa` command in the README is checked against the CLI parser.
 - Reports: text in backticks in summaries and fixes renders as code (`<code>` in HTML, a code span in Markdown) instead of literal backticks. Values from the scanned site stay escaped.
 - New review checks API-30 (eval and dynamic code), API-31 (shell commands built from strings) and API-32 (SQL built from strings).
+- Code audit: a security header that middleware sets only on some requests (inside an if, switch or loop, after an early return, or with a `matcher`) is judged manual, not pass. A headers list shared across several `source` routes (shorthand, variable, call or spread) is manual too.
+- Code audit: string and template literals are read in one linear pass, so a hostile file cannot stall NEXT-05 or API-32; sanitizer imports are read once per file for BROWSER-09.
+- NEXT-01 and other script checks cannot pass when the site has more than 40 same-origin script files and only the first 40 were read.
+- Reports and MCP output also drop variation selectors and Hangul fillers from target text.
 
 ## 0.1.0 - 2026-11-07
 

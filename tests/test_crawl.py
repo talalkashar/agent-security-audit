@@ -213,6 +213,18 @@ class CrawlTest(unittest.TestCase):
         exposure.scripts(c)  # cached: a later check reading the same partial set is flagged too
         self.assertIn("request budget", c.cache["data_cut"])
 
+    def test_script_cap_cut_blocks_a_pass(self):
+        n = exposure.MAX_SCRIPTS + 5
+        tags = "".join(f'<script src="/s{k}.js"></script>' for k in range(n))
+        routes = {"/": html(tags), **{f"/s{k}.js": resp(200, [("Content-Type", "text/javascript")], "var a=1;")
+                                      for k in range(n)}}
+        c = ctx(routes)
+        exposure.scripts(c)
+        self.assertIn(f"more than {exposure.MAX_SCRIPTS} script files", c.cache["data_cut"])
+        few = ctx({"/": html('<script src="/s0.js"></script>'), "/s0.js": routes["/s0.js"]})
+        exposure.scripts(few)
+        self.assertNotIn("data_cut", few.cache)
+
     def test_runner_turns_pass_on_cut_data_into_error(self):
         from unittest import mock
         from urllib.parse import urlsplit

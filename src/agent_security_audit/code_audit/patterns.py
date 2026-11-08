@@ -3,6 +3,7 @@ strings (API-32) and PostgREST filters built from strings (API-05)."""
 
 from __future__ import annotations
 
+import functools
 import re
 
 from .base import SUSPECTED, make, plural
@@ -48,6 +49,7 @@ def _named(inner, sep):
     return out
 
 
+@functools.lru_cache(maxsize=8)  # once per file, not once per sink: a file can hold thousands of sinks
 def _bindings(code):
     """{local name: (package, export)} for imports and requires of sanitizer packages ("default" and "*" mark the
     default and namespace imports)."""
@@ -79,6 +81,7 @@ def _bindings(code):
     return out
 
 
+@functools.lru_cache(maxsize=64)
 def _declared_locally(code, name):
     n = re.escape(name)
     return bool(re.search(r"\bfunction\s*\*?\s*" + n + r"(?![\w$])|\bclass\s+" + n + r"(?![\w$])|"
@@ -112,7 +115,6 @@ PY_EVAL = re.compile(r"(?<![\w.])(?:eval|exec)\(\s*(?!['\"])")
 PY_SQL = re.compile(r"\.execute(?:many)?\(\s*(?:f['\"]|['\"][^'\"\n]*['\"]\s*(?:%|\+|\.format))")
 SQL_SHAPE = re.compile(r"\b(?:select\b[\s\S]{1,300}?\bfrom|insert\s+into|update\s+[\w\".]+\s+set|delete\s+from)\b",
                        re.IGNORECASE)
-TEMPLATE = re.compile(r"(?<![\w$.\])])`((?:[^`\\]|\\.)*)`")
 CONCAT = re.compile(r"""(['"])((?:(?!\1)[^\\\n]|\\.)*)\1\s*\+\s*[\w$(]""")
 QUERY_CALL = re.compile(r"(?:\.(?:query|execute|raw|unsafe|prepare|exec|run|all|get)|\$(?:query|execute)RawUnsafe|"
                         r"\braw)\(\s*$")
@@ -303,6 +305,37 @@ def shell_commands(project):
     return [make("API-31", "pass", "No shell command built from interpolated strings.")] if files else []
 
 
+TAG_BEFORE = re.compile(r"[\w$.\])]")  # tag`...` is a tagged template, which the tag may parameterize
+CONCAT_AFTER = re.compile(r"\s*\+\s*[\w$(]")
+
+
+def _literals(code):
+    """[(start, end, quote, body)] for each closed string or template literal, in one linear pass (a regex per
+    literal kind rescanned to the end from every quote of an unclosed run: quadratic). A ' or " literal ends at its
+    line. When a scan from one quote finds no closing quote, no later quote of that kind before the point where the
+    scan stopped can close either, so those are skipped instead of rescanned."""
+    out, dead, i, n = [], {"'": -1, '"': -1, "`": -1}, 0, len(code)
+    while i < n:
+        q = code[i]
+        if q not in dead or i < dead[q]:
+            i += 1
+            continue
+        j = i + 1
+        while j < n and code[j] != q and (q == "`" or code[j] != "\n"):
+            if code[j] == "\\":
+                if q != "`" and code[j + 1:j + 2] == "\n":
+                    break
+                j += 1
+            j += 1
+        if j < n and code[j] == q:
+            out.append((i, j + 1, q, code[i + 1:j]))
+            i = j + 1
+        else:
+            dead[q] = j
+            i += 1
+    return out
+
+
 def sql_strings(project):
     direct, loose, files = [], [], _files(project, py=True)
     for rel in files:
@@ -312,8 +345,9 @@ def sql_strings(project):
                 direct.append(_at(project, rel, code, m.start(), "SQL built with an f-string, % or + in execute()"))
             continue
         queries = QUERY_ANY.search(code) is not None
-        candidates = [(m.start(), m.group(1)) for m in TEMPLATE.finditer(code) if "${" in m.group(1)]
-        candidates += [(m.start(), m.group(2)) for m in CONCAT.finditer(code)]
+        candidates = [(a, body) for a, b, quote, body in _literals(code)
+                      if (quote == "`" and "${" in body and not TAG_BEFORE.match(code[max(0, a - 1):a]))
+                      or (quote != "`" and CONCAT_AFTER.match(code, b))]
         for start, body in candidates:
             if not SQL_SHAPE.search(re.sub(r"\$\{[^}]*\}", "x", body)):
                 continue

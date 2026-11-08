@@ -32,15 +32,43 @@ AUTH = re.compile(r"\.auth\.(?:getUser|getClaims|getSession)\(|getServerSession\
 # Reading the Authorization header counts as a guard; the word inside a message ("authorization required") does not.
 AUTH_HEADER = re.compile(r"""(?:\.get|getHeader|header)\(\s*(['"`])authorization\1|"""
                          r"""headers\s*(?:\.\s*authorization\b|\[\s*(['"`])authorization\2\s*\])""", re.IGNORECASE)
-STRING_OR_COMMENT = re.compile(r"""//[^\n]*|/\*.*?\*/|'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`""",
-                               re.DOTALL)
+
+
+def _blank_strings(code):
+    """code with string literals, template text and comments blanked to spaces, in one linear pass. A ' or " string
+    with no closing quote on its line is blanked to the line end, and an unclosed template or block comment to the
+    end of the file: an odd quote hides code (no auth seen, so warn) rather than exposing string text as code."""
+    out, i, n = [], 0, len(code)
+    while i < n:
+        c = code[i]
+        if c == "/" and code.startswith("//", i):
+            end = code.find("\n", i)
+            end = n if end < 0 else end
+        elif c == "/" and code.startswith("/*", i):
+            end = code.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+        elif c in "'\"`":
+            end = i + 1
+            while end < n and code[end] != c and (c == "`" or code[end] != "\n"):
+                end += 2 if code[end] == "\\" else 1
+            end = min(end + 1, n) if end < n and code[end] == c else min(end, n)
+        else:
+            j = i
+            while j < n and code[j] not in "/'\"`":
+                j += 1
+            out.append(code[i:max(j, i + 1)])
+            i = max(j, i + 1)
+            continue
+        out.append(" " * (end - i))
+        i = end
+    return "".join(out)
 
 
 def _has_auth(code):
     """An auth, session or secret call in code, not counting words inside string literals or comments."""
     if AUTH_HEADER.search(code):
         return True
-    return bool(AUTH.search(STRING_OR_COMMENT.sub(lambda m: " " * len(m.group()), code)))
+    return bool(AUTH.search(_blank_strings(code)))
 SERVICE = re.compile(r"SERVICE_ROLE|service_role|SUPABASE_SECRET_KEY|\bsb_secret_|createAdminClient|"
                      r"createServiceRoleClient|\bsupabaseAdmin\b")
 SERVER_ONLY = re.compile(r"""import\s+['"]server-only['"]""")
@@ -121,7 +149,7 @@ DECL = re.compile(r"^(?:export\s+)?(?:async\s+)?(?:function\s*\*?\s*([A-Za-z_$][
 def _depths(code):
     """Brace depth at each offset, skipping strings and template text. An export always starts a top-level block,
     so a miscount here cannot merge two exported handlers."""
-    out, depth, stack, i = [0] * (len(code) + 1), 0, [], 0
+    out, depth, stack, i, confused = [0] * (len(code) + 1), 0, [], 0, 0
     while i < len(code):
         out[i] = depth
         c = code[i]
@@ -132,6 +160,9 @@ def _depths(code):
                 continue
             if c == stack[-1]:
                 stack.pop()
+            elif c == "\n" and stack[-1] != "`":  # a ' or " string cannot cross a line: a regex literal fooled us
+                stack.pop()
+                confused = 1
             elif stack[-1] == "`" and code.startswith("${", i):
                 stack.append("{")
                 depth += 1
@@ -147,7 +178,8 @@ def _depths(code):
             if stack and stack[-1] == "{":
                 stack.pop()
         i += 1
-    out[len(code)] = depth + len(stack)  # non-zero: the scan ended inside a block, string or template
+    # non-zero: the scan ended inside a block, string or template, or a quote ran past its line on the way
+    out[len(code)] = depth + len(stack) + confused
     return out
 
 
@@ -526,12 +558,15 @@ def _headers_in(rel, text, project=None, loose=True):
     imported = project and _importer(project, rel)
     # With several source: routes, a headers list held in a variable (headers: common) is not inside any one
     # route's braces, so which responses get which value cannot be told: every value is then unknown.
-    shared = len(ROUTE_START["js"].findall(text)) > 1 and SHARED_HEADERS.search(text)
+    shared = len(ROUTE_START["js"].findall(text)) > 1 and _shared_headers(text)
+    some = _some_requests(text) if MIDDLEWARE.search(rel) else lambda off: False
     for m in JS_HEADER.finditer(text):
         name = next(g for g in (m.group(2), m.group(4), m.group(6)) if g)
+        partial = some(m.start())
         for expr in _branches(_arg(text, m.end(), 4000)):  # cond ? a : b sends a or b: judge both
             value = _static(text, expr, imported=imported)
-            out.append((name.lower(), None if value is None or shared else " ".join(value.split()), m.start(),
+            out.append((name.lower(), None if value is None or shared or partial else " ".join(value.split()),
+                        m.start(),
                         _route(ROUTE_START["js"], text, m.start())))
         seen.add(m.start(next(i for i in (2, 4, 6) if m.group(i))) - 1)
     for m in ANY_NAME.finditer(text) if loose else ():
@@ -540,7 +575,47 @@ def _headers_in(rel, text, project=None, loose=True):
     return out
 
 
-SHARED_HEADERS = re.compile(r"\bheaders\s*:\s*(?:\.\.\.)?[A-Za-z_$][\w$]*\s*[,}\n]")
+BRANCH = re.compile(r"\b(?:if|else|switch|case|for|while|do|catch)\b|\?")
+MATCHER = re.compile(r"\bmatcher\s*:")
+
+
+def _some_requests(text):
+    """A function (offset) -> True when middleware may set a header at offset on only some requests: the file has a
+    matcher, or the line sits in an if/else/switch/loop/catch block, after a return, or the braces do not balance."""
+    code = _blank_strings(text)
+    depth = _depths(code)
+    if MATCHER.search(code) or depth[-1]:
+        return lambda off: True
+
+    def some(off):
+        if re.search(r"\breturn\b", code[:off]):
+            return True
+        need, p = depth[off], off - 1
+        while need and p >= 0:
+            if code[p] == "{" and depth[p] == need - 1:
+                head = re.split(r"[;{}]", code[max(0, p - 400):p])[-1]
+                if BRANCH.search(head):
+                    return True
+                need -= 1
+            p -= 1
+        return False
+    return some
+
+
+SHORTHAND_HEADERS = re.compile(r"[{,]\s*headers\s*[,}]")
+HEADERS_KEY = re.compile(r"\bheaders\s*:\s*")
+
+
+def _shared_headers(text):
+    """True when some route's headers are not written inline as an array of objects: a shorthand `headers`, a
+    variable, a call (common.slice()) or a spread ([...common]). Such a list may sit on several routes at once."""
+    if SHORTHAND_HEADERS.search(text):
+        return True
+    for m in HEADERS_KEY.finditer(text):
+        value = _arg(text, m.end(), 4000).strip()
+        if not value.startswith("[") or "..." in value or not value.endswith("]"):
+            return True
+    return False
 
 
 def _route(rx, text, offset):
@@ -566,8 +641,9 @@ def _header_result(project, cid, label, names, check, files, texts, found):
                                                                   "value built at run time"))
                     for name, value, off, _ in hits]
         if any(v is None for _, v, _, _ in hits):
-            per_file.append(("manual", (f"{f} sets {label} from a value built at run time, so the code alone does "
-                             "not show what browsers get. Confirm it on the live site."), findings))
+            per_file.append(("manual", (f"{f} sets {label} from a value built at run time, or only on some requests "
+                             "(a branch, an early return or a matcher in middleware), so the code alone does not "
+                             "show what browsers get. Confirm it on the live site."), findings))
             continue
         # Judge each route block on its own: headers set on different routes may never meet on one response.
         routes = {}

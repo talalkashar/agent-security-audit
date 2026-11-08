@@ -569,6 +569,67 @@ class AccuracyTest(unittest.TestCase):
         r = audit_files({"next.config.js": cfg})
         self.assertNotEqual(r["BROWSER-03"].status, "pass")
 
+    def test_shared_header_list_shapes_are_manual(self):
+        for shape in ("headers", "headers: [...common]", "headers: common.slice()", "headers: [{ key: 'A', value: 'b' }, ...common]"):
+            cfg = ("const common = [{ key: 'X-Content-Type-Options', value: 'nosniff' }];\n"
+                   "const headers = common;\n"
+                   "module.exports = { async headers() { return [\n"
+                   f"  {{ source: '/a', {shape} }},\n  {{ source: '/b', headers: [] }},\n] }} }};\n")
+            r = audit_files({"next.config.js": cfg})
+            self.assertNotEqual(r["BROWSER-03"].status, "pass", shape)
+        inline = ("module.exports = { async headers() { return [\n"
+                  "  { source: '/a', headers: [{ key: 'X-Content-Type-Options', value: 'nosniff' }] },\n"
+                  "  { source: '/b', headers: [{ key: 'X-Content-Type-Options', value: 'nosniff' }] },\n] } };\n")
+        self.assertEqual(audit_files({"next.config.js": inline})["BROWSER-03"].status, "pass")
+
+    def test_middleware_header_on_some_requests_is_manual(self):
+        csp = "default-src 'self'; script-src 'self'; frame-ancestors 'none'"
+        body = (f"  res.headers.set('Content-Security-Policy', \"{csp}\");\n"
+                "  res.headers.set('X-Frame-Options', 'DENY');\n")
+        branch = ("import { NextResponse } from 'next/server';\nexport function middleware(req) {\n"
+                  "  const res = NextResponse.next();\n  if (req.nextUrl.pathname.startsWith(\"/admin\")) {\n"
+                  + body + "  }\n  return res;\n}\n")
+        early = ("import { NextResponse } from 'next/server';\nexport function middleware(req) {\n"
+                 "  const res = NextResponse.next();\n  if (!req.nextUrl.pathname.startsWith('/admin')) return res;\n"
+                 + body + "  return res;\n}\n")
+        matcher = ("import { NextResponse } from 'next/server';\nexport function middleware(req) {\n"
+                   "  const res = NextResponse.next();\n" + body + "  return res;\n}\n"
+                   "export const config = { matcher: '/admin/:path*' };\n")
+        for mw in (branch, early, matcher):
+            r = audit_files({"middleware.ts": mw})
+            self.assertEqual(r["BROWSER-02"].status, "manual", mw)
+            self.assertEqual(r["BROWSER-04"].status, "manual", mw)
+        always = ("import { NextResponse } from 'next/server';\nexport function middleware(req) {\n"
+                  "  const res = NextResponse.next();\n" + body + "  return res;\n}\n")
+        self.assertEqual(audit_files({"middleware.ts": always})["BROWSER-04"].status, "pass")
+
+    def test_regex_literal_quotes_do_not_merge_a_helper_into_get(self):
+        code = ("import { supabase } from '@/db';\nexport async function GET(req) {\n  const a = /'/;\n"
+                "  const { data } = await supabase.from(\"notes\").select();\n  return Response.json(data);\n}\n"
+                "async function helper() {\n  await supabase.auth.getUser();\n  const b = /'/;\n}\n")
+        self.assertNotEqual(audit_files({"app/api/x/route.ts": code})["NEXT-05"].status, "pass")
+
+    def test_string_blanking_is_linear(self):
+        from agent_security_audit.code_audit import nextjs
+        route = ("import { supabase } from '@/db';\nexport async function GET() {\n"
+                 "  return Response.json(await supabase.from('notes').select());\n}\nconst junk = 1; ")
+        for tail in ('"\\' * 50000, "'\\" * 50000, "`\\" * 50000, '"\n' * 50000):
+            start = time.monotonic()
+            nextjs._has_auth(route + tail)
+            audit_files({"app/api/x/route.ts": route + tail})
+            self.assertLess(time.monotonic() - start, 5.0)
+        self.assertFalse(nextjs._has_auth("const m = 'call getUser() later';"))
+        self.assertTrue(nextjs._has_auth("const m = 'x'; await supabase.auth.getUser();"))
+
+    def test_sanitizer_bindings_are_read_once_per_file(self):
+        from agent_security_audit.code_audit import patterns
+        code = "import escape from 'escape-html';\n" + "<div dangerouslySetInnerHTML={{__html: escape(x)}} />\n" * 20000
+        start = time.monotonic()
+        r = audit_files({"app/page.tsx": code})
+        self.assertLess(time.monotonic() - start, 10.0)
+        self.assertEqual(r["BROWSER-09"].status, "pass")
+        self.assertIsNotNone(patterns._bindings.cache_info())
+
     def test_sanitizer_import_scan_is_linear(self):
         from agent_security_audit.code_audit import patterns
         for code in ["import " + "a," * 25000, "import x " + " " * 50000 + "from", "const " + "{" * 50000,

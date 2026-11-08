@@ -82,11 +82,17 @@ BREAKS = ("Cc", "Zl", "Zp")       # control characters and Unicode line or parag
 INVISIBLE = ("Cf", "Co", "Cs")    # format (zero-width, bidi overrides, tag characters), private use, surrogates
 
 
+# Invisible code points outside those categories: variation selectors (Mn, the emoji smuggling channel), the
+# combining grapheme joiner, Mongolian free variation selectors, and Hangul fillers (Lo) that render as blank.
+HIDDEN = re.compile("[\u034f\u115f\u1160\u180b-\u180d\u180f\u3164\ufe00-\ufe0f\uffa0\U000e0100-\U000e01ef]")
+
+
 def strip_invisible(text):
-    """Text with every Cc, Zl and Zp character turned into a line break and every Cf, Co and Cs character dropped,
-    so a value the target chose cannot hide or reorder text (bidi overrides, U+E0000 tags, zero-width)."""
+    """Text with every Cc, Zl and Zp character turned into a line break and every Cf, Co and Cs character (and the
+    HIDDEN ones) dropped, so a value the target chose cannot hide or reorder text (bidi overrides, U+E0000 tags,
+    zero-width, variation selectors, Hangul fillers)."""
     return "".join("\n" if cat in BREAKS else "" if cat in INVISIBLE else ch
-                   for ch, cat in ((c, unicodedata.category(c)) for c in str(text)))
+                   for ch, cat in ((c, unicodedata.category(c)) for c in HIDDEN.sub("", str(text))))
 
 
 def _clean(text, limit=MAX_TEXT):

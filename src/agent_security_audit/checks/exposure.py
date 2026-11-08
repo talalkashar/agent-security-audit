@@ -151,6 +151,10 @@ def scripts(ctx):
         if resp.status == 200:
             out.append((urlsplit(url).path, resp.text))
             queue += [ctx.client.url(p) for p in next_chunks(resp.text)]
+    if len(seen) >= MAX_SCRIPTS and not ctx.cache.get("scripts_cut") and any(
+            u not in seen and same_origin(ctx.target, u) for u in queue[i:]):
+        ctx.cache["scripts_cut"] = ctx.cache["data_cut"] = (f"not run: more than {MAX_SCRIPTS} script files; only "
+                                                            f"the first {MAX_SCRIPTS} were read")
     ctx.cache["scripts"] = out
     return out
 

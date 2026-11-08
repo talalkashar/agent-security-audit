@@ -87,3 +87,11 @@ class CodeSpanTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HiddenCarrierTest(unittest.TestCase):
+    def test_variation_selectors_and_fillers_are_dropped(self):
+        from agent_security_audit import mcp_server
+        text = "ok" + "".join(chr(c) for c in range(0xE0100, 0xE0105)) + "\ufe0f\u3164\u115f\u034f\uffa0end"
+        self.assertEqual(report.strip_invisible(text), "okend")
+        self.assertEqual(mcp_server._data(text, 100), "okend")
