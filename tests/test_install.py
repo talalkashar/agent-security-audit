@@ -38,6 +38,8 @@ class InstallTest(unittest.TestCase):
         self.addCleanup(os.chdir, old)
 
     def asa(self, *argv):
+        if "--yes" in argv and not install._anchored_writes_available():
+            self.skipTest("secure automatic writes require directory-descriptor support; use the dry run here")
         buf = io.StringIO()
         with redirect_stdout(buf):
             code = cli.main(["install", *argv])
@@ -45,6 +47,24 @@ class InstallTest(unittest.TestCase):
 
     def files(self):
         return sorted(str(p.relative_to(self.home.parent)) for p in self.home.parent.rglob("*") if p.is_file())
+
+    def asa_err(self, *argv):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            code, out = self.asa(*argv)
+        return code, out, err.getvalue()
+
+    def link(self, path, dest):
+        try:
+            path.symlink_to(dest, target_is_directory=dest.is_dir())
+        except OSError:
+            self.skipTest("symlinks not available")
+
+    def project_in_home(self):
+        project = self.home / "project"
+        project.mkdir(exist_ok=True)
+        os.chdir(project)
+        return project
 
     def test_dry_run_writes_nothing(self):
         for agent in install.AGENTS:
@@ -113,23 +133,248 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE((path.parent / "mcp.json.bak").stat().st_mode), 0o600)
 
-    def test_symlinked_config_is_written_through_the_link(self):
+    def test_home_symlink_within_home_updates_real_file_and_backup_beside_it(self):
         dotfiles = self.home / "dotfiles"
         dotfiles.mkdir()
         real = dotfiles / "config.toml"
         real.write_text('model = "x"\n')
+        real.chmod(0o640)
         link = self.home / ".codex" / "config.toml"
         link.parent.mkdir()
-        try:
-            link.symlink_to(real)
-        except OSError:
-            self.skipTest("symlinks not available")
+        self.link(link, real)
+        # A backup symlink next to the link must not receive the copy.
+        secret = self.home.parent / "outside-secret"
+        secret.write_text("secret")
+        logical_bak = link.with_name("config.toml.bak")
+        self.link(logical_bak, secret)
         code, _ = self.asa("codex", "--yes")
         self.assertEqual(code, 0)
         self.assertTrue(link.is_symlink())
-        self.assertIn("agent-security-audit", tomllib.loads(real.read_text())["mcp_servers"])
-        self.assertEqual((link.parent / "config.toml.bak").read_text(), 'model = "x"\n')
-        self.assertEqual(sorted(p.name for p in dotfiles.iterdir()), ["config.toml"])
+        self.assertEqual(os.readlink(link), str(real))
+        merged = tomllib.loads(real.read_text())
+        self.assertEqual(merged["mcp_servers"]["agent-security-audit"]["command"], FAKE_MCP)
+        backup = dotfiles / "config.toml.bak"
+        self.assertEqual(backup.read_text(), 'model = "x"\n')
+        self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o640)
+        self.assertEqual(stat.S_IMODE(real.stat().st_mode), 0o640)
+        self.assertTrue(logical_bak.is_symlink())
+        self.assertEqual(secret.read_text(), "secret")
+        self.assertEqual(sorted(p.name for p in dotfiles.iterdir()), ["config.toml", "config.toml.bak"])
+
+    def test_home_directory_symlink_within_home_is_followed(self):
+        real_dir = self.home / "dotfiles" / "cursor"
+        real_dir.mkdir(parents=True)
+        real = real_dir / "mcp.json"
+        original = '{"mcpServers": {"other": {"command": "x"}}, "keep": 1}\n'
+        real.write_text(original)
+        self.link(self.home / ".cursor", real_dir)
+        code, _ = self.asa("cursor", "--yes")
+        self.assertEqual(code, 0)
+        data = json.loads(real.read_text())
+        self.assertEqual(data["mcpServers"]["other"], {"command": "x"})
+        self.assertEqual(data["keep"], 1)
+        self.assertIn("agent-security-audit", data["mcpServers"])
+        self.assertEqual(json.loads((real_dir / "mcp.json.bak").read_text()), json.loads(original))
+        self.assertTrue((self.home / ".cursor").is_symlink())
+
+    def test_symlinked_cwd_target_is_refused(self):
+        project = self.project_in_home()
+        real = self.home / "planted.json"
+        real.write_text("{}\n")
+        parent = project / ".vscode"
+        parent.mkdir()
+        link = parent / "mcp.json"
+        self.link(link, real)
+        code, _, err = self.asa_err("vscode", "--yes")
+        self.assertEqual(code, 2, err)
+        self.assertIn("symlink", err)
+        self.assertEqual(real.read_text(), "{}\n")
+        self.assertFalse((self.home / "planted.json.bak").exists())
+        self.assertFalse((parent / "mcp.json.bak").exists())
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(sorted(p.name for p in parent.iterdir()), ["mcp.json"])
+
+    def test_symlinked_cwd_parent_is_refused(self):
+        project = self.project_in_home()
+        real_dir = self.home / "vscode-real"
+        real_dir.mkdir()
+        (real_dir / "keep.txt").write_text("keep")
+        link = project / ".vscode"
+        self.link(link, real_dir)
+        code, _, err = self.asa_err("vscode", "--yes")
+        self.assertEqual(code, 2, err)
+        self.assertIn("symlink", err)
+        self.assertEqual((real_dir / "keep.txt").read_text(), "keep")
+        self.assertFalse((real_dir / "mcp.json").exists())
+        self.assertFalse((real_dir / "mcp.json.bak").exists())
+        self.assertTrue(link.is_symlink())
+
+    def test_project_mcp_and_cursor_symlinks_are_refused(self):
+        project = self.project_in_home()
+        for rel in (".mcp.json", ".cursor/mcp.json"):
+            real = self.home / rel.replace("/", "-")
+            real.write_text("{}\n")
+            link = project / rel
+            link.parent.mkdir(parents=True, exist_ok=True)
+            self.link(link, real)
+            change = install.json_change(link, "mcpServers", {"command": "x", "args": []})
+            install._stamp(change, self.home, project)
+            self.assertTrue(change.strict, rel)
+            self.assertEqual(install._abs(change.root), install._abs(project))
+            with self.assertRaises(install.InstallError) as caught:
+                install.apply([change])
+            self.assertIn("symlink", str(caught.exception))
+            self.assertEqual(real.read_text(), "{}\n")
+            self.assertFalse(real.with_name(real.name + ".bak").exists())
+            self.assertTrue(link.is_symlink())
+
+    def test_home_symlink_outside_home_is_refused(self):
+        outside = self.home.parent / "outside"
+        outside.mkdir()
+        real = outside / "config.toml"
+        real.write_text('model = "x"\n')
+        link = self.home / ".codex" / "config.toml"
+        link.parent.mkdir()
+        self.link(link, real)
+        code, _, err = self.asa_err("codex", "--yes")
+        self.assertEqual(code, 2, err)
+        self.assertIn("outside", err)
+        self.assertEqual(real.read_text(), 'model = "x"\n')
+        self.assertFalse((outside / "config.toml.bak").exists())
+        self.assertFalse((link.parent / "config.toml.bak").exists())
+        self.assertFalse((self.home / ".agents").exists())
+        self.assertTrue(link.is_symlink())
+
+        link.unlink()
+        link.parent.rmdir()
+        real_dir = outside / "cursor"
+        real_dir.mkdir()
+        planted = real_dir / "mcp.json"
+        planted.write_text("{}\n")
+        parent = self.home / ".cursor"
+        self.link(parent, real_dir)
+        code, _, err = self.asa_err("cursor", "--yes")
+        self.assertEqual(code, 2, err)
+        self.assertIn("outside", err)
+        self.assertEqual(planted.read_text(), "{}\n")
+        self.assertFalse((real_dir / "mcp.json.bak").exists())
+        self.assertTrue(parent.is_symlink())
+
+    def test_cursor_from_home_follows_in_home_symlink_and_project_file_does_not(self):
+        os.chdir(self.home)
+        dotfiles = self.home / "dotfiles"
+        dotfiles.mkdir()
+        real = dotfiles / "mcp.json"
+        real.write_text("{}\n")
+        self.link(self.home / ".cursor", dotfiles)
+        code, _ = self.asa("cursor", "--yes")
+        self.assertEqual(code, 0)
+        self.assertIn("agent-security-audit", json.loads(real.read_text())["mcpServers"])
+        self.assertTrue((self.home / ".cursor").is_symlink())
+        self.assertEqual((dotfiles / "mcp.json.bak").read_text(), "{}\n")
+
+        planted = dotfiles / "project.json"
+        planted.write_text("{}\n")
+        project_link = self.home / ".mcp.json"
+        self.link(project_link, planted)
+        code, _, err = self.asa_err("claude-code", "--yes")
+        self.assertEqual(code, 2, err)
+        self.assertIn("symlink", err)
+        self.assertEqual(planted.read_text(), "{}\n")
+        self.assertFalse((dotfiles / "project.json.bak").exists())
+        self.assertTrue(project_link.is_symlink())
+
+    def test_backup_symlink_and_existing_backup_are_refused(self):
+        outside = self.home.parent / "outside"
+        outside.mkdir()
+        secret = outside / "secret"
+        secret.write_text("secret")
+        path = self.home / ".cursor" / "mcp.json"
+        path.parent.mkdir()
+        original = '{"mcpServers": {"other": {"command": "x"}}}\n'
+        path.write_text(original)
+        bak = path.with_name("mcp.json.bak")
+        self.link(bak, secret)
+        code, _, err = self.asa_err("cursor", "--yes")
+        self.assertEqual(code, 2, err)
+        self.assertIn("backup", err)
+        self.assertEqual(path.read_text(), original)
+        self.assertTrue(bak.is_symlink())
+        self.assertEqual(os.readlink(bak), str(secret))
+        self.assertEqual(secret.read_text(), "secret")
+        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["mcp.json", "mcp.json.bak"])
+
+        bak.unlink()
+        bak.write_text("keep")
+        code, _, err = self.asa_err("cursor", "--yes")
+        self.assertEqual(code, 2, err)
+        self.assertIn("backup", err)
+        self.assertEqual(bak.read_text(), "keep")
+        self.assertEqual(path.read_text(), original)
+        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["mcp.json", "mcp.json.bak"])
+
+    @unittest.skipIf(os.name == "nt", "POSIX file modes")
+    def test_new_file_is_private_and_user_temp_name_is_kept(self):
+        planted = self.cwd / ".vscode" / "mcp.json.asa-tmp"
+        planted.parent.mkdir()
+        planted.write_text("user file")
+        planted.chmod(0o640)
+        old = os.umask(0)
+        try:
+            code, _ = self.asa("vscode", "--yes")
+        finally:
+            os.umask(old)
+        self.assertEqual(code, 0)
+        path = self.cwd / ".vscode" / "mcp.json"
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(planted.read_text(), "user file")
+        self.assertEqual(stat.S_IMODE(planted.stat().st_mode), 0o640)
+        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["mcp.json", "mcp.json.asa-tmp"])
+
+    @unittest.skipIf(os.name == "nt", "POSIX file modes")
+    def test_update_keeps_existing_mode_on_file_and_backup(self):
+        path = self.home / ".cursor" / "mcp.json"
+        path.parent.mkdir()
+        path.write_text('{"mcpServers": {"other": {"command": "x"}}}')
+        path.chmod(0o640)
+        code, _ = self.asa("cursor", "--yes")
+        self.assertEqual(code, 0)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
+        self.assertEqual(stat.S_IMODE((path.parent / "mcp.json.bak").stat().st_mode), 0o640)
+        self.assertIn("agent-security-audit", json.loads(path.read_text())["mcpServers"])
+
+    def test_parent_swap_cannot_redirect_a_config_write(self):
+        if not install._anchored_writes_available():
+            self.skipTest("directory-descriptor support required")
+        path = self.home / ".cursor" / "mcp.json"
+        path.parent.mkdir()
+        path.write_text('{"mcpServers": {"other": {"command": "x"}}}')
+        outside = self.home.parent / "outside"
+        outside.mkdir()
+        secret = outside / "mcp.json"
+        secret.write_text("outside file must stay untouched")
+        held = self.home / "held-cursor"
+        replace = install._replace_config
+
+        def swap(parent, name, text):
+            path.parent.rename(held)
+            self.link(path.parent, outside)
+            replace(parent, name, text)
+
+        changes = install.plan("cursor", home=self.home, cwd=self.cwd)
+        with mock.patch.object(install, "_replace_config", side_effect=swap):
+            install.apply(changes)
+        self.assertEqual(secret.read_text(), "outside file must stay untouched")
+        self.assertFalse((outside / "mcp.json.bak").exists())
+        self.assertIn("agent-security-audit", json.loads((held / "mcp.json").read_text())["mcpServers"])
+        self.assertTrue((held / "mcp.json.bak").is_file())
+
+    def test_unsupported_write_platform_fails_closed_without_writing(self):
+        changes = install.plan("cursor", home=self.home, cwd=self.cwd)
+        with (mock.patch.object(install, "_anchored_writes_available", return_value=False),
+              self.assertRaisesRegex(install.InstallError, "run without --yes")):
+            install.apply(changes)
+        self.assertEqual(self.files(), [])
 
     def test_vscode_uses_servers_with_type(self):
         self.asa("vscode", "--yes")

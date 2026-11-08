@@ -46,6 +46,12 @@ The server runs over stdio. The command is either `uvx --from git+https://github
 
 ### `asa install <agent>`
 
+Automatic configuration writes require directory-descriptor and no-follow support (macOS and Linux).
+On Windows or another platform without those primitives, run without `--yes` and copy the printed configuration
+using the agent-specific instructions below. `--yes` refuses to write there rather than risk following a directory
+that changed during installation. The scanner and MCP server still run on Windows.
+
+
 ```sh
 asa install cursor            # dry run: prints what it would add and where
 asa install cursor --yes      # writes it; a changed file is copied to <file>.bak first

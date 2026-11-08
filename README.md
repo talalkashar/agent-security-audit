@@ -75,7 +75,7 @@ The skill runs the `asa` CLI, so install it too: `uv tool install git+https://gi
 | Antigravity | `uvx --from git+https://github.com/talalkashar/agent-security-audit asa install antigravity --yes` |
 | Windsurf (Devin Desktop) | `uvx --from git+https://github.com/talalkashar/agent-security-audit asa install windsurf --yes` |
 
-`asa install <agent>` merges the server into that agent's config without touching other servers, and for `claude-code` and `codex` also copies the skill. Without `--yes` it only prints the change; with it, a changed file is first copied to `<file>.bak`. Restart the agent afterwards. Cursor also takes a one-click install link, and every config file is shown in [docs/INSTALL.md](docs/INSTALL.md).
+`asa install <agent>` merges the server into that agent's config without touching other servers, and for `claude-code` and `codex` also copies the skill. Without `--yes` it only prints the change; with it, a changed file is first copied to `<file>.bak`. Automatic file writes require macOS/Linux directory-handle support; on Windows, omit `--yes` and add the printed configuration manually. The scanner and MCP server still work there. Restart the agent afterwards. Cursor also takes a one-click install link, and every config file is shown in [docs/INSTALL.md](docs/INSTALL.md).
 
 After the PyPI release, replace `--from git+https://github.com/talalkashar/agent-security-audit` with `--from agent-security-audit` (for example `uvx --from agent-security-audit asa-mcp`), and `pipx install agent-security-audit` installs the CLI.
 
