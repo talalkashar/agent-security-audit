@@ -13,7 +13,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -24,22 +24,30 @@ jobs:
       - run: ruff check .
 
   test:
-    runs-on: ubuntu-latest
+    # Every supported Python on every GitHub-hosted OS. setup-python ships 3.11-3.14
+    # for ubuntu-latest, macos-latest (arm64) and windows-latest, so no combo is excluded.
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+    defaults:
+      run:
+        # bash exists on all three runners (Git Bash on Windows), so one script works everywhere.
+        shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Editable install
+        run: python -m pip install -e .
       - name: Unit tests
-        run: PYTHONPATH=src python -m unittest discover -s tests -v
-      - name: Install and smoke test the entry points
+        run: python -m unittest discover -s tests -v
+      - name: Smoke test the entry points
         run: |
-          pip install .
           asa list >/dev/null
           asa-mcp </dev/null
