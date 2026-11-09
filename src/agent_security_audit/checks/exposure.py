@@ -34,14 +34,28 @@ ENV_LINE = re.compile(rb"(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_.-]*[ \t]*=")
 
 
 def _not_html(ctype, body):
+    """security.txt: a text/html type, or a body that opens as an HTML document, is not the text file."""
     head = body[:200].lstrip().lower()
     return "html" not in (ctype or "").lower() and not head.startswith((b"<!doctype", b"<html"))
 
 
+def _file_bytes(ctype, body):
+    """True when a sensitive-path body can be the real file rather than an HTML page.
+
+    nginx's default_type is text/html, so that type alone must not hide KEY=VALUE, git, SQL, npmrc,
+    Vercel or compose bytes. A page opens with <!doctype or <html, or the type says html and the body
+    opens with a tag.
+    """
+    head = body[:200].lstrip().lower()
+    if head.startswith((b"<!doctype", b"<html")):
+        return False
+    return not ("html" in (ctype or "").lower() and head.startswith(b"<"))
+
+
 def _env(body, ctype):
-    """A dotenv file: not HTML, and most of its first lines (comments and blanks aside) are KEY=value lines.
+    """A dotenv file: not an HTML page, and most of its first lines (comments and blanks aside) are KEY=value lines.
     One line is enough; an error page or script with a stray assignment is not."""
-    if not _not_html(ctype, body):
+    if not _file_bytes(ctype, body):
         return False
     lines = [ln.strip() for ln in body[:20000].splitlines()[:50]]
     lines = [ln for ln in lines if ln and not ln.startswith(b"#")]
@@ -53,16 +67,16 @@ SENSITIVE_FILES = {
     "/.env": ("environment file", _env),
     "/.env.local": ("environment file", _env),
     "/.env.production": ("environment file", _env),
-    "/.git/HEAD": ("git metadata", lambda b, c: _not_html(c, b) and (b.startswith(b"ref: refs/")
-                                                                      or re.fullmatch(rb"[0-9a-f]{40}\s*", b) is not None)),
-    "/.git/config": ("git config", lambda b, c: _not_html(c, b) and b"[core]" in b[:4000]),
+    "/.git/HEAD": ("git metadata", lambda b, c: _file_bytes(c, b) and (b.startswith(b"ref: refs/")
+                                                                       or re.fullmatch(rb"[0-9a-f]{40}\s*", b) is not None)),
+    "/.git/config": ("git config", lambda b, c: _file_bytes(c, b) and b"[core]" in b[:4000]),
     "/.DS_Store": ("macOS folder index", lambda b, c: b[:8] == b"\x00\x00\x00\x01Bud1"),
-    "/.npmrc": ("npm config with token", lambda b, c: _not_html(c, b) and b"_authToken" in b[:8000]),
-    "/.vercel/project.json": ("Vercel project link", lambda b, c: _not_html(c, b) and b'"projectId"' in b[:4000]),
-    "/backup.sql": ("database dump", lambda b, c: _not_html(c, b) and re.search(rb"CREATE TABLE|INSERT INTO", b[:200000]) is not None),
-    "/dump.sql": ("database dump", lambda b, c: _not_html(c, b) and re.search(rb"CREATE TABLE|INSERT INTO", b[:200000]) is not None),
+    "/.npmrc": ("npm config with token", lambda b, c: _file_bytes(c, b) and b"_authToken" in b[:8000]),
+    "/.vercel/project.json": ("Vercel project link", lambda b, c: _file_bytes(c, b) and b'"projectId"' in b[:4000]),
+    "/backup.sql": ("database dump", lambda b, c: _file_bytes(c, b) and re.search(rb"CREATE TABLE|INSERT INTO", b[:200000]) is not None),
+    "/dump.sql": ("database dump", lambda b, c: _file_bytes(c, b) and re.search(rb"CREATE TABLE|INSERT INTO", b[:200000]) is not None),
     "/backup.zip": ("site archive", lambda b, c: b[:4] == b"PK\x03\x04"),
-    "/docker-compose.yml": ("container config", lambda b, c: _not_html(c, b) and b"services:" in b[:8000]),
+    "/docker-compose.yml": ("container config", lambda b, c: _file_bytes(c, b) and b"services:" in b[:8000]),
 }
 
 

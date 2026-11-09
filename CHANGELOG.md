@@ -10,6 +10,7 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 - API-23 does not pass when one of `/graphql` and `/api/graphql` refuses introspection and the other is unproven (generic JSON errors, or an auth, throttle, gateway or firewall answer). A path that is not an endpoint still allows the pass.
 - BROWSER-05 combines every `Referrer-Policy` field and uses the last recognised token. A later `unsafe-url` does not pass because an earlier field was strict.
 - BROWSER-05 applies `<meta name="referrer">` after the header. The last single-keyword meta wins, so `unsafe-url` in the page does not pass behind a strict header.
+- INFRA-04 judges a sensitive file by its bytes. `Content-Type: text/html` (nginx's default type) no longer hides a `.env`, git file, SQL dump, npm token, Vercel project file or compose file that is not an HTML page.
 
 ## 0.2.0 - unreleased draft (set the date when the release is tagged)
 

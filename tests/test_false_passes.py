@@ -110,6 +110,16 @@ class EnvFileTest(unittest.TestCase):
                 self.assertEqual(self.run_with(body).status, "pass")
         self.assertEqual(self.run_with("<!doctype html><p>a=b</p>", "text/html").status, "pass")
 
+    def test_html_content_type_does_not_hide_a_real_file(self):
+        # nginx default_type is text/html, so a leaked file is often labelled HTML.
+        self.assertEqual(self.run_with("SECRET_KEY=abc\nOTHER=def\n", "text/html").status, "fail")
+        self.assertEqual(self.run_with("DATABASE_URL=postgres://u:p@h/db\n", "text/html; charset=utf-8").status, "fail")
+        head = ctx({"/.git/HEAD": lambda m, u, h, b: resp(200, [("Content-Type", "text/html")],
+                                                          "ref: refs/heads/main\n")})
+        self.assertEqual(exposure.sensitive_files(head).status, "fail")
+        self.assertEqual(self.run_with("<p>SECRET_KEY=abc</p>\n<p>OTHER=def</p>", "text/html").status, "pass")
+        self.assertEqual(self.run_with("<html><body>SECRET_KEY=abc\nOTHER=def</body></html>", "text/html").status, "pass")
+
 
 # 3. BROWSER-02 CSP -------------------------------------------------------------------------------------------------
 

@@ -121,7 +121,7 @@ Never put secrets, .git, dumps (*.sql, *.dump), archives (*.zip, *.tar.gz), *.ba
 ### Proof test
 
 1. GET a fixed short list of paths on each production and preview host: /.env, /.env.local, /.env.production, /.git/HEAD, /.git/config, /backup.zip, /db.sql, /dump.sql, /.DS_Store. No crawling or fuzzing.
-2. Count a path as exposed only if it returns 200 and the body looks like the real file: KEY=VALUE lines for .env (one line is enough, keys in any case, and most of the non-comment lines must be KEY=VALUE), "ref: refs/" for .git/HEAD, "[core]" for .git/config, SQL statements for dumps, the .DS_Store file signature. A 200 HTML page from an SPA catch-all route is not a finding.
+2. Count a path as exposed only if it returns 200 and the body looks like the real file: KEY=VALUE lines for .env (one line is enough, keys in any case, and most of the non-comment lines must be KEY=VALUE), "ref: refs/" for .git/HEAD, "[core]" for .git/config, SQL statements for dumps, the .DS_Store file signature. A 200 HTML page from an SPA catch-all route is not a finding. The page is the body, not the Content-Type: text/html still counts when the bytes are the real file and do not open with `<!doctype`, `<html>`, or another tag.
 3. Pass: no path exposed.
 4. Fail: any exposed path. Stop reading at the marker match, report it, and rotate every secret the file could contain.
 
