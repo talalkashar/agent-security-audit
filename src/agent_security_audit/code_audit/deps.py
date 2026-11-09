@@ -203,6 +203,10 @@ def dependencies(project, osv=True, osv_query=None, timeout=20.0):
         if core:
             out.append(make("NEXT-04", "fail", "Next.js, React or sharp is on a release with known vulnerabilities. "
                             "Upgrade to the latest patch release.", core))
+        elif unchecked or unlocked:  # another app in the repo may pin an older Next.js in a file not read
+            out.append(make("NEXT-04", "manual", f"Not proven: no known vulnerabilities in OSV for {versions}, but not "
+                            "every package.json has a lockfile that was read." + (f" {gap}" if gap else ""),
+                            unchecked + unlocked))
         else:
             out.append(make("NEXT-04", "pass", f"No known vulnerabilities in OSV for {versions}."))
     return out + next_unread

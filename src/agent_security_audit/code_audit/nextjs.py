@@ -4,12 +4,15 @@ next.config / header settings (NEXT-02, NEXT-03, NEXT-07, NEXT-11, BROWSER-01..0
 
 from __future__ import annotations
 
+import bisect
+import functools
 import itertools
 import json
 import posixpath
 import re
 
 from ..checks import browser as live
+from ..checks.dns_email import SHARED_PLATFORMS
 from ..http import Response
 from .base import SUSPECTED, make, plural
 from .patterns import _arg
@@ -27,12 +30,12 @@ DB = re.compile(r"(?<!Array)(?<!Buffer)(?<!Object)\.from\(\s*['\"`][\w.-]+['\"`]
 # A gate stops an unauthorised caller by itself (it throws, redirects or wraps the handler), so calling it is enough.
 GUARD_WORDS = r"(?:User|Auth|Session|Admin|Role|Owner|Permission|Signature|Secret|Token|Claims)"
 GATE = re.compile(r"\bauth\.protect\(|\bjwtVerify\(|\bjwt\.verify\(|\bconstructEvent\(|"
-                  r"\b(?:require|ensure|assert|with)(?:[A-Z_][\w$]*?)?" + GUARD_WORDS + r"[\w$]*\s*\(")
+                  r"\b(?:require|ensure|assert|with)(?:[A-Z_][\w$]{0,40}?)?" + GUARD_WORDS + r"[\w$]{0,40}\s*\(")
 # A verifier only returns who the caller is (or whether a secret matched): it guards nothing unless its result is
 # checked. getUserById(id) or getUsers() look a user up; they are not authentication and do not match.
 VERIFIER = re.compile(r"\.auth\.(?:getUser|getClaims|getSession)\(|\bgetServerSession\(|\bauth\(\s*\)|"
                       r"\bcurrentUser\(\s*\)|\bgetAuth\(|\bget(?:Current)?(?:User|Session|Claims|AuthUser)\(\s*\)|"
-                      r"\b(?:verify|check|validate)(?:[A-Z_][\w$]*?)?" + GUARD_WORDS + r"[\w$]*\s*\(|"
+                      r"\b(?:verify|check|validate)(?:[A-Z_][\w$]{0,40}?)?" + GUARD_WORDS + r"[\w$]{0,40}\s*\(|"
                       r"\btimingSafeEqual\(|\bCRON_SECRET\b")
 # Reading the Authorization header counts as a guard; the word inside a message ("authorization required") does not.
 AUTH_HEADER = re.compile(r"""(?:\.get|getHeader|header)\(\s*(['"`])authorization\1|"""
@@ -79,9 +82,14 @@ def _has_auth(code):
 def _guard_at(code):
     """Offset of the first guard in code (see _has_auth), or None."""
     blank = _blank_strings(code)
-    found = [m.start() for m in GATE.finditer(blank) if not DECLARED.search(blank, max(0, m.start() - 40), m.start())][:1]
-    found += [m.start() for m in itertools.chain(VERIFIER.finditer(blank), AUTH_HEADER.finditer(code))
-              if _checked(blank, m.start(), m.end())][:1]
+    gate = next((m.start() for m in GATE.finditer(blank)
+                 if not DECLARED.search(blank, max(0, m.start() - 40), m.start())), None)
+    # Stop at the first checked verifier: a file of thousands of unchecked calls must not cost a window scan each
+    # beyond the first hit. Verifiers after a gate cannot move the first guard earlier.
+    verifier = next((m.start() for m in sorted(itertools.chain(VERIFIER.finditer(blank), AUTH_HEADER.finditer(code)),
+                                               key=lambda m: m.start())
+                     if (gate is None or m.start() < gate) and _checked(blank, m.start(), m.end())), None)
+    found = [o for o in (gate, verifier) if o is not None]
     return min(found) if found else None
 
 
@@ -96,8 +104,8 @@ ASSIGN = re.compile(r"(?:\b(?:const|let|var)\s+([\[{][^;]*?[\]}]|[A-Za-z_$][\w$]
 def _checked(blank, start, end):
     """Whether the verifier expression at blank[start:end] gates something: it sits inside an if/while condition or a
     comparison, or it is assigned to names that a condition or comparison reads within CHECK_WINDOW."""
-    depth = blank[start:end].count("(") - blank[start:end].count(")")
-    while depth > 0 and end < len(blank):
+    depth, stop = blank[start:end].count("(") - blank[start:end].count(")"), min(len(blank), end + CHECK_WINDOW)
+    while depth > 0 and end < stop:  # an unclosed call must not rescan the rest of the file for every verifier
         depth += {"(": 1, ")": -1}.get(blank[end], 0)
         end += 1
     while start > 0 and (blank[start - 1].isalnum() or blank[start - 1] in "_$."):
@@ -126,13 +134,14 @@ def _checked(blank, start, end):
     return False
 
 
-def _paren(text, i):
-    """The text from i up to the ) that closes the ( just before i."""
-    depth, j = 1, i
-    while j < len(text) and depth:
+def _paren(text, i, limit=CHECK_WINDOW):
+    """The text from i up to the ) that closes the ( just before i, or "" when it does not close within limit
+    characters (each condition head would otherwise rescan the rest of the file)."""
+    depth, j, stop = 1, i, min(len(text), i + limit)
+    while j < stop and depth:
         depth += {"(": 1, ")": -1}.get(text[j], 0)
         j += 1
-    return text[i:j - 1]
+    return text[i:j - 1] if not depth else ""
 
 
 SERVICE = re.compile(r"SERVICE_ROLE|service_role|SUPABASE_SECRET_KEY|\bsb_secret_|createAdminClient|"
@@ -164,13 +173,14 @@ JS_HEADER = re.compile(r"\bkey\s*:\s*" + QUOTED_NAME + r"\s*,\s*value\s*:\s*|"
                        r"\.(?:set|append)\(\s*" + QUOTED_NAME.replace("\\1", "\\3") + r"\s*,\s*|"
                        + QUOTED_NAME.replace("\\1", "\\5") + r"\s*:\s*", re.IGNORECASE)
 ANY_NAME = re.compile(QUOTED_NAME, re.IGNORECASE)
-TEXT_HEADER = re.compile(r"""^\s*["']?(""" + "|".join(re.escape(n) for n in HEADER_NAMES)
-                         + r""")["']?\s*[:=]\s*(.*?)\s*$""", re.IGNORECASE | re.MULTILINE)
+# [ \t], not \s: \s crosses newlines, so every line start rescanned a run of blank lines (quadratic).
+TEXT_HEADER = re.compile(r"""^[ \t]*["']?(""" + "|".join(re.escape(n) for n in HEADER_NAMES)
+                         + r""")["']?[ \t]*[:=][ \t]*(.*?)[ \t]*$""", re.IGNORECASE | re.MULTILINE)
 CHAIN = re.compile(r"\.(?:trim|replace|replaceAll)\((?:[^()]|\([^()]*\))*\)\s*$")
 JOINED = re.compile(r"""^\[([\s\S]*)\]\s*\.join\(\s*(['"])((?:(?!\2).)*)\2\s*\)$""")
 STRING = re.compile(r"""'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)\"""")
 # Where one route's header block starts: headers after it land on the same responses.
-ROUTE_START = {"js": re.compile(r"\bsource\s*:"), "toml": re.compile(r"^\s*\[\[headers\]\]", re.MULTILINE),
+ROUTE_START = {"js": re.compile(r"\bsource\s*:"), "toml": re.compile(r"^[ \t]*\[\[headers\]\]", re.MULTILINE),
                "_headers": re.compile(r"^(?![#\s])\S", re.MULTILINE)}
 MAX_COMBOS = 256
 
@@ -259,9 +269,12 @@ def _blocks(code, rx):
             if not balanced or depth[m.start()] == 0 or code.startswith("export", m.start())] + [len(code)]
     out = []
     for m in rx.finditer(code):
-        end = next(t for t in tops if t > m.start())
+        end = tops[bisect.bisect_right(tops, m.start())]  # tops is sorted; a scan per declaration was quadratic
         out.append((next(g for g in m.groups() if g), m.start(), end))
     return out
+
+
+CALL = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(")
 
 
 def _route_methods(code):
@@ -278,21 +291,26 @@ def _route_methods(code):
         if _has_auth(code):
             return [], 1, 1, 0
         return [(db.start(), "touches data with no auth or session call in the handler")], 0, 1, 0
-    helpers = {name: code[a:b] for name, a, b in _blocks(code, DECL) if (a, b) not in {(x, y) for _, x, y in methods}}
+    spans = {(x, y) for _, x, y in methods}
+    helpers = {name: code[a:b] for name, a, b in _blocks(code, DECL) if (a, b) not in spans}
+    # Each helper is searched once, however many handlers call it; calls are found with one scan per handler.
+    helper_db = functools.cache(lambda h: DB.search(helpers[h]) is not None)
+    helper_auth = functools.cache(lambda h: _has_auth(helpers[h]))
+    file_auth = functools.cache(lambda: _has_auth(code))
     open_, guarded, touching, unsure = [], 0, 0, 0
     for name, a, b in methods:
         seg = code[a:b]
-        called = [h for h in helpers if re.search(r"(?<![\w$.])" + re.escape(h) + r"\s*\(", seg)]
+        called = {c for c in CALL.findall(seg) if c in helpers}
         db = DB.search(seg)
-        if not db and not any(DB.search(helpers[h]) for h in called):
+        if not db and not any(helper_db(h) for h in called):
             continue
         touching += 1
-        if _has_auth(seg) or any(_has_auth(helpers[h]) for h in called):
+        if _has_auth(seg) or any(helper_auth(h) for h in called):
             if balanced:
                 guarded += 1
             else:
                 unsure += 1
-        elif _has_auth(code):
+        elif file_auth():
             open_.append((a + (db.start() if db else 0), (f"{name} touches data; the file has an auth call, but not "
                           f"in {name} or a helper it calls")))
         else:
@@ -454,12 +472,14 @@ def cron_secret(project):
         config = json.loads(project.text("vercel.json") or "{}")
     except ValueError:
         return []
-    crons = [c.get("path", "") for c in config.get("crons", []) if isinstance(c, dict)] \
-        if isinstance(config, dict) else []
+    entries = config.get("crons") if isinstance(config, dict) else None
+    # A hand-edited vercel.json can hold anything: only string paths are cron routes.
+    crons = [c["path"] for c in entries if isinstance(c, dict) and isinstance(c.get("path"), str)] \
+        if isinstance(entries, list) else []
     if not crons:
         return []
     bad, ok, unsure = [], [], []
-    for path in crons:
+    for path in crons[:MAX_CRONS]:  # each is matched against every file; NEXT-15 never passes, so a cap hides nothing
         segs = [re.escape(s) for s in path.split("?")[0].strip("/").split("/") if s]
         group = r"(?:/\([^/]+\))*"
         rx = re.compile(r"(^|/)(src/)?(app" + group + "".join("/" + s + group for s in segs) + "/route|pages/"
@@ -495,6 +515,8 @@ def cron_secret(project):
 
 CRON_ASSIGN = re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]*)")
 REQUEST_VALUE = r"\b(?:headers|authorization|searchParams|query)\b"
+MAX_NAMES = 32
+MAX_CRONS = 200
 REJECTS = re.compile(r"!==?|!\s*(?:await\s+)?[\w$.]*(?:timingSafeEqual|[Ee]qual|[Cc]ompare)[\w$]*\s*\(")
 
 
@@ -508,8 +530,9 @@ def _cron_check(code):
             secret.append(r"(?<![\w$.])" + re.escape(m.group(1)) + r"(?![\w$])")
         if re.search(REQUEST_VALUE, m.group(2)):
             request.append(r"(?<![\w$.])" + re.escape(m.group(1)) + r"(?![\w$])")
-    secret_rx = re.compile("|".join(secret))
-    request_rx = re.compile("|".join(request))
+    # A file can assign thousands of names: keep the alternations small (a miss leaves the route unsure, never a pass).
+    secret_rx = re.compile("|".join(list(dict.fromkeys(secret))[:MAX_NAMES]))
+    request_rx = re.compile("|".join(list(dict.fromkeys(request))[:MAX_NAMES]))
     for h in COND_HEAD.finditer(code):
         cond = _paren(code, h.end())
         body = code[h.end() + len(cond) + 1:h.end() + len(cond) + 200]
@@ -519,42 +542,79 @@ def _cron_check(code):
     return None
 
 
-def next_config(project):
-    configs = [f for f in project.files if NEXT_CONFIG.search(f)]
+def _shared_wildcard(origin):
+    """True when a wildcard origin matches every site on a shared hosting platform (*.vercel.app and the like)."""
+    host = re.sub(r"^[a-z]+://", "", origin.strip().lower()).split("/")[0].split(":")[0]
+    rest = re.sub(r"^\*{1,2}\.", "", host)
+    return rest != host and rest in SHARED_PLATFORMS
+
+
+LITERAL_LIST = re.compile(r"""\s*(?:(?:'[^'\n]*'|"[^"\n]*"|`[^`$\n]*`)\s*(?:,\s*)?)*""")  # one way to split blanks
+
+
+def _judge_config(project, rel):
+    """The NEXT-02/03/07/11 results for one next.config file. A setting whose value is not a literal is only known at
+    build time, so it is manual, never a pass."""
+    code = _code(project, rel)
     out = []
-    if configs:
-        rel = configs[0]
-        code = _code(project, rel)
+    if m := re.search(r"productionBrowserSourceMaps\s*:\s*true\b", code):
+        out.append(make("NEXT-02", "fail", "next.config turns on productionBrowserSourceMaps, so the original "
+                        "source is public.", [_at(project, rel, code, m.start(), "source maps on in production")]))
+    elif m := re.search(r"productionBrowserSourceMaps\s*:(?!\s*false\b)", code):
+        out.append(make("NEXT-02", "manual", f"Not proven: {rel} sets productionBrowserSourceMaps from a value only "
+                        "known at build time.", [_at(project, rel, code, m.start(), "source maps set at build time")]))
+    else:
+        out.append(make("NEXT-02", "pass", f"{rel} does not turn on production browser source maps."))
+    if re.search(r"poweredByHeader\s*:\s*false\b", code):
+        out.append(make("NEXT-03", "pass", f"{rel} sets poweredByHeader: false."))
+    else:
+        out.append(make("NEXT-03", "warn", f"{rel} does not set poweredByHeader: false, so Next.js sends X-Powered-By "
+                        "unless a proxy strips it.", [Finding(rel, 1, "no poweredByHeader: false")]))
+    out.append(_origins_result(project, rel, code))
+    out.append(_images_result(project, rel, code))
+    return out
 
-        def find(pattern):
-            return re.search(pattern, code)
 
-        if m := find(r"productionBrowserSourceMaps\s*:\s*true"):
-            out.append(make("NEXT-02", "fail", "next.config turns on productionBrowserSourceMaps, so the original "
-                            "source is public.", [_at(project, rel, code, m.start(), "source maps on in production")]))
-        else:
-            out.append(make("NEXT-02", "pass", f"{rel} does not turn on production browser source maps."))
-        if find(r"poweredByHeader\s*:\s*false"):
-            out.append(make("NEXT-03", "pass", f"{rel} sets poweredByHeader: false."))
-        else:
-            out.append(make("NEXT-03", "warn", f"{rel} does not set poweredByHeader: false, so Next.js sends "
-                            "X-Powered-By unless a proxy strips it.", [Finding(rel, 1, "no poweredByHeader: false")]))
-        origins = find(r"allowedOrigins\s*:\s*\[([^\]]*)\]")
-        if origins and re.search(r"""['"`]\*{1,2}['"`]""", origins.group(1)):
-            out.append(make("NEXT-07", "fail", "serverActions.allowedOrigins accepts any origin, which turns off the "
-                            "Server Action CSRF check.", [_at(project, rel, code, origins.start(), "wildcard origin")]))
-        else:
-            out.append(make("NEXT-07", "pass", f"{rel} does not widen serverActions.allowedOrigins to any origin."))
-        wild = find(r"""hostname\s*:\s*['"`]\*{1,2}['"`]""")
-        svg = find(r"dangerouslyAllowSVG\s*:\s*true")
-        if wild:
-            out.append(make("NEXT-11", "fail", "images.remotePatterns allows any host, so the image optimizer fetches "
-                            "anything for anyone.", [_at(project, rel, code, wild.start(), "wildcard image host")]))
-        elif svg and not find(r"contentSecurityPolicy\s*:"):
-            out.append(make("NEXT-11", "warn", "dangerouslyAllowSVG is on without an images.contentSecurityPolicy.",
-                            [_at(project, rel, code, svg.start(), "SVG allowed without a CSP")]))
-        else:
-            out.append(make("NEXT-11", "pass", f"{rel} lists no wildcard image host."))
+def _origins_result(project, rel, code):
+    found = list(re.finditer(r"allowedOrigins\s*:\s*", code))
+    for m in found:
+        body = re.match(r"\[([^\]]*)\]", code[m.end():])
+        values = re.findall(r"""['"`]([^'"`\n]*)['"`]""", body.group(1)) if body else []
+        if any(v.strip() in ("*", "**") or _shared_wildcard(v) for v in values):
+            return make("NEXT-07", "fail", "serverActions.allowedOrigins accepts any origin (or every site on a shared "
+                        "hosting platform), which turns off the Server Action CSRF check.",
+                        [_at(project, rel, code, m.start(), "wildcard origin")])
+    for m in found:
+        body = re.match(r"\[([^\]]*)\]", code[m.end():])
+        if not body or not LITERAL_LIST.fullmatch(body.group(1)):  # a variable, a spread or a call: built at run time
+            return make("NEXT-07", "manual", f"Not proven: {rel} builds serverActions.allowedOrigins from values only "
+                        "known at build time.", [_at(project, rel, code, m.start(), "origins not literal")])
+    return make("NEXT-07", "pass", f"{rel} does not widen serverActions.allowedOrigins to any origin.")
+
+
+def _images_result(project, rel, code):
+    hosts = list(re.finditer(r"""hostname\s*:\s*['"`]([^'"`\n]*)['"`]""", code))
+    wild = next((m for m in hosts if m.group(1).strip() in ("*", "**") or _shared_wildcard(m.group(1))), None)
+    wild = wild or re.search(r"""new\s+URL\(\s*['"`]\w+://\*{1,2}[/:'"`]""", code)  # remotePatterns: [new URL(...)]
+    svg = re.search(r"dangerouslyAllowSVG\s*:\s*true\b", code)
+    if wild:
+        return make("NEXT-11", "fail", "images.remotePatterns allows any host, so the image optimizer fetches anything "
+                    "for anyone.", [_at(project, rel, code, wild.start(), "wildcard image host")])
+    if svg and not re.search(r"contentSecurityPolicy\s*:", code):
+        return make("NEXT-11", "warn", "dangerouslyAllowSVG is on without an images.contentSecurityPolicy.",
+                    [_at(project, rel, code, svg.start(), "SVG allowed without a CSP")])
+    if m := re.search(r"""hostname\s*:(?!\s*['"`])""", code):
+        return make("NEXT-11", "manual", f"Not proven: {rel} sets an image host from a value only known at build "
+                    "time.", [_at(project, rel, code, m.start(), "image host not literal")])
+    return make("NEXT-11", "pass", f"{rel} lists no wildcard image host.")
+
+
+def next_config(project):
+    out = []
+    # A monorepo has one next.config per app: judge each and keep the worst result for every check.
+    judged = [_judge_config(project, rel) for rel in [f for f in project.files if NEXT_CONFIG.search(f)][:50]]
+    for results in zip(*judged):
+        out.append(min(results, key=lambda r: _RANK[r.status]))
     header_files = [f for f in project.files if HEADER_FILES.search(f) and not f.endswith(".d.ts")]
     if not header_files:
         return out
@@ -664,7 +724,7 @@ def _headers_in(rel, text, project=None, loose=True):
                     out.append((key.lower(), value if isinstance(value, str) else None, max(pos, 0), route))
                 if isinstance(node.get("headers"), list):
                     routes += 1
-                    route = routes
+                    route = (routes, node.get("source") if isinstance(node.get("source"), str) else "")
                 stack.extend((n, route) for n in node.values())
         return out
     if not re.search(EXT, rel):  # netlify.toml, _headers
@@ -726,8 +786,35 @@ def _shared_headers(text):
 
 def _route(rx, text, offset):
     """The offset of the route block a header at offset belongs to (-1 when the file has one block)."""
-    starts = [m.start() for m in rx.finditer(text, 0, offset)]
-    return starts[-1] if starts else -1
+    starts = _starts(rx, text)
+    k = bisect.bisect_left(starts, offset)  # one scan per file, not one per header
+    return starts[k - 1] if k else -1
+
+
+@functools.lru_cache(maxsize=16)
+def _starts(rx, text):
+    return [m.start() for m in rx.finditer(text)]
+
+
+# A route pattern that matches every path. Headers on a narrower route (/api/:path*) miss the pages browsers load.
+CATCH_ALL = re.compile(r"/(?:\(\.\*\)\??|:\w+(?:\*|\(\.\*\)\??)|\*{1,2})")
+
+
+def _route_source(rel, text, route):
+    """The path pattern of a route block, "" when it cannot be read, or None for a file with one unnamed block."""
+    if isinstance(route, tuple):  # vercel.json
+        return route[1]
+    if route == -1:
+        return None
+    if rel.endswith(".toml"):
+        block = re.match(r"[^\n]*\n((?:(?!\s*\[)[^\n]*\n?){0,40})", text[route:])
+        m = block and re.search(r"""^\s*for\s*=\s*["']([^"'\n]*)["']""", block.group(1), re.MULTILINE)
+    elif re.search(EXT, rel):
+        m = re.match(r"""source\s*:\s*(['"`])([^'"`\n]*)\1""", text[route:route + 600])
+        return m.group(2) if m else ""
+    else:  # _headers: the path is the first word of the line
+        m = re.match(r"(\S+)", text[route:route + 600])
+    return m.group(1) if m else ""
 
 
 _RANK = {"fail": 0, "warn": 1, "manual": 2, "pass": 3}
@@ -825,6 +912,11 @@ def _header_result(project, cid, label, names, check, files, texts, found):
                                                  "site.")
             judged.append((status, f"{f}: {summary}"))
         status, summary = min(judged, key=lambda x: _RANK[x[0]])
+        sources = [_route_source(f, texts[f], r) for r in routes]
+        if status == "pass" and not any(src is None or CATCH_ALL.fullmatch(src.strip()) for src in sources):
+            paths = ", ".join(redact(x, 40) for x in sorted(set(sources))[:3])
+            status, summary = "manual", (f"{f} sets {label} only on some paths ({paths}), so the code does not show "
+                                         "that every page carries it. Confirm it on the live site.")
         if status != "fail" and MIDDLEWARE.search(f) and _conditional(texts[f], [off for _, _, off, _ in hits]):
             status, summary = "manual", (f"{f} sets {label} only in some branches (if/else, switch or after an early "
                                          "return), so the code does not show that every response carries it. Confirm "

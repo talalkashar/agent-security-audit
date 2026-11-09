@@ -24,8 +24,9 @@ VIEW = re.compile(r"^create\s+(?:or\s+replace\s+)?(materialized\s+)?view\s+(?:if
 ALTER_VIEW_INVOKER = re.compile(r"^alter\s+view\s+(?:if\s+exists\s+)?" + NAME + r"\s+set\s*\(\s*security_invoker"
                                 r"\s*=\s*(?:true|on|1)", FLAGS)
 FUNCTION = re.compile(r"^create\s+(?:or\s+replace\s+)?function\s+" + NAME + r"\s*\(", FLAGS)
-FUNC_PRIV = re.compile(r"^(revoke|grant)\s+(?:execute|all)\b.*?\bon\s+function\s+" + NAME
-                       + r".*?\b(?:from|to)\s+([\w\s,\"]+)$", FLAGS)
+FUNC_PRIV = re.compile(r"^(revoke|grant)\s+(?:execute|all)\b.*?\bon\s+function\s+" + NAME, FLAGS)
+ROLE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_ \t\r\n,\"")
+FROM_TO = re.compile(r"\b(?:from|to)\s+", re.IGNORECASE)
 SECURITY_DEFINER = re.compile(r"\bsecurity\s+definer\b", re.IGNORECASE)
 SEARCH_PATH = re.compile(r"\bset\s+search_path\b", re.IGNORECASE)
 INVOKER_OPTION = re.compile(r"security_invoker\s*=\s*(?:true|on|1)", re.IGNORECASE)
@@ -119,6 +120,32 @@ def _expr(rest, keyword):
     return rest[m.end():i - 1]
 
 
+def _trailing_roles(stmt, start):
+    """The role list that ends a grant or revoke: what follows the first from/to inside the trailing run of
+    [\\w\\s,"] characters. Found in one pass; a regex with a lazy prefix retried the run for every from/to."""
+    i = len(stmt)
+    while i > start and stmt[i - 1] in ROLE_CHARS:
+        i -= 1
+    m = FROM_TO.search(stmt, i)
+    return stmt[m.end():] if m else None
+
+
+POLICY_TO = re.compile(r"\bto\s+", re.IGNORECASE)
+POLICY_END = re.compile(r"\b(?:using|with)\b", re.IGNORECASE)
+
+
+def _policy_roles(rest):
+    """The TO role list of a create policy (it comes before USING and WITH CHECK); "public" when there is none."""
+    m = POLICY_TO.search(rest)
+    if not m:
+        return "public"
+    end = POLICY_END.search(rest, m.end())
+    roles = rest[m.end():end.start() if end else len(rest)]
+    if not roles.strip() or any(c not in ROLE_CHARS for c in roles):  # a list this reader cannot follow: widest
+        return "public"
+    return roles.strip().lower()
+
+
 def _norm_expr(expr):
     """Lowercase, one space between words, none around operators; (select auth.uid()) -> auth.uid(); casts dropped;
     outer parentheses removed."""
@@ -127,18 +154,24 @@ def _norm_expr(expr):
     e = re.sub(r"\s*([=<>!,]|->>|->)\s*", r"\1", e)
     e = re.sub(r"\(\s+", "(", re.sub(r"\s+\)", ")", e))
     e = re.sub(r"\(select (auth\.\w+\(\))\)", r"\1", e)
-    while e.startswith("(") and e.endswith(")") and _closes_at_end(e):
-        e = e[1:-1].strip()
-    return e
+    return _strip_outer(e)
 
 
-def _closes_at_end(e):
-    depth = 0
+def _strip_outer(e):
+    """e without the parentheses that wrap all of it, matched in one pass (stripping one layer at a time and
+    rescanning was quadratic in the nesting depth)."""
+    e = e.strip()
+    close, stack = {}, []
     for i, c in enumerate(e):
-        depth += {"(": 1, ")": -1}.get(c, 0)
-        if depth == 0 and i < len(e) - 1:
-            return False
-    return True
+        if c == "(":
+            stack.append(i)
+        elif c == ")" and stack:
+            close[stack.pop()] = i
+    k = 0
+    while k < len(e) - 1 - k and e[k] == "(" and close.get(k) == len(e) - 1 - k:
+        k += 1
+    inner = e[k:len(e) - k]
+    return inner if inner == inner.strip() else _strip_outer(inner)
 
 
 def _split_top(e, word):
@@ -160,14 +193,20 @@ def _split_top(e, word):
     return parts + [e[start:]]
 
 
-def classify(expr):
+MAX_EXPR = 4000
+MAX_NESTING = 12
+
+
+def classify(expr, depth=0):
     """'owner' (the row's owner column is compared with the caller's id), 'open' (a tautology or a role-only test
     that lets every caller through) or 'unknown' (anything else: a static read cannot judge it)."""
+    if len(expr) > MAX_EXPR or depth > MAX_NESTING:  # each level rescans its text: bound the work, never a pass
+        return "unknown"
     e = _norm_expr(expr)
     for word, combine in (("or", _any_or), ("and", _all_and)):
         parts = _split_top(e, word)
         if len(parts) > 1:
-            return combine([classify(p) for p in parts])
+            return combine([classify(p, depth + 1) for p in parts])
     if OWNER_CHECK.fullmatch(e):
         return "owner"
     sides = e.split("=")
@@ -201,10 +240,14 @@ def _policy_kind(p):
 def exposed_schemas(project):
     text = project.text("supabase/config.toml")
     try:
-        schemas = tomllib.loads(text).get("api", {}).get("schemas") if text else None
+        api = tomllib.loads(text).get("api") if text else None
     except tomllib.TOMLDecodeError:
-        schemas = None
-    return {s.lower() for s in schemas} if schemas else {"public", "graphql_public"}
+        api = None
+    schemas = api.get("schemas") if isinstance(api, dict) else None
+    # A hand-edited config can hold any shape: only a list of names is read, anything else keeps the defaults.
+    if not isinstance(schemas, list) or not schemas or not all(isinstance(x, str) for x in schemas):
+        return {"public", "graphql_public"}
+    return {x.lower() for x in schemas}
 
 
 def parse(project):
@@ -235,10 +278,10 @@ def parse(project):
             elif m := POLICY.match(stmt):
                 rest = m.group(2)
                 cmd = re.search(r"\bfor\s+(all|select|insert|update|delete)\b", rest, re.IGNORECASE)
-                roles = re.search(r"\bto\s+([\w\s,\"]+?)(?=\busing\b|\bwith\b|$)", rest, re.IGNORECASE)
+                roles = _policy_roles(rest)
                 policies.append({"table": norm(m.group(1)), "where": where,
                                  "cmd": cmd.group(1).lower() if cmd else "all",
-                                 "roles": roles.group(1).strip().lower() if roles else "public",
+                                 "roles": roles,
                                  "restrictive": re.search(r"\bas\s+restrictive\b", rest, re.IGNORECASE) is not None,
                                  "using": _expr(rest, "using"), "check": _expr(rest, r"with\s+check")})
             elif m := VIEW.match(stmt):
@@ -252,8 +295,9 @@ def parse(project):
                 head = DOLLAR.sub(" ", re.sub(r"\$([A-Za-z_]*)\$.*?\$\1\$", " ", stmt, flags=re.DOTALL))
                 functions[norm(m.group(1))] = {"where": where, "definer": bool(SECURITY_DEFINER.search(head)),
                                                "search_path": bool(SEARCH_PATH.search(head)), "revoked": set()}
-            elif (m := FUNC_PRIV.match(stmt)) and (fn := functions.get(norm(m.group(2)))) is not None:
-                roles = {r.strip().strip('"').lower() for r in m.group(3).split(",")}
+            elif ((m := FUNC_PRIV.match(stmt)) and (fn := functions.get(norm(m.group(2)))) is not None
+                  and (granted := _trailing_roles(stmt, m.end())) is not None):
+                roles = {r.strip().strip('"').lower() for r in granted.split(",")}
                 if m.group(1).lower() == "revoke":
                     fn["revoked"] |= roles
                 else:

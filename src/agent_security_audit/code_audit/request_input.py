@@ -16,7 +16,8 @@ REQ = re.compile(r"\b(?:req|request)\.(?:query|body|params)\b|\b(?:req|request)\
 BODY = re.compile(r"^\s*(?:await\s+)?(?:req|request)\.(?:json\(\s*\)|body)\s*$|"
                   r"^\s*Object\.fromEntries\(\s*(?:await\s+)?\w+(?:\.formData\(\s*\))?\s*\)\s*$|"
                   r"^\s*JSON\.parse\(\s*(?:await\s+)?(?:req|request)\.(?:body|text\(\s*\))\s*\)\s*$")
-SCHEMA = re.compile(r"([A-Za-z_$][\w$]*)\s*\.\s*(?:parse|safeParse|parseAsync|safeParseAsync|validate|validateSync)\(")
+SCHEMA = re.compile(r"(?<![\w$])([A-Za-z_$][\w$]*)\s*\.\s*"  # the lookbehind: one try per name, not per letter
+                    r"(?:parse|safeParse|parseAsync|safeParseAsync|validate|validateSync)\(")
 # Receivers whose .parse() decodes text and checks no fields: JSON.parse(req.body) is still the whole body.
 NOT_SCHEMA = {"JSON", "qs", "querystring", "url", "URL", "Date", "cookie", "path"}
 # Client-only React hooks: a file that calls one runs in the browser even without its own 'use client'.

@@ -12,6 +12,8 @@ from .project import Finding, is_test_path, line_of, line_text, redact, strip_js
 DSIH = re.compile(r"dangerouslySetInnerHTML\s*=\s*\{\s*\{\s*__html\s*:\s*")
 INNER = re.compile(r"\.(?:innerHTML|outerHTML)\s*\+?=(?!=)\s*|\binsertAdjacentHTML\(\s*['\"]\w+['\"]\s*,\s*|"
                    r"\bdocument\.write(?:ln)?\(\s*")
+# Template sinks of the other frameworks code_files() reads: Vue v-html, Svelte {@html}, Astro set:html.
+TEMPLATE_HTML = re.compile(r"""\bv-html\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)')|\{@html\s+|\bset:html\s*=\s*\{""")
 LITERAL = re.compile(r"""^\s*(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\$]|\\.|\$(?!\{))*`)\s*$""")
 # Calls that return HTML-safe text. The whole value must be one such call, and the name (or the receiver of a method
 # call) must be bound by an import or require of a sanitizer package to one of its sanitizing exports: a local helper
@@ -102,8 +104,8 @@ CHILD_NS = re.compile(r"""\bimport\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s*(?:,\s*
                       + CHILD_MODULE + r"|"
                       r"""\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*""" + CHILD_MODULE)
 # import { exec as run } from / const { exec: run } = require(...)
-CHILD_NAMED = re.compile(r"""\bimport\s*(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*""" + CHILD_MODULE + r"|"
-                         r"""\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*""" + CHILD_MODULE)
+CHILD_NAMED = re.compile(r"""\bimport\s*(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^{}]*)\}\s*from\s*""" + CHILD_MODULE + r"|"
+                         r"""\b(?:const|let|var)\s*\{([^{}]*)\}\s*=\s*require\(\s*""" + CHILD_MODULE)
 # require('child_process').exec used without a name
 CHILD_REQUIRE = r"""require\(\s*""" + CHILD_MODULE + r"""\s*\)\s*\.\s*(?:exec|execSync)"""
 PROMISIFY = re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:util\.)?promisify\(\s*([\w$.]+|"
@@ -231,12 +233,20 @@ def raw_html(project):
                     safe += 1
                 else:
                     risky.append(_at(project, rel, code, m.start(), f"{what}: {reason}"))
+        for m in TEMPLATE_HTML.finditer(code) if rel.endswith((".vue", ".svelte", ".astro")) else ():
+            quoted = m.group(1) if m.group(1) is not None else m.group(2)
+            reason = _html_risk(code, m.start(), quoted if quoted is not None else _arg(code, m.end(), stops=""))
+            if reason is None:
+                safe += 1
+            else:
+                risky.append(_at(project, rel, code, m.start(), f"template raw HTML: {reason}"))
     if risky:
         return [make("BROWSER-09", "warn", SUSPECTED + f"{plural(len(risky), 'place')} "
                      f"{'puts' if len(risky) == 1 else 'put'} dynamic HTML into the page without a sanitizer call. If "
                      "any of it can come from a user, it is stored XSS.", risky)]
     if files:
-        return [make("BROWSER-09", "pass", "No dangerouslySetInnerHTML, innerHTML or document.write with an "
+        return [make("BROWSER-09", "pass", "No dangerouslySetInnerHTML, innerHTML, document.write or template raw "
+                     "HTML (v-html, {@html}, set:html) with an "
                      f"unsanitized dynamic value ({plural(safe, 'literal or sanitized use')}).")]
     return []
 

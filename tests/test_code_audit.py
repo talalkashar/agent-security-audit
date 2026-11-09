@@ -91,11 +91,15 @@ class FixtureTest(unittest.TestCase):
         results = by_id(self.fixed_results)
         bad = {cid: r.summary for cid, r in results.items() if r.status in ("fail", "warn", "error")}
         self.assertEqual(bad, {})
-        for cid in ("NEXT-01", "NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02", "BROWSER-03",
-                    "BROWSER-04", "BROWSER-05", "BROWSER-08", "BROWSER-09", "API-30", "API-31", "API-32", "API-05",
-                    "INFRA-13", "NEXT-04", "INFRA-15"):
+        for cid in ("NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02", "BROWSER-03",
+                    "BROWSER-04", "BROWSER-05", "BROWSER-08", "BROWSER-09", "API-30", "NEXT-04"):
             with self.subTest(check=cid):
                 self.assertEqual(results[cid].status, "pass", results[cid].summary)
+        # A search for known bad patterns finds none: that is not proof, so these are manual on a clean project.
+        for cid in ("NEXT-01", "API-31", "API-32", "API-05", "INFRA-13", "INFRA-15"):
+            with self.subTest(check=cid):
+                self.assertEqual(results[cid].status, "manual", results[cid].summary)
+                self.assertTrue(results[cid].summary.startswith("Not proven:"), results[cid].summary)
         # Guards and RLS found by a static read are evidence, not proof: manual, never pass.
         for cid in ("ACCESS-01", "ACCESS-02", "ACCESS-06", "NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01",
                     "NEXT-15"):
@@ -682,8 +686,8 @@ class AccuracyTest(unittest.TestCase):
             r = audit_files({"next.config.js": cfg})
             self.assertNotEqual(r["BROWSER-03"].status, "pass", shape)
         inline = ("module.exports = { async headers() { return [\n"
-                  "  { source: '/a', headers: [{ key: 'X-Content-Type-Options', value: 'nosniff' }] },\n"
-                  "  { source: '/b', headers: [{ key: 'X-Content-Type-Options', value: 'nosniff' }] },\n] } };\n")
+                  "  { source: '/(.*)', headers: [{ key: 'X-Content-Type-Options', value: 'nosniff' }] },\n"
+                  "  { source: '/:path*', headers: [{ key: 'X-Content-Type-Options', value: 'nosniff' }] },\n] } };\n")
         self.assertEqual(audit_files({"next.config.js": inline})["BROWSER-03"].status, "pass")
 
     def test_middleware_header_on_some_requests_is_manual(self):
@@ -901,3 +905,198 @@ class VerbAgreementTest(unittest.TestCase):
 
 
 SUSPECTED = "Suspected, from a static read of the code: "
+
+
+class HostileInputTest(unittest.TestCase):
+    """Project files written to stall or crash the audit, and passes a static read cannot prove."""
+
+    def quick(self, fn, limit=3.0):
+        start = time.monotonic()
+        out = fn()
+        self.assertLess(time.monotonic() - start, limit)
+        return out
+
+    def test_gitignore_glob_does_not_backtrack(self):
+        ig = project.GitIgnore()
+        ig.add("", "*a*a*a*a*a*a*a*a*a*a*b\n")
+        self.assertFalse(self.quick(lambda: ig.ignored("a" * 4000, False), 1.0))
+        self.assertTrue(ig.ignored("xaaaaaaaaaayb", False))
+
+    def test_gitignore_odd_bracket_is_literal_and_never_crosses_slash(self):
+        ig = project.GitIgnore()
+        ig.add("", "[[\nx[&&]y\nd[/]e\n")
+        self.assertTrue(ig.ignored("[[", False))
+        self.assertTrue(ig.ignored("x&y", False))
+        self.assertFalse(ig.ignored("d/e", False))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "needs named pipes")
+    def test_named_pipes_are_not_read(self):
+        import threading
+        with tempfile.TemporaryDirectory() as tmp:
+            os.mkfifo(Path(tmp) / ".gitignore")
+            os.mkfifo(Path(tmp) / "app.js")
+            (Path(tmp) / "page.js").write_text("export default 1;\n")
+            done = []
+            t = threading.Thread(target=lambda: done.append(code_audit.run(tmp, osv=False)), daemon=True)
+            t.start()
+            t.join(10)
+            self.assertTrue(done, "the audit blocked on a named pipe")
+
+    def test_oversized_git_index_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".git").mkdir()
+            (Path(tmp) / ".git" / "index").write_bytes(b"DIRC" + b"\0" * 4096)
+            (Path(tmp) / "a.js").write_text("export const a = 1;\n")
+            with mock.patch.object(project, "MAX_INDEX_BYTES", 100):
+                self.assertIn("a.js", project.Project(tmp).files)
+
+    def test_line_numbers_count_newlines_only(self):
+        text = "a\x0cb\r\nc\x1cd\ne"
+        self.assertEqual(project.line_of(text, text.index("e")), 3)
+        self.assertEqual(project.line_text(text, 2), "c\x1cd")
+        self.assertEqual(project.line_text(text, 1), "a\x0cb")
+
+    def test_long_project_text_is_clipped_in_evidence(self):
+        f = project.Finding("a.js", 1, "x " * 5000, "y" * 5000)
+        self.assertLess(len(f.evidence()), 800)
+
+    def test_unclosed_parens_in_route_do_not_stall(self):
+        bodies = {
+            "app/api/cron/route.ts": "export async function GET(req) {\n" + "if (" * 3000 + "\n}\n",
+            "app/api/a/route.ts": "export async function GET() {\n" + "const a = verifyToken(\n" * 3000
+                                  + "return db.select().from(t);\n}\n",
+            "app/api/b/route.ts": "export async function POST() {\n requireA" + "a" * 20000 + "\n}\n",
+            "vercel.json": json.dumps({"crons": [{"path": "/api/cron", "schedule": "0 0 * * *"}]}),
+        }
+        self.quick(lambda: audit_files(bodies), 6.0)
+
+    def test_many_route_handlers_do_not_stall(self):
+        many_handlers = "export function GET() { db.select(); }\n" * 3000
+        many_helpers = "".join(f"function h{i}() {{ }}\n" for i in range(3000)) + \
+            "export function GET() { h1(); db.select(); }\n" * 100
+        for code in (many_handlers, many_helpers):
+            self.quick(lambda c=code: audit_files({"app/api/x/route.ts": c}), 6.0)
+
+    def test_odd_vercel_crons_do_not_crash(self):
+        for crons in (5, "x", [{"path": 5}], [{"path": None}], None):
+            with self.subTest(crons=crons):
+                r = audit_files({"vercel.json": json.dumps({"crons": crons}), "app/page.js": "export default 1;\n"})
+                self.assertFalse([x for x in r.values() if x.status == "error"])
+
+    def test_every_next_config_is_judged(self):
+        clean = "module.exports = { poweredByHeader: false };\n"
+        bad = "module.exports = { poweredByHeader: false, productionBrowserSourceMaps: true };\n"
+        r = audit_files({"apps/a/next.config.js": clean, "apps/b/next.config.js": bad})
+        self.assertEqual(r["NEXT-02"].status, "fail")
+
+    def test_next_config_values_not_written_out_are_manual(self):
+        cases = {
+            "NEXT-02": "productionBrowserSourceMaps: process.env.MAPS === '1'",
+            "NEXT-07": "experimental: { serverActions: { allowedOrigins: process.env.ORIGINS.split(',') } }",
+            "NEXT-11": "images: { remotePatterns: [{ hostname: process.env.IMG_HOST }] }",
+        }
+        for cid, setting in cases.items():
+            with self.subTest(check=cid):
+                r = audit_files({"next.config.js": f"module.exports = {{ poweredByHeader: false, {setting} }};\n"})
+                self.assertEqual(r[cid].status, "manual", r[cid].summary)
+
+    def test_wildcards_on_shared_platforms_fail(self):
+        cases = {
+            "NEXT-07": "experimental: { serverActions: { allowedOrigins: ['my.app.com', '*.vercel.app'] } }",
+            "NEXT-11": "images: { remotePatterns: [{ hostname: '**.vercel.app' }] }",
+        }
+        for cid, setting in cases.items():
+            with self.subTest(check=cid):
+                r = audit_files({"next.config.js": f"module.exports = {{ {setting} }};\n"})
+                self.assertEqual(r[cid].status, "fail", r[cid].summary)
+        url = "module.exports = { images: { remotePatterns: [new URL('https://**/**')] } };\n"
+        self.assertEqual(audit_files({"next.config.js": url})["NEXT-11"].status, "fail")
+        many = ("module.exports = { experimental: { serverActions: { allowedOrigins: ["
+                + "'a'      " * 3000 + "x] } } };\n")
+        self.assertEqual(self.quick(lambda: audit_files({"next.config.js": many}), 3.0)["NEXT-07"].status, "manual")
+        own = "module.exports = { images: { remotePatterns: [{ hostname: '*.example.com' }] } };\n"
+        self.assertEqual(audit_files({"next.config.js": own})["NEXT-11"].status, "pass")
+
+    def test_headers_on_one_path_only_are_not_a_pass(self):
+        rule = "{ key: 'X-Content-Type-Options', value: 'nosniff' }"
+        cfg = ("module.exports = { async headers() { return [{ source: '/api/:path*', headers: ["
+               + rule + "] }]; } };\n")
+        self.assertEqual(audit_files({"next.config.js": cfg})["BROWSER-03"].status, "manual")
+        vercel = {"headers": [{"source": "/api/(.*)", "headers": [{"key": "X-Content-Type-Options",
+                                                                    "value": "nosniff"}]}]}
+        self.assertEqual(audit_files({"vercel.json": json.dumps(vercel)})["BROWSER-03"].status, "manual")
+        vercel["headers"][0]["source"] = "/(.*)"
+        self.assertEqual(audit_files({"vercel.json": json.dumps(vercel)})["BROWSER-03"].status, "pass")
+
+    def test_hostile_sql_does_not_stall(self):
+        text = ("create function public.f() returns int language sql as $$ select 1 $$;\n"
+                "grant execute on function public.f to " + "to " * 20000 + "(;\n"
+                "create table public.t (user_id uuid);\n"
+                "create policy p on public.t " + "to " * 20000 + "(;\n")
+        self.quick(lambda: audit_files({"supabase/migrations/1.sql": text}), 4.0)
+        deep = "(" * 1900 + "true" + ")" * 1900
+        self.assertEqual(self.quick(lambda: sql.classify(deep), 1.0), "open")
+        self.assertEqual(sql.classify("(" * 3000 + "true" + ")" * 3000), "unknown")
+
+    def test_grant_and_policy_roles_still_read(self):
+        text = ("create function public.f() returns int language sql security definer as $$ select 1 $$;\n"
+                "revoke execute on function public.f() from public, anon;\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "supabase" / "migrations").mkdir(parents=True)
+            (Path(tmp) / "supabase" / "migrations" / "1.sql").write_text(
+                text + "create table public.t (user_id uuid);\n"
+                "create policy p on public.t for select to authenticated using (auth.uid() = user_id);\n")
+            _, _, policies, _, functions = sql.parse(project.Project(tmp))
+        self.assertEqual(functions["public.f"]["revoked"], {"public", "anon"})
+        self.assertEqual(policies[0]["roles"], "authenticated")
+
+    def test_odd_supabase_config_does_not_crash(self):
+        for config in ('api = "x"\n', '[api]\nschemas = "api"\n', "[api]\nschemas = [1, 2]\n"):
+            with self.subTest(config=config):
+                r = audit_files({"supabase/config.toml": config,
+                                 "supabase/migrations/1.sql": "create table public.t (id int);\n"})
+                self.assertEqual(r["ACCESS-01"].status, "fail", r["ACCESS-01"].summary)
+
+    def test_workflow_blank_lines_do_not_stall(self):
+        wf = "on: push\npermissions: {}\njobs:\n  a:\n    steps:\n" + "\n" * 100000 + "      - run: |\n" * 3000
+        self.quick(lambda: audit_files({".github/workflows/ci.yml": wf}), 4.0)
+        self.quick(lambda: audit_files({".github/workflows/ci.yml": "on: push\n" + " " * 200000 + "x\n"}), 4.0)
+
+    def test_hostile_js_and_toml_do_not_stall(self):
+        files = {"netlify.toml": "\n" * 60000 + "[[headers]]\n" * 2000,
+                 "app/api/a/route.ts": "import { a " * 20000 + "\nexport async function POST(req) {\n  " + "a" * 60000
+                                       + "\n  return db.from('t').insert(await req.json());\n}\n"}
+        self.quick(lambda: audit_files(files), 6.0)
+
+    def test_github_script_injection_fails(self):
+        wf = ("on: issues\npermissions: {}\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n"
+              "      - uses: actions/github-script@v7\n        with:\n          script: |\n"
+              "            console.log('${{ github.event.issue.title }}')\n")
+        self.assertEqual(audit_files({".github/workflows/ci.yml": wf})["INFRA-15"].status, "fail")
+
+    def test_template_raw_html_is_a_sink(self):
+        for rel, src in (("a.vue", '<template><div v-html="post.body"></div></template>\n'),
+                         ("b.svelte", "<div>{@html post.body}</div>\n"),
+                         ("c.astro", "<div set:html={post.body} />\n")):
+            with self.subTest(file=rel):
+                self.assertEqual(audit_files({rel: src})["BROWSER-09"].status, "warn")
+        self.assertEqual(audit_files({"d.vue": "<div v-html=\"'<b>hi</b>'\"></div>\n"})["BROWSER-09"].status, "pass")
+
+    def test_next_versions_unproven_when_a_lockfile_is_not_read(self):
+        lock = json.dumps({"lockfileVersion": 3, "packages": {"node_modules/next": {"version": "15.5.9"}}})
+        files = {"package.json": '{"dependencies": {"next": "15.5.9"}}', "package-lock.json": lock,
+                 "apps/old/package.json": '{"dependencies": {"next": "13.0.0"}}', "apps/old/bun.lockb": "\0"}
+        r = audit_files(files, osv=True, osv_query=lambda pkgs, timeout: {})
+        self.assertEqual(r["NEXT-04"].status, "manual", r["NEXT-04"].summary)
+
+    def test_only_static_proof_checks_pass(self):
+        self.assertLessEqual(code_audit.STATIC_PROOF, set(code_audit.CHECKS))
+        self.assertEqual(code_audit.NO_STATIC_PASS, set(code_audit.CHECKS) - code_audit.STATIC_PROOF)
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("code_vuln", "code_fixed"):
+                for r in code_audit.run(copy_fixture(name, tmp), osv_query=fake_osv)[1]:
+                    if r.check_id not in code_audit.STATIC_PROOF:
+                        self.assertNotEqual(r.status, "pass", r.check_id)
+        fake = Result("NEXT-01", "pass", "no keys found")
+        self.assertEqual(code_audit.merge([], [fake])[0].status, "manual")
+        self.assertEqual(code_audit.merge([Result("NEXT-01", "skip", "x")], [fake])[0].status, "manual")

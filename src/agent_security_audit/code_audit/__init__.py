@@ -17,10 +17,13 @@ from .project import Project
 MODULES = (secrets, sql, nextjs, patterns, request_input, ci)
 # Every catalog check the code audit can settle. Docs and `asa scan` hints read this.
 CHECKS = tuple(dict.fromkeys(cid for mod in (*MODULES, deps) for cid in mod.CHECKS))
-# Checks a static read can never pass: it finds an auth call or an RLS statement, not proof that it gates every
-# request on the running system. The analyzers report these as manual with the evidence; run() enforces it.
-NO_STATIC_PASS = frozenset({"NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01", "ACCESS-01", "ACCESS-02", "ACCESS-06",
-                            "NEXT-15"})
+# The only checks the code audit may pass: each pass rests on a literal setting, a header value on a catch-all route
+# or a locked version that the read sees in full. Every other check is at most manual from code: an auth call, an RLS
+# statement in a migration or a search for known bad patterns is not proof about the running system. An allowlist,
+# so a new check starts out unable to pass. run() and merge() enforce it; a test keeps it a subset of CHECKS.
+STATIC_PROOF = frozenset({"NEXT-02", "NEXT-03", "NEXT-04", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02",
+                          "BROWSER-03", "BROWSER-04", "BROWSER-05", "BROWSER-08", "BROWSER-09", "API-30"})
+NO_STATIC_PASS = frozenset(CHECKS) - STATIC_PROOF
 
 
 def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=None):
@@ -40,9 +43,7 @@ def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=Non
         results += _unread(deps.dependencies(project, osv=osv, osv_query=osv_query, timeout=timeout), project)
     except Exception as exc:  # noqa: BLE001
         results.append(errored("INFRA-13", f"dependency analyzer failed: {type(exc).__name__}: {exc}"))
-    guessed = [r for r in results if r.check_id in NO_STATIC_PASS]
-    results = [r for r in results if r.check_id not in NO_STATIC_PASS] + \
-        _not_proven(guessed, "A static read cannot prove this check.")
+    results = _static_only(results)
     if gap := project.coverage_gap():
         results = _not_proven(results, f"The audit did not cover the whole project: {gap}.")
     known = catalog.by_id()
@@ -53,6 +54,12 @@ def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=Non
         if r.status in ("fail", "warn") and not r.fix:
             r.fix = known[r.check_id].build
     return str(project.root), out
+
+
+def _static_only(results):
+    guessed = [r for r in results if r.check_id not in STATIC_PROOF]
+    return [r for r in results if r.check_id in STATIC_PROOF] + \
+        _not_proven(guessed, "A static read cannot prove this check.")
 
 
 def _not_proven(results, note):
@@ -101,7 +108,7 @@ def merge(live, code):
         elif r.status in ("pass", "warn") or (c.status == "pass" and r.status in ("manual", "error")):
             keep, other = r, c
         else:
-            keep, other = c, r
+            keep, other = _static_only([c])[0], r  # also for code results that did not come from run()
         src_keep, src_other = ("live", "code") if keep is r else ("code", "live")
         evidence = [f"{src_keep}: {e}" for e in keep.evidence]
         if other.status != "manual":
@@ -109,5 +116,5 @@ def merge(live, code):
                                                                              other.evidence[:10]]
         out.append(Result(keep.check_id, keep.status, keep.summary, evidence, keep.fix,
                           keep.locations or other.locations))
-    out += sorted(by_id.values(), key=lambda r: (_MERGE_RANK[r.status], r.check_id))
+    out += sorted(_static_only(by_id.values()), key=lambda r: (_MERGE_RANK[r.status], r.check_id))
     return out

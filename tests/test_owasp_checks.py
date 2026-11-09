@@ -69,12 +69,12 @@ class SsrfCodeTest(unittest.TestCase):
         src = "export async function GET(req) {\n  const row = await load();\n  return fetch(row.url);\n}\n"
         self.assertEqual(self.status({ROUTE: src}), "manual")
 
-    def test_fixed_origins_pass(self):
+    def test_fixed_origins_are_clean_but_not_proven(self):
         src = ("const BASE = 'https://api.example.com/v1';\nexport async function GET(req) {\n"
                "  const id = req.nextUrl.searchParams.get('id');\n"
                "  await fetch(`https://api.example.com/items/${id}`);\n  await fetch(BASE);\n"
                "  await fetch(process.env.UPSTREAM_URL);\n  return fetch('/api/health');\n}\n")
-        self.assertEqual(self.status({ROUTE: src}), "pass")
+        self.assertEqual(self.status({ROUTE: src}), "manual")  # clean pattern search: not proof (STATIC_PROOF)
 
     def test_origin_without_slash_is_not_fixed(self):
         # `https://api.example.com${x}` lets x add `@other.host`, so the host is not fixed.
@@ -97,12 +97,12 @@ class SsrfCodeTest(unittest.TestCase):
         src = "import { API_URL } from './config';\nexport async function GET(req) {\n  return fetch(API_URL);\n}\n"
         self.assertEqual(self.status({ROUTE: src}), "manual")
 
-    def test_env_or_constant_origin_with_request_path_passes(self):
+    def test_env_or_constant_origin_with_request_path_is_clean_but_not_proven(self):
         src = ("const BASE = 'https://api.example.com';\nconst { SEARCH_URL } = process.env;\n"
                "export async function GET(req) {\n  const q = req.nextUrl.searchParams.get('q');\n"
                "  await fetch(`${process.env.API_URL}/search?q=${q}`);\n  await fetch(`${BASE}/items/${q}`);\n"
                "  return fetch(SEARCH_URL);\n}\n")
-        self.assertEqual(self.status({ROUTE: src}), "pass")
+        self.assertEqual(self.status({ROUTE: src}), "manual")  # clean pattern search: not proof (STATIC_PROOF)
         # Request input in the origin slot is still a warning.
         src = ("export async function GET(req) {\n  const host = req.query.host;\n"
                "  return fetch(`${host}/search`);\n}\n")
@@ -145,13 +145,13 @@ class MassAssignmentCodeTest(unittest.TestCase):
                                      "  const { id, ...rest } = await req.json();\n"
                                      "  await db.update(users).set(rest);\n}\n"), "warn")
 
-    def test_named_fields_and_schema_pass(self):
+    def test_named_fields_and_schema_are_clean_but_not_proven(self):
         src = ("export async function POST(req) {\n  const input = Schema.parse(await req.json());\n"
                "  const { title } = await req.json();\n"
                "  await supabase.from('notes').insert({ title, user_id: user.id });\n"
                "  await supabase.from('notes').update(input).eq('id', 1);\n"
                "  await prisma.note.create({ data: { title: input.title } });\n}\n")
-        self.assertEqual(self.status(src), "pass")
+        self.assertEqual(self.status(src), "manual")  # clean pattern search: not proof (STATIC_PROOF)
 
     def test_json_parse_of_body_is_the_whole_body(self):
         # JSON.parse decodes text; it checks no fields, so it is not a schema.
@@ -164,7 +164,7 @@ class MassAssignmentCodeTest(unittest.TestCase):
         src = ("export default async function handler(req, res) {\n"
                "  const payload = Profile.parse(JSON.parse(req.body));\n"
                "  await supabase.from('profiles').insert(payload);\n}\n")
-        self.assertEqual(self.status(src, "pages/api/save.ts"), "pass")
+        self.assertEqual(self.status(src, "pages/api/save.ts"), "manual")  # clean pattern search: not proof (STATIC_PROOF)
 
     def test_untraced_payload_is_manual(self):
         self.assertEqual(self.status("export async function POST(req) {\n"

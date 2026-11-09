@@ -8,9 +8,11 @@ records it so results that need full coverage can say so instead of passing.
 
 from __future__ import annotations
 
+import bisect
 import os
 import posixpath
 import re
+import stat
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +28,7 @@ LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn
 MAX_BYTES = 2_000_000
 MAX_LOCK_BYTES = 30_000_000  # lockfiles of large projects pass 2 MB; they are parsed, not quoted
 MAX_FILES = 20_000
+MAX_INDEX_BYTES = 64_000_000  # a git index for hundreds of thousands of files; a larger one is not read
 WALK_LIMIT = 100_000  # the tree walk stops here, so pointing the audit at a home folder still ends
 JS_EXT = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".svelte", ".vue", ".astro")
 
@@ -72,35 +75,126 @@ def read_git_index(data):
 
 # --- .gitignore ----------------------------------------------------------------------------------------------
 
-def _glob_to_regex(glob):
-    out, i = "", 0
+def _glob_tokens(glob):
+    """A gitignore glob as tokens: ("lit", c), ("one",), ("cls", text), ("star",) for *, ("dstar",) for ** and
+    ("dslash",) for a leading or inner **/ (any run of whole directories, or none)."""
+    out, i = [], 0
     while i < len(glob):
         c = glob[i]
         if glob.startswith("**/", i):
-            out += "(?:.*/)?"
+            out.append(("dslash",))
             i += 3
             continue
         if glob.startswith("/**", i) and i + 3 == len(glob):
-            out += "/.*"
+            out += [("lit", "/"), ("dstar",)]
             i += 3
             continue
         if c == "*":
-            out += ".*" if glob.startswith("**", i) else "[^/]*"
+            out.append(("dstar",) if glob.startswith("**", i) else ("star",))
             i += 2 if glob.startswith("**", i) else 1
             continue
         if c == "?":
-            out += "[^/]"
-        elif c == "[":
-            j = glob.find("]", i + 1)
-            if j == -1:
-                out += re.escape(c)
-            else:
-                out += "[" + glob[i + 1:j].replace("!", "^", 1).replace("\\", "\\\\") + "]"
-                i = j
+            out.append(("one",))
+        elif c == "[" and (j := glob.find("]", i + 1)) != -1 and _valid_class(cls := glob[i + 1:j]):
+            out.append(("cls", cls))
+            i = j
         else:
-            out += re.escape(c)
+            out.append(("lit", c))
         i += 1
     return out
+
+
+def _class_regex(cls):
+    """A bracket class as a regex that never matches "/" (git's rule). Every member is escaped, so text such as [[
+    or && cannot become a nested set; only a "-" between two members keeps its range meaning."""
+    neg = cls[:1] in ("!", "^")
+    body = cls[neg:]
+    body = "".join(c if c == "-" and 0 < k < len(body) - 1 and "-" not in (body[k - 1], body[k + 1]) else re.escape(c)
+                   for k, c in enumerate(body))
+    return "(?!/)[" + ("^" if neg else "") + body + "]"
+
+
+def _valid_class(cls):
+    try:
+        re.compile(_class_regex(cls))
+    except re.error:  # [z-a] or an empty class: git reads such a bracket as text, and so do we
+        return False
+    return True
+
+
+_TOKEN_REGEX = {"one": "[^/]", "star": "[^/]*", "dstar": ".*", "dslash": "(?:.*/)?"}
+# A pattern with more wildcards than this backtracks polynomially in the path length (degree = wildcard count), so a
+# hostile .gitignore could stall the walk: such patterns run on the linear matcher in _nfa_match instead.
+_REGEX_WILDCARDS = 2
+
+
+def _glob_to_regex(tokens):
+    return "".join(re.escape(t[1]) if t[0] == "lit" else _class_regex(t[1]) if t[0] == "cls" else _TOKEN_REGEX[t[0]]
+                   for t in tokens)
+
+
+def _nfa_match(tokens, classes, path):
+    """Whether path matches the whole token list, in O(len(path) * len(tokens)) with no backtracking. A state is a
+    token index; -1 - i marks being inside the directory run of the dslash token i."""
+    end = len(tokens)
+
+    def closure(states):
+        out, todo = set(), list(states)
+        while todo:
+            s = todo.pop()
+            if s in out:
+                continue
+            out.add(s)
+            if 0 <= s < end and tokens[s][0] in ("star", "dstar", "dslash"):
+                todo.append(s + 1)
+        return out
+
+    states = closure({0})
+    for ch in path:
+        nxt = set()
+        for s in states:
+            if s < 0:
+                nxt.add(s)
+                if ch == "/":
+                    nxt.add(-1 - s + 1)
+                continue
+            if s == end:
+                continue
+            kind = tokens[s][0]
+            if (kind == "lit" and ch == tokens[s][1]) or (kind == "one" and ch != "/") or \
+                    (kind == "cls" and ch != "/" and classes[s].fullmatch(ch)):
+                nxt.add(s + 1)
+            elif kind == "star" and ch != "/" or kind == "dstar":
+                nxt.add(s)
+            elif kind == "dslash":
+                nxt.add(-1 - s)
+                if ch == "/":
+                    nxt.add(s + 1)
+        states = closure(nxt)
+        if not states:
+            return False
+    return end in states
+
+
+class _Glob:
+    """One compiled rule: a regex when it has few wildcards, else the linear token matcher."""
+
+    def __init__(self, tokens):
+        self.tokens = tokens
+        if sum(t[0] in _TOKEN_REGEX and t[0] != "one" for t in tokens) <= _REGEX_WILDCARDS:
+            self.regex, self.classes = re.compile(_glob_to_regex(tokens) + r"\Z", re.DOTALL), None
+        else:
+            self.regex = None
+            self.classes = {i: re.compile(_class_regex(t[1])) for i, t in enumerate(tokens) if t[0] == "cls"}
+
+    def match(self, path):
+        if self.regex is not None:
+            return self.regex.match(path) is not None
+        return _nfa_match(self.tokens, self.classes, path)
+
+
+MAX_IGNORE_RULES = 5_000
+MAX_IGNORE_BYTES = 1_000_000
 
 
 class GitIgnore:
@@ -120,10 +214,11 @@ class GitIgnore:
             line = line.rstrip("/")
             if not line:
                 continue
+            if len(self.rules) >= MAX_IGNORE_RULES:
+                return  # more rules than any real project has: the rest are dropped, so more files are read, not fewer
             anchored = "/" in line
-            pat = _glob_to_regex(line.lstrip("/"))
-            regex = re.compile(("^" if anchored else "^(?:.*/)?") + pat + "$")
-            self.rules.append((base, regex, negate, dir_only))
+            tokens = _glob_tokens(line.lstrip("/"))
+            self.rules.append((base, _Glob(tokens if anchored else [("dslash",)] + tokens), negate, dir_only))
 
     def ignored(self, rel, is_dir):
         result = False
@@ -147,10 +242,16 @@ class Finding:
     snippet: str = ""
 
     def evidence(self):
-        return f"{self.path}:{self.line}: {self.note}" + (f": {self.snippet}" if self.snippet else "")
+        return f"{self.path}:{self.line}: {_clip(self.note)}" + (f": {_clip(self.snippet)}" if self.snippet else "")
 
     def location(self):
-        return {"path": self.path, "line": self.line, "message": self.note}
+        return {"path": self.path, "line": self.line, "message": _clip(self.note)}
+
+
+def _clip(note, limit=300):
+    """Notes quote names from the project (tables, cron paths, env vars); a hostile one must not flood the report."""
+    note = " ".join(note.split())
+    return note if len(note) <= limit else note[:limit] + "..."
 
 
 ASSIGNED_SECRET = re.compile(r"""((?:secret|token|password|passwd|pwd|api[_-]?key|private[_-]?key|service[_-]?role)"""
@@ -190,9 +291,9 @@ class Project:
 
     def _list_files(self):
         index = self.root / ".git" / "index"
-        if index.is_file():
+        if index_bytes := self._small_file(index, MAX_INDEX_BYTES, binary=True):
             try:
-                paths = read_git_index(index.read_bytes())
+                paths = read_git_index(index_bytes)
             except (ValueError, IndexError, struct.error, OSError):
                 paths = None
             if paths is not None:
@@ -211,19 +312,13 @@ class Project:
 
     def _walk(self, exclude):
         ignore, out = GitIgnore(), []
-        if exclude is not None and exclude.is_file():
-            try:
-                ignore.add("", exclude.read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                pass
+        if exclude is not None:
+            ignore.add("", self._small_file(exclude, MAX_IGNORE_BYTES))
         for dirpath, dirnames, filenames in os.walk(self.root):
             rel_dir = os.path.relpath(dirpath, self.root).replace(os.sep, "/")
             rel_dir = "" if rel_dir == "." else rel_dir
             if ".gitignore" in filenames:
-                try:
-                    ignore.add(rel_dir, (Path(dirpath) / ".gitignore").read_text(encoding="utf-8", errors="replace"))
-                except OSError:
-                    pass
+                ignore.add(rel_dir, self._small_file(Path(dirpath) / ".gitignore", MAX_IGNORE_BYTES))
             keep = []
             for d in sorted(dirnames):
                 rel = f"{rel_dir}/{d}" if rel_dir else d
@@ -240,6 +335,18 @@ class Project:
                         return out
         return out
 
+    def _small_file(self, path, limit, binary=False):
+        """A regular file under the root, read whole when it is at most limit bytes; otherwise empty. A FIFO, device
+        or symlink named .gitignore or .git/index must not block or flood the walk."""
+        try:
+            st = os.lstat(path)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > limit or not self._inside(path):
+                return b"" if binary else ""
+            data = Path(path).read_bytes()
+        except OSError:
+            return b"" if binary else ""
+        return data if binary else data.decode("utf-8", "replace")
+
     def _keep(self, rel):
         parts = rel.split("/")
         if any(_skip_dir(p) for p in parts[:-1]):
@@ -253,9 +360,11 @@ class Project:
             full = self.root / rel
             limit = MAX_LOCK_BYTES if posixpath.basename(rel) in LOCKFILES else MAX_BYTES
             try:
-                if not self._inside(full):
+                st = full.stat()
+                # Only regular files: reading a FIFO or device named like a source file would block or never end.
+                if not stat.S_ISREG(st.st_mode) or not self._inside(full):
                     raise OSError
-                if full.stat().st_size > limit:
+                if st.st_size > limit:
                     with open(full, "rb") as fh:
                         if b"\0" not in fh.read(8192):
                             self.oversized.add(rel)
@@ -300,13 +409,27 @@ def is_test_path(rel):
     return TEST_PATH.search(rel) is not None
 
 
+_LINES = {}  # id(text) -> (text, newline offsets, lines): analyzers ask for many lines of the same few texts
+
+
+def _lines(text):
+    hit = _LINES.get(id(text))
+    if hit is None or hit[0] is not text:
+        if len(_LINES) >= 16:
+            _LINES.clear()
+        hit = _LINES[id(text)] = (text, [m.start() for m in re.finditer("\n", text)], text.split("\n"))
+    return hit
+
+
 def line_of(text, offset):
-    return text.count("\n", 0, offset) + 1
+    """The 1-based line of offset. Indexed once per text, so a file with many findings stays linear."""
+    return bisect.bisect_left(_lines(text)[1], offset) + 1
 
 
 def line_text(text, line):
-    lines = text.splitlines()
-    return lines[line - 1] if 0 < line <= len(lines) else ""
+    """Line number `line` counted the same way as line_of (by "\\n" only), without its trailing "\\r"."""
+    lines = _lines(text)[2]
+    return lines[line - 1].removesuffix("\r") if 0 < line <= len(lines) else ""
 
 
 def strip_js_comments(text):
