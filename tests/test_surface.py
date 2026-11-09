@@ -222,6 +222,24 @@ class MetadataTargetTest(unittest.TestCase):
             runner.run("https://example.com", ids=["BROWSER-03"])
         self.assertEqual([c.args[0] for c in check.call_args_list], ["https://example.com", "https://www.example.com"])
 
+    def test_a_name_that_does_not_resolve_ends_the_run_before_any_request(self):
+        # First lookup fails, a second would answer the metadata address: the run must stop at the first.
+        lookups = []
+
+        def flaky(self):
+            lookups.append(1)
+            if len(lookups) == 1:
+                raise OSError("name does not resolve")
+            return ["169.254.169.254"]
+
+        with mock.patch.object(runner.RecordingClient, "addresses", flaky), \
+                mock.patch.object(runner, "canonical_target") as canonical, \
+                self.assertRaises(scope.ScopeError) as caught:
+            runner.run("https://rebind.example", ids=["BROWSER-03"])
+        self.assertIn("could not reach", str(caught.exception))
+        self.assertEqual(len(lookups), 1)
+        canonical.assert_not_called()
+
 
 class ScopeRecordTest(unittest.TestCase):
     """Fix 4: every report records what the run did."""

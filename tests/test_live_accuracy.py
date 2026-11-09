@@ -3,6 +3,8 @@ responses never crash a check. Stub clients only; nothing leaves the machine."""
 
 import json
 import unittest
+from datetime import date, timedelta
+from unittest import mock
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from agent_security_audit import catalog, runner, scope
@@ -146,13 +148,13 @@ class GraphqlProofTest(unittest.TestCase):
 class SupabaseProofTest(unittest.TestCase):
     PROJECT = "https://" + "abcdefghijklmnopqrst" + ".supabase.co"
 
-    def run_check(self, answers, js=""):
+    def run_check(self, answers, js="", **opts):
         """answers: {table: (status, content_range or None)}"""
         def external(m, u, h, b):
             table = u.split("/rest/v1/")[1].split("?")[0]
             status, cr = answers.get(table, (401, None))
             return resp(status, [("Content-Range", cr)] if cr else [], "")
-        c = ctx({"external": external}, allow_supabase=True)
+        c = ctx({"external": external}, allow_supabase=True, **opts)
         c.authorized = True
         c.cache["scripts"] = [("/app.js", f'const u="{self.PROJECT}";const k="sb_publishable_{"a" * 22}";'
                                           + (js or "".join(f'db.from("{t}");' for t in answers)))]
@@ -167,8 +169,27 @@ class SupabaseProofTest(unittest.TestCase):
         self.assertEqual(r.status, "manual")
 
     def test_401_and_403_pass(self):
-        _, r = self.run_check({"profiles": (401, None), "orders": (403, None)})
+        _, r = self.run_check({"profiles": (401, None), "orders": (403, None)},
+                              supabase_tables=["profiles", "orders"])
         self.assertEqual(r.status, "pass", r.summary)
+        self.assertIn("named with --supabase-table", r.summary)
+
+    def test_bundle_tables_alone_cannot_pass(self):
+        # The JavaScript names only the tables the pages query; any other table is untested.
+        _, r = self.run_check({"profiles": (401, None), "orders": (403, None)})
+        self.assertEqual(r.status, "manual", r.summary)
+        self.assertIn("other tables were not tested", r.summary)
+
+    def test_more_tables_than_the_limit_cannot_pass(self):
+        names = [f"t{i}" for i in range(supabase.MAX_TABLES + 1)]
+        _, r = self.run_check({}, supabase_tables=names)
+        self.assertEqual(r.status, "manual", r.summary)
+
+    def test_api_root_that_is_not_openapi_is_handled(self):
+        for body in ("[]", '"x"', '{"paths": []}'):
+            with self.subTest(body=body):
+                c = ctx({"external": lambda m, u, h, b, body=body: resp(200, [], body)})
+                self.assertEqual(supabase.list_tables(c, self.PROJECT, "k"), (None, 200))
 
     def test_row_free_probe(self):
         c, r = self.run_check({"profiles": (200, "0-0/42"), "notes": (200, "*/0")})
@@ -389,7 +410,31 @@ class ErrorPathProofTest(unittest.TestCase):
                 self.assertEqual(self.run_check(status, headers).status, "manual")
 
 
+class SriMetadataTest(unittest.TestCase):
+    def status(self, integrity):
+        body = f'<script src="https://cdn.test/lib.js" integrity="{integrity}" crossorigin="anonymous"></script>'
+        return webapp.subresource_integrity(ctx({"/": html(body)})).status
+
+    def test_metadata_browsers_ignore_is_not_integrity(self):
+        # No valid sha256/384/512 token: browsers load the file unchecked.
+        for value in ("x", "md5-abc", "sha1-abc", "sha384", "sha256-!!"):
+            with self.subTest(value=value):
+                self.assertEqual(self.status(value), "warn")
+        self.assertEqual(self.status("md5-abc sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC"),
+                         "pass")
+
 class LibraryBannerTest(unittest.TestCase):
+    def test_stale_advisory_list_cannot_pass(self):
+        # A listed library at a version safe on the snapshot date may be covered by a later advisory.
+        c = ctx({"/": html('<script src="/jquery-3.7.1.min.js"></script>')})
+        self.assertEqual(webapp.vulnerable_libraries(c).status, "pass")
+        later = date.fromisoformat(webapp.LIBRARIES_DATE) + timedelta(days=webapp.LIBRARIES_MAX_AGE_DAYS + 1)
+        with mock.patch.object(webapp, "_today", return_value=later):
+            c = ctx({"/": html('<script src="/jquery-3.7.1.min.js"></script>')})
+            r = webapp.vulnerable_libraries(c)
+        self.assertEqual(r.status, "manual")
+        self.assertIn("stale", r.summary)
+
     def test_requires_line_in_a_plugin_header_is_not_jquery(self):
         text = "/*!\n * jQuery Form Plugin\n * version: 4.3.0\n * Requires jQuery v1.7.2 or later\n */\n;(function(){})();"
         self.assertEqual(webapp.find_libraries("x", text=text), [])
@@ -408,6 +453,12 @@ class OpenRedirectFormsTest(unittest.TestCase):
             return answer(parse_qs(urlsplit(u).query).get("next", ["/"])[0])
         c = ctx({"/": html('<a href="/login?next=/account">in</a>'), "/login": route})
         return c, webapp.open_redirect(c)
+
+    def test_parameter_that_never_redirects_is_manual(self):
+        # The login page ignores ?next= until sign-in, so no probe exercised the redirect: nothing is proven.
+        _, r = self.run_check(lambda d: html("<form method=post></form>"))
+        self.assertEqual(r.status, "manual")
+        self.assertIn("/login?next=", r.summary)
 
     def test_scheme_relative_and_backslash_forms(self):
         # Blocks absolute URLs only: "//host" still leaves the site.

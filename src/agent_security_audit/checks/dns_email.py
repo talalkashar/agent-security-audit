@@ -75,7 +75,10 @@ def _txt_lookup(ctx, name):
 
 
 def txt_records(ctx, name):
-    return _txt_lookup(ctx, name)[1]
+    rcode, records = _txt_lookup(ctx, name)
+    if rcode not in (0, NXDOMAIN):  # SERVFAIL or REFUSED: the record may exist, so absence is not proven
+        raise OSError(f"DNS lookup for {name[:120]} failed (response code {rcode})")
+    return records
 
 
 def _spf_records(records):
@@ -207,6 +210,9 @@ def dmarc(ctx):
         where = f"_dmarc.{domain}" + (f" or _dmarc.{org}" if org != domain else "")
         return failed("INFRA-07", f"{domain} has no DMARC record, so receivers have no policy for spoofed mail.",
                       [f"TXT {where}: none"])
+    if len(found) > 1:  # RFC 7489 6.6.3: receivers discard every record and apply no policy
+        return failed("INFRA-07", f"{name} has {len(found)} DMARC records, so receivers ignore all of them and apply "
+                      "no policy. Keep one.", [f"TXT {name}: {r}" for r in found[:5]])
     record = found[0]
     ev = [f"TXT {name}: {record}"]
     tags = {}

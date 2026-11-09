@@ -183,10 +183,9 @@ def _call(fn, ctx, deadline):
 
 def _check_scope(target, client, authorized, private_needs_authorization):
     """Scope checks on the addresses the client pinned: it connects only to those, so the checks hold all scan."""
-    try:
-        addresses = client.addresses()
-    except OSError:  # does not resolve: the name checks still run, and the first request reports it unreachable
-        addresses = []
+    # A name that does not resolve raises here and ends the run as unreachable. Going on with no addresses would
+    # let the first request look the name up again, after the checks, and connect to whatever it then answered.
+    addresses = client.addresses()
     check_target_allowed(target, addresses=addresses)
     if private_needs_authorization:
         check_private_allowed(target, addresses, authorized)

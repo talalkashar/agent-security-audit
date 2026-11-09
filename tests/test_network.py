@@ -263,6 +263,24 @@ class CaaTest(unittest.TestCase):
         self.assertEqual(self.run_caa(recs, sans=("*.example.com",)).status, "fail")
         self.assertEqual(self.run_caa(recs).status, "pass")
 
+    def test_caa_without_issue_tag_does_not_limit_issuance(self):
+        # RFC 8659 4.2: iodef and issuewild leave non-wildcard issuance open to every CA.
+        for recs in (['0 iodef "mailto:sec@example.com"'], ['0 issuewild "letsencrypt.org"']):
+            with self.subTest(recs=recs):
+                self.assertEqual(self.run_caa(recs).status, "warn")
+        dns = {("example.com", "CAA"): {"Status": 0, "Answer": ans("example.com", 257, '0 iodef "mailto:a@b.c"')}}
+        self.assertEqual(network.caa(ctx("http://example.com", dns=dns)).status, "warn")
+
+    def test_malformed_hex_caa_does_not_crash(self):
+        for data in ("\\# 1 00", "\\# 2 zz", "\\# 0"):
+            with self.subTest(data=data):
+                self.assertEqual(network.parse_caa(data), ("", ""))
+
+    def test_caa_servfail_is_not_no_record(self):
+        dns = {("example.com", "CAA"): {"Status": 2}}
+        with self.assertRaises(OSError):
+            network.caa(ctx(dns=dns))
+
     def test_plain_http_checks_presence_only(self):
         dns = {("example.com", "CAA"): {"Status": 0, "Answer": ans("example.com", 257, '0 issue "pki.goog"')}}
         c = ctx("http://example.com", dns=dns)
@@ -326,6 +344,13 @@ class DanglingCnameTest(unittest.TestCase):
         dns = {("example.com", "A"): {"Status": 0, "Answer": ans("example.com", 5, "x.azurewebsites.net.")
                                       + ans("x.azurewebsites.net", 1, "203.0.113.8")}}
         self.assertEqual(network.dangling_cname(ctx(dns=dns)).status, "pass")
+
+    def test_servfail_is_not_no_cname(self):
+        # A failed lookup hides the record set; it is not proof that there is no CNAME.
+        dns = {("www.example.com", "A"): {"Status": 2}}
+        r = network.dangling_cname(ctx(dns=dns))
+        self.assertEqual(r.status, "manual")
+        self.assertIn("www.example.com", r.summary)
 
     def test_unclaimed_page_fingerprint(self):
         dns = {("example.com", "A"): {"Status": 0, "Answer": ans("example.com", 5, "owner.github.io.")}}

@@ -240,7 +240,12 @@ def parse_caa(data):
     """Return (tag, value) from a CAA answer in presentation form (0 issue "ca.example") or RFC 3597 hex form."""
     data = data.strip()
     if data.startswith("\\#"):
-        raw = bytes.fromhex("".join(data.split()[2:]))
+        try:
+            raw = bytes.fromhex("".join(data.split()[2:]))
+        except ValueError:  # not hex: the resolver's answer is malformed
+            return "", ""
+        if len(raw) < 2:
+            return "", ""
         n = raw[1]
         return raw[2:2 + n].decode("ascii", "replace").lower(), raw[2 + n:].decode("utf-8", "replace")
     parts = data.split(None, 2)
@@ -280,7 +285,10 @@ def _caa_set(ctx, host):
     labels = host.split(".")
     for i in range(len(labels)):
         name = ".".join(labels[i:])
-        found = [parse_caa(d) for _, d in answers(dns_query(ctx, name, "CAA"), "CAA")]
+        data = dns_query(ctx, name, "CAA")
+        if data.get("Status") not in (0, 3):  # SERVFAIL or REFUSED: a CAA set may exist that was not seen
+            raise OSError(f"CAA lookup for {name[:120]} failed (response code {data.get('Status')})")
+        found = [parse_caa(d) for _, d in answers(data, "CAA")]
         if found:
             return name, found
         if name == org:
@@ -301,6 +309,9 @@ def caa(ctx):
         return warned("INFRA-11", f"No CAA record for {host} or its parent domain, so any public CA may issue a "
                       "certificate for it.", [f"CAA {host} .. {organizational_domain(host)}: none"])
     ev = [f"CAA {name}: {tag} \"{value}\"" for tag, value in records]
+    if not any(t == "issue" for t, _ in records):  # RFC 8659 4.2: issuewild and iodef do not limit other certificates
+        return warned("INFRA-11", f"The CAA records for {name} have no issue tag, so any public CA may issue a "
+                      "non-wildcard certificate for it. Add issue records naming your CAs.", ev)
     cert = _peer_cert(ctx) if ctx.https else None
     if not cert:
         why = "target is plain HTTP" if not ctx.https else "certificate did not verify (INFRA-02)"
@@ -387,9 +398,13 @@ def dangling_cname(ctx):
         return skipped("INFRA-28", why)
     host = (urlsplit(ctx.target).hostname or "").lower()
     names = [host] + ([t] if (t := _twin(host)) and not _platform_host(host) else [])
-    ev, fails, warns = [], [], []
+    ev, fails, warns, unknown = [], [], [], []
     for name in names:
         status, chain = _cname_chain(ctx, name)
+        if status not in (0, 3):  # SERVFAIL or REFUSED: the record set was not seen
+            unknown.append(name)
+            ev.append(f"{name}: DNS lookup failed (response code {status})")
+            continue
         if not chain:
             ev.append(f"{name}: no CNAME")
             continue
@@ -411,6 +426,9 @@ def dangling_cname(ctx):
                       "content on your domain.", ev)
     if warns:
         return warned("INFRA-28", "Dangling DNS: " + "; ".join(warns) + ". Remove the record.", ev)
+    if unknown:
+        return Result("INFRA-28", "manual", f"The DNS lookup for {', '.join(unknown)} failed, so its CNAME records "
+                      "were not seen. Re-run later.", ev)
     return passed("INFRA-28", "No dangling CNAME on the site's hostnames.", ev)
 
 

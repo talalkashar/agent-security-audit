@@ -73,7 +73,10 @@ def list_tables(ctx, base, key):
         spec = json.loads(resp.text)
     except ValueError:
         return None, resp.status
-    names = [p.strip("/") for p in (spec.get("paths") or {}) if p not in ("/",) and not p.startswith("/rpc/")]
+    paths = spec.get("paths") if isinstance(spec, dict) else None
+    if not isinstance(paths, dict):  # not an OpenAPI document
+        return None, resp.status
+    names = [p.strip("/") for p in paths if p not in ("/",) and not p.startswith("/rpc/")]
     return sorted(n for n in names if n and "/" not in n), resp.status
 
 
@@ -144,5 +147,12 @@ def anon_tables(ctx):
         return Result("ACCESS-01", "manual", f"{count(len(unproven), 'table')} {are(len(unproven))} not found or gave "
                       "no answer that proves access is refused (a 404 means the name is not a table in the exposed "
                       "schema). Check the names with --supabase-table.", ev)
-    return passed("ACCESS-01", f"{'The' if len(refused) == 1 else 'All'} {count(len(refused), 'table')} refused the "
-                  "public key (401/403).", ev)
+    if len(tables) > MAX_TABLES:
+        return Result("ACCESS-01", "manual", f"The {count(MAX_TABLES, 'table')} tested refused the public key, but "
+                      f"{len(tables) - MAX_TABLES} more were not tested. Name them with --supabase-table.", ev)
+    if source == "found in the site's JavaScript":  # tables the pages never query were not tested
+        return Result("ACCESS-01", "manual", f"{'The' if len(refused) == 1 else 'All'} {count(len(refused), 'table')} "
+                      "the site's JavaScript queries refused the public key (401/403), but other tables were not "
+                      "tested. Name every table from your migrations with --supabase-table.", ev)
+    return passed("ACCESS-01", f"{'The' if len(refused) == 1 else 'All'} {count(len(refused), 'table')} {source} "
+                  "refused the public key (401/403).", ev)

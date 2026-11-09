@@ -363,14 +363,13 @@ def _count(n, one):
 # static/chunks/ is bounded (real chunk paths are far shorter), so a hostile script full of "static/chunks/" starts
 # costs linear time, not quadratic.
 NEXT_CHUNK = re.compile(r"(?<![\w/.-])(?:/_next/)?static/chunks/[\w\-.~%@\[\]/]{1,200}?\.js\b")
-# Only the first 500 KB of a page or script is searched for chunk paths.
-MAX_CHUNK_SCAN = 500_000
 
 
 def next_chunks(text):
-    """Same-origin paths of Next.js chunks referenced in a page or script (first MAX_CHUNK_SCAN characters)."""
+    """Same-origin paths of Next.js chunks referenced in a page or script. The whole text is searched: the pattern
+    is linear and bodies stop at http.MAX_BODY, so a chunk named late in a large bundle is still fetched."""
     out = []
-    for m in NEXT_CHUNK.finditer(text[:MAX_CHUNK_SCAN]):
+    for m in NEXT_CHUNK.finditer(text):
         path = m.group(0)
         out.append(path if path.startswith("/_next/") else "/_next/" + path)
     return out

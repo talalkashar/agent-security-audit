@@ -9,6 +9,7 @@ import html
 import json
 import re
 import secrets
+from datetime import date
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from ..crawl import crawl, is_html
@@ -75,6 +76,11 @@ NO_SRI_HOSTS = ("js.stripe.com", "www.googletagmanager.com", "www.google-analyti
                 "va.vercel-scripts.com", "static.cloudflareinsights.com", "plausible.io", "js.hs-scripts.com")
 
 
+# SRI metadata browsers enforce: sha256/384/512 then a base64 digest. Tokens that do not parse are ignored, and an
+# attribute with none left loads the file unchecked.
+SRI_TOKEN = re.compile(r"(?i)^sha(?:256|384|512)-[A-Za-z0-9+/_-]+={0,2}(?:\?\S*)?$")
+
+
 @auto("BROWSER-21")
 def subresource_integrity(ctx):
     site = crawl(ctx)
@@ -85,8 +91,10 @@ def subresource_integrity(ctx):
         seen.add(r.url)
         host = (urlsplit(r.url).hostname or "").lower()
         label = f"{_where(ctx, r.url)} ({r.kind}, first seen on {_path(r.page)})"
-        if r.integrity:
+        if any(SRI_TOKEN.match(t) for t in (r.integrity or "").split()):
             ok.append(label + ": integrity set")
+        elif r.integrity:
+            missing.append(label + ": integrity attribute has no valid sha256/384/512 hash, so browsers ignore it")
         elif host in NO_SRI_HOSTS:
             exempt.append(label + ": versionless vendor loader, SRI not possible; restrict it with CSP")
         else:
@@ -140,6 +148,9 @@ def _v(text):
 
 
 # key -> (name, is_affected(version), why). Keep this list small and exact; each entry cites its advisory.
+# LIBRARIES_DATE is when the advisories were last checked; later advisories can make a listed version unsafe.
+LIBRARIES_DATE = "2026-11-07"
+LIBRARIES_MAX_AGE_DAYS = 180
 LIBRARIES = {
     "jquery": ("jQuery", lambda v: v < (3, 5, 0),
                "XSS when passing HTML to DOM methods (CVE-2020-11022, CVE-2020-11023); fixed in 3.5.0"),
@@ -191,6 +202,10 @@ def find_libraries(label, text=None, url=None):
     return hits
 
 
+def _today():
+    return date.today()
+
+
 @auto("BROWSER-23")
 def vulnerable_libraries(ctx):
     site = crawl(ctx)
@@ -228,6 +243,10 @@ def vulnerable_libraries(ctx):
     if eol:
         return warned("BROWSER-23", "An end-of-life client library is served to visitors; it gets no security "
                       "fixes. Plan the migration.", ev)
+    if ok and (_today() - date.fromisoformat(LIBRARIES_DATE)).days > LIBRARIES_MAX_AGE_DAYS:
+        return Result("BROWSER-23", "manual", f"Advisory list stale: listed libraries were found, but the list was "
+                      f"last checked {LIBRARIES_DATE}, so a newer advisory may cover these versions. Update asa or run "
+                      "npm audit.", ev)
     return passed("BROWSER-23", f"No listed library at a vulnerable version in {count(len(texts), 'script')} and the "
                   f"script URLs of {count(len(site.pages), 'crawled page')}.", ev)
 
@@ -293,7 +312,7 @@ def open_redirect(ctx):
         return skipped("API-19", f"No redirect-style query parameters (next, url, return..., redirect..., "
                        f"continue, dest...) in links on {count(len(site.pages), 'crawled page')}. Test login and logout "
                        "redirects by hand (see the proof steps).")
-    open_, ev = [], []
+    open_, ev, silent = [], [], []
     for path, name, url in candidates[:MAX_REDIRECT_PROBES]:
         parts = urlsplit(url)
         stays = set()
@@ -309,6 +328,8 @@ def open_redirect(ctx):
                 break
             stays |= {redirect_host(probe, dest) or "an unparsable URL" for _, dest in refresh_targets(resp)}
         else:
+            if not stays:  # the page ignored the parameter here (it may redirect only after login), so nothing proven
+                silent.append(f"{path}?{name}=")
             ev.append(f"GET {path}?{name}=<{len(REDIRECT_PROBES)} probe forms> -> "
                       + (f"redirects stay on {', '.join(sorted(stays))}" if stays else "no redirect"))
     left = candidates[MAX_REDIRECT_PROBES:]
@@ -323,6 +344,10 @@ def open_redirect(ctx):
         return Result("API-19", "manual", f"No server-side redirect to the probe host from the {count(n, 'parameter')} "
                       f"probed, but {count(len(left), 'more redirect parameter')} {are(len(left))} untested (limit "
                       f"{MAX_REDIRECT_PROBES}). Test them by hand (see the proof steps).", ev)
+    if silent:
+        return Result("API-19", "manual", f"No redirect at all from {', '.join(silent[:5])}, so the parameter was not "
+                      "exercised (it may only redirect after login). Test it by hand after signing in (see the proof "
+                      "steps).", ev)
     return passed("API-19", f"No server-side redirect to the probe host from {count(n, 'redirect parameter')} in all "
                   f"{len(REDIRECT_PROBES)} probe forms (absolute, //host, /\\host, https:host, double-encoded). "
                   "Redirects done in JavaScript are not covered.", ev)

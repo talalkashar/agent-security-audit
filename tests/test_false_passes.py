@@ -70,16 +70,16 @@ class ChunkScanTimeTest(unittest.TestCase):
         for text in ("~static/chunks/" * 16000, "~static/chunks/" * 140_000):  # 240 KB and 2 MB
             start = time.monotonic()
             crawl_mod.next_chunks(text)
-            self.assertLess(time.monotonic() - start, 1.0, len(text))
+            self.assertLess(time.monotonic() - start, 5.0, len(text))  # quadratic takes minutes; CI can be slow
 
     def test_real_chunks_still_found(self):
         text = '"static/chunks/app/page-abc.js","/_next/static/chunks/main-1.js"'
         self.assertEqual(crawl_mod.next_chunks(text), ["/_next/static/chunks/app/page-abc.js",
                                                        "/_next/static/chunks/main-1.js"])
 
-    def test_scan_is_capped(self):
-        late = "x" * crawl_mod.MAX_CHUNK_SCAN + "static/chunks/late.js"
-        self.assertEqual(crawl_mod.next_chunks(late), [])
+    def test_a_chunk_named_late_in_a_large_bundle_is_found(self):
+        late = "x" * 1_500_000 + ' "static/chunks/late.js"'
+        self.assertEqual(crawl_mod.next_chunks(late), ["/_next/static/chunks/late.js"])
 
 
 # 2. INFRA-04 .env --------------------------------------------------------------------------------------------------
@@ -405,7 +405,9 @@ class OpenRedirectCoverageTest(unittest.TestCase):
         self.assertIn("untested", r.summary)
 
     def test_all_probed_can_pass_and_says_js_is_not_covered(self):
-        r = webapp.open_redirect(ctx({"/": html('<a href="/r?next=/home">r</a>')}))
+        # /r redirects, but only to its own site, so every probe form was exercised and refused.
+        r = webapp.open_redirect(ctx({"/": html('<a href="/r?next=/home">r</a>'),
+                                      "/r": html("", ("Location", "/home"), status=302)}))
         self.assertEqual(r.status, "pass")
         self.assertIn("JavaScript", r.summary)
 

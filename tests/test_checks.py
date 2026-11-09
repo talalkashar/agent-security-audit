@@ -2,6 +2,7 @@
 
 import base64
 import json
+import re
 import unittest
 
 from agent_security_audit.checks import Context, browser, dns_email, exposure, ratelimit, supabase, transport
@@ -62,6 +63,17 @@ def b64(obj):
 def fake_jwt(role):
     # Built at runtime from fake parts; not a credential anywhere.
     return ".".join([b64({"alg": "HS256", "typ": "JWT"}), b64({"role": role, "ref": "q" * 20}), "fakesig" + "0" * 20])
+
+
+def fresh_nonces(*headers):
+    """A route that serves headers with a new value for every 'nonce-...' source on each response, as a real site must."""
+    calls = []
+
+    def route(m, u, h, b):
+        calls.append(u)
+        return resp(200, [(k, re.sub(r"'nonce-[^']*'", f"'nonce-n{len(calls)}'", v)) for k, v in headers],
+                    "<html></html>")
+    return route
 
 
 class CspTest(unittest.TestCase):
@@ -143,6 +155,27 @@ class CspTest(unittest.TestCase):
                                       f"script-src 'nonce-a' 'strict-dynamic' https: http:{tail}")), "pass")
         self.assertEqual(self.status(("Content-Security-Policy", f"script-src 'strict-dynamic' https:{tail}")), "fail")
 
+    def test_script_src_elem_and_attr_are_judged(self):
+        # CSP3 browsers use script-src-elem for <script> and script-src-attr for handlers, not script-src.
+        tail = "; object-src 'none'; base-uri 'none'"
+        for csp in (f"script-src 'self'; script-src-elem 'self' 'unsafe-inline' https:{tail}",
+                    f"script-src 'self'; script-src-elem * 'unsafe-inline'{tail}",
+                    f"script-src 'self'; script-src-attr 'unsafe-inline'{tail}",
+                    f"script-src-elem 'self'{tail}"):  # nothing covers inline handlers
+            with self.subTest(csp=csp):
+                self.assertEqual(self.status(("Content-Security-Policy", csp)), "fail")
+        # eval is still governed by script-src, so a policy with only -elem/-attr leaves eval allowed.
+        self.assertEqual(self.status(("Content-Security-Policy", f"script-src-elem 'self'; script-src-attr 'none'{tail}")),
+                         "warn")
+        self.assertEqual(self.status(("Content-Security-Policy",
+                                      f"script-src 'self'; script-src-elem 'self'; script-src-attr 'none'{tail}")), "pass")
+
+    def test_static_nonce_fails(self):
+        csp = "script-src 'nonce-abc' 'strict-dynamic'; object-src 'none'; base-uri 'none'"
+        result = browser.csp(home_with(("Content-Security-Policy", csp)))  # the same nonce on every load
+        self.assertEqual(result.status, "fail")
+        self.assertIn("same on two loads", result.summary)
+
     def test_policies_combine(self):
         # Two enforced policies both apply, so the strict one protects scripts.
         self.assertEqual(self.status(("Content-Security-Policy", "frame-ancestors 'none'"),
@@ -171,6 +204,17 @@ class HeaderChecksTest(unittest.TestCase):
         for headers, want in cases:
             with self.subTest(headers=headers):
                 self.assertEqual(browser.hsts(home_with(*headers)).status, want)
+
+    def test_hsts_duplicate_directives_and_headers(self):
+        # RFC 6797 6.1: a repeated directive makes browsers ignore the header; 8.1: only the first header counts.
+        r = browser.hsts(home_with(("Strict-Transport-Security", "max-age=0; max-age=63072000; includeSubDomains")))
+        self.assertEqual(r.status, "fail")
+        r = browser.hsts(home_with(("Strict-Transport-Security", "max-age=0"),
+                                   ("Strict-Transport-Security", "max-age=63072000; includeSubDomains")))
+        self.assertEqual(r.status, "fail")
+        r = browser.hsts(home_with(("Strict-Transport-Security", "max-age=63072000; includeSubDomains"),
+                                   ("Strict-Transport-Security", "max-age=0")))
+        self.assertEqual(r.status, "warn")
 
     def test_hsts_skips_http(self):
         self.assertEqual(browser.hsts(home_with(target="http://example.test")).status, "skip")
@@ -201,6 +245,9 @@ class HeaderChecksTest(unittest.TestCase):
     def test_powered_by(self):
         self.assertEqual(exposure.powered_by(home_with(("X-Powered-By", "Next.js"))).status, "fail")
         self.assertEqual(exposure.powered_by(home_with()).status, "pass")
+        # A proxy's error page does not show the app's own headers.
+        blocked = ctx_for(lambda m, u, h, b: resp(403, [], "blocked"))
+        self.assertEqual(exposure.powered_by(blocked).status, "manual")
 
     def test_isolation(self):
         ok = home_with(("Permissions-Policy", "camera=()"), ("Cross-Origin-Opener-Policy", "same-origin"))
@@ -346,8 +393,10 @@ class CorsTest(unittest.TestCase):
     def test_reflection_without_credentials_warns(self):
         self.assertEqual(self.run_cors(True, False).status, "warn")
 
-    def test_no_reflection_passes(self):
-        self.assertEqual(self.run_cors(False, False).status, "pass")
+    def test_no_reflection_on_home_only_is_manual(self):
+        # No API route found: the home page alone says nothing about the API's CORS policy.
+        r = browser.cors(ctx_for(lambda m, u, h, b: resp(200, [("Content-Type", "text/html")], "<html></html>")))
+        self.assertEqual(r.status, "manual")
 
     def test_wildcard_is_not_reflection(self):
         def route(m, u, h, b):
@@ -355,6 +404,22 @@ class CorsTest(unittest.TestCase):
                 return resp(200, [("Content-Type", "text/html")], '<html><a href="/api/user">me</a></html>')
             return resp(200, [("Access-Control-Allow-Origin", "*")])
         self.assertEqual(browser.cors(ctx_for(route)).status, "pass")
+
+    def test_api_routes_are_probed(self):
+        # The home page sends no CORS headers; the API route linked from it reflects any origin with credentials.
+        def route(m, u, h, b):
+            if u.endswith("/api/me") and "Origin" in h:
+                return resp(200, [("Access-Control-Allow-Origin", h["Origin"]),
+                                  ("Access-Control-Allow-Credentials", "true")])
+            return resp(200, [("Content-Type", "text/html")], '<a href="/api/me">me</a>')
+        r = browser.cors(ctx_for(route))
+        self.assertEqual(r.status, "fail")
+        self.assertIn("/api/me", r.summary)
+
+    def test_no_reflection_on_api_route_passes(self):
+        r = browser.cors(ctx_for(lambda m, u, h, b: resp(200), rate_limit_path="/api/auth/login"))
+        self.assertEqual(r.status, "pass")
+        self.assertIn("2 URLs tested", r.summary)
 
 
 class SensitiveFilesTest(unittest.TestCase):
@@ -380,6 +445,13 @@ class SensitiveFilesTest(unittest.TestCase):
 
     def test_all_404_passes(self):
         self.assertEqual(exposure.sensitive_files(ctx_for(lambda m, u, h, b: resp(404))).status, "pass")
+
+    def test_one_line_or_lowercase_env_fails(self):
+        for env in ("DATABASE_URL=postgres://u:p@h/db\n", "db_password=x\napi_key=y\n", "export api_key = y"):
+            with self.subTest(env=env):
+                ctx = ctx_for(lambda m, u, h, b, env=env: resp(200, [("Content-Type", "text/plain")], env)
+                              if u.endswith("/.env") else resp(404))
+                self.assertEqual(exposure.sensitive_files(ctx).status, "fail")
 
 
 class SecurityTxtTest(unittest.TestCase):
@@ -466,10 +538,36 @@ class SourceMapTest(unittest.TestCase):
     def test_missing_map_passes(self):
         self.assertEqual(exposure.source_maps(self.ctx(404)).status, "pass")
 
-    def test_inline_data_map_not_fetched(self):
+    def test_inline_data_map_fails_without_a_request(self):
+        # An inline map ships inside the script to every visitor.
         ctx = self.ctx(404, "//# sourceMappingURL=data:application/json;base64,e30=")
-        self.assertEqual(exposure.source_maps(ctx).status, "pass")
+        self.assertEqual(exposure.source_maps(ctx).status, "fail")
         self.assertFalse(any("data:" in u for _, u, _ in ctx.client.calls))
+
+    def test_inline_script_labels_are_never_requested(self):
+        # A page's inline scripts have no URL; their label must not become a .map guess (InvalidURL on a real client).
+        ctx = self.ctx(404)
+        ctx.cache["scripts"] = [("home page inline scripts", "var a"), ("/services/x inline scripts", "var b"),
+                                ("/_next/app.js", "var c")]
+        self.assertEqual(exposure.source_maps(ctx).status, "pass")
+        self.assertEqual([u for _, u, _ in ctx.client.calls], ["https://example.test/_next/app.js.map"])
+
+    def test_crawled_page_inline_script_is_not_a_map_url(self):
+        def route(m, u, h, b):
+            if u.endswith("/"):
+                return resp(200, [("Content-Type", "text/html")], '<a href="/services/x">x</a><script src="/a.js"></script>')
+            if u.endswith("/services/x"):
+                return resp(200, [("Content-Type", "text/html")], "<script>var inline=1</script>", url=u)
+            return resp(200, [("Content-Type", "application/javascript")], "var a") if u.endswith("/a.js") else resp(404)
+        ctx = ctx_for(route)
+        self.assertIn("/services/x inline scripts", [label for label, _ in exposure.scripts(ctx)])
+        self.assertEqual(exposure.source_maps(ctx).status, "pass")
+        self.assertFalse(any(" " in u for _, u, _ in ctx.client.calls), ctx.client.calls)
+
+    def test_mostly_unprobed_scripts_are_manual(self):
+        ctx = self.ctx(404)
+        ctx.cache["scripts"] = [(f"/_next/{i}.js", "var a") for i in range(exposure.MAX_MAP_GUESSES * 2 + 2)]
+        self.assertEqual(exposure.source_maps(ctx).status, "manual")
 
     def test_no_scripts_skips(self):
         ctx = ctx_for(lambda m, u, h, b: resp(404))
@@ -677,6 +775,23 @@ class DnsTest(unittest.TestCase):
         for records, want in cases:
             with self.subTest(records=records):
                 self.assertEqual(dns_email.dmarc(self.ctx({"_dmarc.example.com": records})).status, want)
+
+    def test_two_dmarc_records_fail(self):
+        # RFC 7489 6.6.3: with more than one record, receivers discard them all.
+        two = {"_dmarc.example.com": ['"v=DMARC1; p=reject; rua=mailto:d@example.com"', '"v=DMARC1; p=none"']}
+        r = dns_email.dmarc(self.ctx(two))
+        self.assertEqual(r.status, "fail")
+        self.assertIn("2 DMARC records", r.summary)
+
+    def test_servfail_is_not_a_missing_record(self):
+        # A failed lookup says nothing about whether the record exists.
+        def route(m, u, h, b):
+            return resp(200, [("Content-Type", "application/dns-json")], json.dumps({"Status": 2}))
+        for check in (dns_email.spf, dns_email.dmarc):
+            with self.subTest(check=check.__name__), self.assertRaises(OSError):
+                check(ctx_for(route, "https://www.example.com"))
+        nx = ctx_for(lambda m, u, h, b: resp(200, [], json.dumps({"Status": 3})), "https://www.example.com")
+        self.assertEqual(dns_email.dmarc(nx).status, "fail")
 
     def test_dmarc_inherits_from_organizational_domain(self):
         org = {"_dmarc.example.com": ['"v=DMARC1; p=reject; sp=reject; rua=mailto:d@example.com"']}

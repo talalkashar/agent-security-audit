@@ -196,6 +196,9 @@ def _hsts(resp):
         return failed("BROWSER-01", "HSTS max-age is 0, which turns HSTS off in browsers.", ev)
     if max_age < ONE_YEAR:
         return failed("BROWSER-01", f"HSTS max-age is {max_age}s; use at least {ONE_YEAR} (one year).", ev)
+    if len(resp.get_all("strict-transport-security")) > 1:  # Chromium joins repeats into one invalid value
+        return warned("BROWSER-01", "The response sends more than one Strict-Transport-Security header; RFC 6797 "
+                      "uses only the first, but Chromium joins them and then ignores HSTS. Send one header.", ev)
     if not subdomains:
         return warned("BROWSER-01", "HSTS has no includeSubDomains, so subdomains (and cookies scoped to the parent "
                       "domain) can still be reached over HTTP.", ev)

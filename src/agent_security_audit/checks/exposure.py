@@ -17,6 +17,8 @@ from . import are, auto, count
 from .ratelimit import login_endpoint
 
 MAX_SCRIPTS = 40
+# Inline scripts are labelled "<page> inline scripts". The label is display text, never a URL to request.
+INLINE_LABEL = " inline scripts"
 
 # path -> (description, test(body_bytes, content_type) -> bool). A test must match the real file, not an HTML page.
 # KEY=value, any case, optionally after "export". A dotenv file may hold a single line.
@@ -69,7 +71,8 @@ def sensitive_files(ctx):
     if exposed:
         return failed("INFRA-04", f"Sensitive files are downloadable: {', '.join(exposed)}. Treat every secret in them "
                       "as leaked and rotate it.", ev)
-    return passed("INFRA-04", f"None of the {len(SENSITIVE_FILES)} well-known sensitive files is served.", ev)
+    return passed("INFRA-04", f"None of these {len(SENSITIVE_FILES)} well-known sensitive paths serves the file "
+                  "(other paths were not tried).", ev)
 
 
 @auto("INFRA-05")
@@ -131,7 +134,7 @@ def scripts(ctx):
     for page, text in site.inline:
         by_page.setdefault(page, []).append(text)
     for page, texts in by_page.items():
-        label = "home page inline scripts" if page == home else f"{urlsplit(page).path or '/'} inline scripts"
+        label = ("home page" if page == home else urlsplit(page).path or "/") + INLINE_LABEL
         out.append((label, "\n".join(texts)))
     queue = [r.url for r in site.resources if r.kind == "script"]
     for _, text in out:
@@ -225,26 +228,33 @@ def client_secrets(ctx):
                   [label for label, _ in found][:10])
 
 
+MAX_MAP_GUESSES = 10
 SOURCEMAP = re.compile(r"[#@]\s*sourceMappingURL=([^\s'\"*]+)")
 
 
 @auto("NEXT-02")
 def source_maps(ctx):
-    found = [(label, text) for label, text in scripts(ctx) if label.startswith("/")]
+    found = [(label, text) for label, text in scripts(ctx)
+             if label.startswith("/") and not label.endswith(INLINE_LABEL)]
     if not found:
         return skipped("NEXT-02", "No same-origin script files found on the crawled pages.")
-    exposed, ev, tried, probed = [], [], 0, 0
+    exposed, ev, tried, probed, covered = [], [], 0, 0, 0
     for label, text in found:
         m = SOURCEMAP.search(text[-2000:])
         candidates = []
-        if m and not m.group(1).startswith("data:"):
+        if m and m.group(1).lower().startswith("data:"):  # the map ships inside the script itself
+            exposed.append(f"{label} (inline source map)")
+            ev.append(f"{label}: sourceMappingURL is an inline data: URL")
+            covered += 1
+            continue
+        if m:
             candidates.append(urljoin(ctx.client.url(label), m.group(1)))
-        elif tried < 3:
+        elif tried < MAX_MAP_GUESSES:
             candidates.append(ctx.client.url(label) + ".map")
             tried += 1
+        candidates = [u for u in candidates if same_origin(ctx.target, u)]
+        covered += bool(candidates)
         for url in candidates:
-            if not same_origin(ctx.target, url):
-                continue
             resp = ctx.client.get(url)
             probed += 1
             if resp.status == 200 and b'"mappings"' in resp.body[:500000]:
@@ -256,7 +266,11 @@ def source_maps(ctx):
     if not probed:
         return Result("NEXT-02", "manual", f"None of {count(len(found), 'same-origin script')} could be probed for a "
                       "source map. Open each script's URL with .map appended.")
-    return passed("NEXT-02", f"No source map served: {count(probed, 'map URL')} probed for "
+    if covered * 2 < len(found):  # a sample this small says little about the rest of the build
+        return Result("NEXT-02", "manual", f"No source map served for the {count(covered, 'script')} probed, but "
+                      f"{len(found) - covered} of {count(len(found), 'same-origin script')} were not probed. Open the "
+                      "others with .map appended.", ev)
+    return passed("NEXT-02", f"No source map served: {count(probed, 'map URL')} probed for {covered} of "
                   f"{count(len(found), 'same-origin script')} (each script that names a map, plus .map guesses for "
                   f"{count(tried, 'script')}).", ev)
 
@@ -268,7 +282,10 @@ def powered_by(ctx):
     if value:
         return failed("NEXT-03", f"X-Powered-By: {value} tells attackers which framework to target. "
                       "Set poweredByHeader: false in next.config.", [f"x-powered-by: {value}"])
-    return passed("NEXT-03", "No X-Powered-By header.")
+    if resp.status >= 400:  # a proxy or firewall answer, not the app's own headers
+        return Result("NEXT-03", "manual", f"Not proven: the home page answered {resp.status}, which a proxy or "
+                      "firewall may have sent, so the app's own headers were not observed.", [f"GET / -> {resp.status}"])
+    return passed("NEXT-03", "No X-Powered-By header on the home page.", [f"GET / -> {resp.status}"])
 
 
 BANNERS = ("server", "x-aspnet-version", "x-aspnetmvc-version")
