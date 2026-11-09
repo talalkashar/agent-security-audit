@@ -63,7 +63,7 @@ severity = "critical"
 layer = 7
 cwe = ["CWE-1395"]
 owasp = ["A06:2021", "A03:2025"]
-mode = "review"
+mode = "auto"
 stacks = ["nextjs"]
 risk = """Next.js shipped critical unauthenticated RCEs (CVE-2025-55182 in React Server Components, CVE-2026-96889 SVG image optimizer, GHSA-673q-mjm6-r5xr `use cache`, CVE-2026-94545 next/og) and repeated middleware bypasses through 2026, such as CVE-2025-29927. An app pinned to an old minor version carries all of them, whatever its own code does."""
 build = """Pin `next` at or above the newest fixed release per line: 16.4.5 on 16.x, 15.5.29 on 15.x (as of 2026-11-07). Older lines carry unpatched 2026 advisories; upgrade off 12.x-14.x. Key fixed-version floors from the GHSA list:
@@ -78,7 +78,7 @@ Keep `react`/`react-dom` on the matching patched line. Enable Dependabot or Reno
 proof = """1. In the repo, run `npm ls next react react-dom sharp` to read the resolved versions from the lockfile.
 2. Compare them with the advisory list (`gh api repos/vercel/next.js/security-advisories` or the GHSA page) and run `npm audit --omit=dev`.
 3. Pass: no open high or critical advisory affects the resolved versions, and `sharp` is >= 0.35.5. Fail: any high or critical advisory applies.
-HTTP alone cannot prove this: `X-Powered-By` (NEXT-03) shows the framework, not the version."""
+HTTP alone cannot prove this: `X-Powered-By` (NEXT-03) shows the framework, not the version. `asa scan` reads the Next.js version string from the site's JavaScript and looks it up in OSV: it fails the check when OSV lists any advisory for that version, whatever its severity (as `asa code` does for the lockfile), and otherwise leaves it `manual`, never `pass`, because React, sharp and the server runtime are not visible from outside. Only the lockfile (`asa code`) can pass it."""
 sources = [
   { title = "GitHub Security Advisories for vercel/next.js", url = "https://github.com/vercel/next.js/security/advisories" },
   { title = "GHSA-f82v-jwr5-mffw / CVE-2025-29927 middleware authorization bypass", url = "https://github.com/vercel/next.js/security/advisories/GHSA-f82v-jwr5-mffw" },

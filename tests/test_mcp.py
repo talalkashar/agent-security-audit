@@ -150,6 +150,8 @@ class McpServerTest(unittest.TestCase):
         data = json.loads(self._scan("fixed", areas=["browser", "nextjs"], auto_only=True))
         status = {r["check_id"]: r["status"] for r in data["results"]}
         self.assertEqual(status["BROWSER-03"], "pass")
+        # Live NEXT-04 never passes; the lab names no Next.js version, so it stays manual.
+        self.assertEqual(status.pop("NEXT-04"), "manual")
         self.assertNotIn("manual", status.values())
         self.assertEqual(data["counts"]["fail"], 0)
 

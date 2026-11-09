@@ -18,7 +18,7 @@ Source: <https://owasp.org/Top10/2021/>
 | [A03:2021 Injection](#a032021) | 14 | 1 | 6 | 8 | Mostly guided. |
 | [A04:2021 Insecure Design](#a042021) | 12 | 0 | 1 | 11 | No live proof test; code audit and guided steps only. Design flaws show up in business logic; the checks here cover named patterns, not a design review. |
 | [A05:2021 Security Misconfiguration](#a052021) | 36 | 24 | 9 | 11 | - |
-| [A06:2021 Vulnerable and Outdated Components](#a062021) | 3 | 1 | 2 | 0 | - |
+| [A06:2021 Vulnerable and Outdated Components](#a062021) | 3 | 2 | 2 | 0 | - |
 | [A07:2021 Identification and Authentication Failures](#a072021) | 21 | 4 | 5 | 13 | Mostly guided. |
 | [A08:2021 Software and Data Integrity Failures](#a082021) | 8 | 1 | 3 | 4 | - |
 | [A09:2021 Security Logging and Monitoring Failures](#a092021) | 1 | 0 | 0 | 1 | Guided only: no automated proof. Logging and alerting live on the server and in the hosting dashboard; nothing outside can see them. |
@@ -32,7 +32,7 @@ Source: <https://owasp.org/Top10/2025/>
 |---|---:|---:|---:|---:|---|
 | [A01:2025 Broken Access Control](#a012025) | 35 | 4 | 12 | 20 | Mostly guided. |
 | [A02:2025 Security Misconfiguration](#a022025) | 36 | 24 | 9 | 11 | - |
-| [A03:2025 Software Supply Chain Failures](#a032025) | 7 | 2 | 3 | 2 | - |
+| [A03:2025 Software Supply Chain Failures](#a032025) | 7 | 3 | 3 | 2 | - |
 | [A04:2025 Cryptographic Failures](#a042025) | 12 | 8 | 3 | 3 | - |
 | [A05:2025 Injection](#a052025) | 14 | 1 | 6 | 8 | Mostly guided. |
 | [A06:2025 Insecure Design](#a062025) | 11 | 0 | 1 | 10 | No live proof test; code audit and guided steps only. Design flaws show up in business logic; the checks here cover named patterns, not a design review. |
@@ -198,7 +198,7 @@ Vulnerable and Outdated Components. 3 checks.
 
 - [BROWSER-23](checks/browser.md#browser-23-no-known-vulnerable-client-javascript-libraries) No known-vulnerable client JavaScript libraries (live)
 - [INFRA-13](checks/infra.md#infra-13-dependencies-locked-audited-and-install-scripts-restricted) Dependencies locked, audited and install scripts restricted (code)
-- [NEXT-04](checks/nextjs.md#next-04-nextjs-react-and-sharp-on-a-patched-release) Next.js, React and sharp on a patched release (code)
+- [NEXT-04](checks/nextjs.md#next-04-nextjs-react-and-sharp-on-a-patched-release) Next.js, React and sharp on a patched release (live + code)
 
 ### A07:2021
 
@@ -343,7 +343,7 @@ Software Supply Chain Failures. 7 checks.
 - [INFRA-13](checks/infra.md#infra-13-dependencies-locked-audited-and-install-scripts-restricted) Dependencies locked, audited and install scripts restricted (code)
 - [INFRA-14](checks/infra.md#infra-14-new-dependencies-vetted-against-typosquats) New dependencies vetted against typosquats (guided)
 - [INFRA-15](checks/infra.md#infra-15-github-actions-pinned-least-privilege-and-injection-safe) GitHub Actions pinned, least-privilege and injection-safe (code)
-- [NEXT-04](checks/nextjs.md#next-04-nextjs-react-and-sharp-on-a-patched-release) Next.js, React and sharp on a patched release (code)
+- [NEXT-04](checks/nextjs.md#next-04-nextjs-react-and-sharp-on-a-patched-release) Next.js, React and sharp on a patched release (live + code)
 
 ### A04:2025
 

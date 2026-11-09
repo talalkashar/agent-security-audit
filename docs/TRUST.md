@@ -7,7 +7,8 @@ Each statement names the source file it comes from, so you can check it against 
 ## Summary
 
 - The scanner sends requests to the target you name. Without opt-out flags it also sends DNS-over-HTTPS queries to
-  `cloudflare-dns.com`, and a code audit sends package names and versions to `api.osv.dev`. Nothing else is
+  `cloudflare-dns.com`, a scan of a Next.js site sends the Next.js version found in its JavaScript to
+  `api.osv.dev`, and a code audit sends package names and versions to `api.osv.dev`. Nothing else is
   contacted unless you pass `--allow-supabase` (the site's own Supabase project) or the target publishes an MTA-STS
   record (its own `mta-sts.` host).
 - No telemetry, analytics, crash reporting or update check. Only six modules import a network or process module, and
@@ -48,11 +49,13 @@ The client has four ways to open a connection:
 | `mta-sts.<target domain>` | INFRA-12, only when DNS shows MX records and a `v=STSv1` record | `GET /.well-known/mta-sts.txt` (`mta_sts` in `checks/network.py`) | `--no-dns` |
 | `<project>.supabase.co` | ACCESS-01, only with `--allow-supabase`, and only if the site's own JavaScript names a project and a public (anon or publishable) key | `GET /rest/v1/` and one `HEAD /rest/v1/<table>?select=*&limit=1` per table (max 50) with `Prefer: count=exact` and the site's own public key (`checks/supabase.py`). Reports table names and row counts, not rows. | leave out `--allow-supabase`; for a local target it also needs `--authorized` |
 | `api.osv.dev` | `asa code`, `asa scan --code`, MCP `run_code_audit`, MCP `run_scan` with `code_path` | `POST /v1/querybatch` with JSON `{"queries": [{"package": {"ecosystem", "name"}, "version"}]}` for each package read from lockfiles, up to 500 per request (`query_osv` in `code_audit/deps.py`). No file contents, paths or project names. | `--no-osv` (MCP: `no_osv`) |
+| `api.osv.dev` | `asa scan` and MCP `run_scan` (NEXT-04), only when exactly one Next.js version string is found in the JavaScript the scan already read | `POST /v1/query` with JSON `{"package": {"ecosystem": "npm", "name": "next"}, "version": "<version>"}`, at most 3 pages (`query_osv_vulns` in `code_audit/deps.py`, called from `checks/nextjs_version.py`). No URL, host name or other content of the target. | `--no-osv` (MCP: `no_osv`) |
 
 The scanned site's content is not sent to any third party. Responses from the target are read and turned into
 results in memory. What leaves the machine toward non-target hosts is: DNS names derived from the target's hostname
-(to the resolver), the site's own public Supabase key and table names (to that Supabase project, opt-in), and package
-names and versions (to OSV).
+(to the resolver), the site's own public Supabase key and table names (to that Supabase project, opt-in), package
+names and versions (to OSV), and the Next.js version string found in the site's JavaScript (to OSV, without the
+site's address).
 
 Name resolution for the target itself uses the operating system resolver (`socket.getaddrinfo` in `http.py` and
 `http.client`), not DNS-over-HTTPS. `scope.py` also resolves `*.test` and `*.localhost` names once before a scan to
@@ -310,7 +313,7 @@ asa scan https://your-site.example --no-ports
 ## Known limitations
 
 - Scan traffic ignores proxy environment variables. `http.py` connects directly with `http.client` and `socket`, so
-  `HTTPS_PROXY` covers only the OSV request (made with `urllib.request` in `code_audit/deps.py`). Use a firewall rule
+  `HTTPS_PROXY` covers only the OSV requests (made with `urllib.request` in `code_audit/deps.py`). Use a firewall rule
   or packet capture to observe or restrict scan traffic.
 - `--dns-resolver` (MCP `dns_resolver`) must be an `https://` URL without credentials (`check_dns_resolver` in
   `scope.py`) and must speak the JSON DoH format. Without it, DNS checks use `cloudflare-dns.com` unless `no_dns` is

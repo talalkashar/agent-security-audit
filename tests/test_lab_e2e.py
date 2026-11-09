@@ -69,7 +69,8 @@ GAPS = {
 }
 
 # No CMS markers means these observations remain unproven, rather than passing or skipping.
-MANUAL_GAPS = {"CMS-01", "CMS-04"}
+MANUAL_GAPS = {"CMS-01", "CMS-04",
+               "NEXT-04"}  # Next.js markers, no version string: the lab never sends a query to OSV
 
 # These pass with the observation in the summary only ("No X-Powered-By header", "2 map URLs probed") and an empty
 # evidence list. Owned by the check modules, not the lab; listed so a new empty-evidence pass is caught.

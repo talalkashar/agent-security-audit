@@ -9,7 +9,7 @@
 | [NEXT-01](#next-01-no-secret-keys-in-client-javascript) | critical | L7 | auto | No secret keys in client JavaScript |
 | [NEXT-02](#next-02-no-production-source-maps) | medium | L7 | auto | No production source maps |
 | [NEXT-03](#next-03-framework-not-advertised-x-powered-by) | low | L7 | auto | Framework not advertised (X-Powered-By) |
-| [NEXT-04](#next-04-nextjs-react-and-sharp-on-a-patched-release) | critical | L7 | review | Next.js, React and sharp on a patched release |
+| [NEXT-04](#next-04-nextjs-react-and-sharp-on-a-patched-release) | critical | L7 | auto | Next.js, React and sharp on a patched release |
 | [NEXT-05](#next-05-authorization-enforced-beyond-middleware-or-proxyts) | critical | L7 | assisted | Authorization enforced beyond middleware or proxy.ts |
 | [NEXT-06](#next-06-every-server-action-checks-the-caller-and-resource-ownership) | high | L7 | assisted | Every Server Action checks the caller and resource ownership |
 | [NEXT-07](#next-07-server-action-origin-check-not-weakened) | medium | L7 | assisted | Server Action origin check not weakened |
@@ -93,7 +93,7 @@ Set `poweredByHeader: false` in `next.config.*`. Do not add other headers that n
 
 ## NEXT-04 Next.js, React and sharp on a patched release
 
-Severity: critical · OSI layer 7 (Application) · CWE-1395 · OWASP A06:2021, A03:2025 · Mode: review (code audit built in: `asa code`) · Stacks: nextjs
+Severity: critical · OSI layer 7 (Application) · CWE-1395 · OWASP A06:2021, A03:2025 · Mode: auto (proof test built in) (code audit built in: `asa code`) · Stacks: nextjs
 
 ### Risk
 
@@ -116,7 +116,7 @@ Keep `react`/`react-dom` on the matching patched line. Enable Dependabot or Reno
 1. In the repo, run `npm ls next react react-dom sharp` to read the resolved versions from the lockfile.
 2. Compare them with the advisory list (`gh api repos/vercel/next.js/security-advisories` or the GHSA page) and run `npm audit --omit=dev`.
 3. Pass: no open high or critical advisory affects the resolved versions, and `sharp` is >= 0.35.5. Fail: any high or critical advisory applies.
-HTTP alone cannot prove this: `X-Powered-By` (NEXT-03) shows the framework, not the version.
+HTTP alone cannot prove this: `X-Powered-By` (NEXT-03) shows the framework, not the version. `asa scan` reads the Next.js version string from the site's JavaScript and looks it up in OSV: it fails the check when OSV lists any advisory for that version, whatever its severity (as `asa code` does for the lockfile), and otherwise leaves it `manual`, never `pass`, because React, sharp and the server runtime are not visible from outside. Only the lockfile (`asa code`) can pass it.
 
 ### Sources
 

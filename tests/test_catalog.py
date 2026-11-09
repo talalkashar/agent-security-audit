@@ -58,7 +58,7 @@ class CatalogTest(unittest.TestCase):
         registry = load_all()
         auto_ids = {c.id for c in self.checks if c.mode == "auto"}
         self.assertEqual(set(registry), auto_ids)
-        self.assertEqual(len(auto_ids), 43)
+        self.assertEqual(len(auto_ids), 44)
         for cid, fn in registry.items():
             self.assertEqual(fn.check_id, cid)
 

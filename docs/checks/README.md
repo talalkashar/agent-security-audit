@@ -18,8 +18,8 @@
 | [browser](browser.md) | Browser security headers, cookies and client code | 23 | 12 | 7 | 4 | 0 | 8 | 13 | 2 |
 | [cms](cms.md) | CMS versions, support and public login/API markers | 4 | 4 | 0 | 0 | 0 | 1 | 1 | 2 |
 | [infra](infra.md) | Transport, DNS, email and hosting | 28 | 14 | 2 | 12 | 6 | 11 | 6 | 5 |
-| [nextjs](nextjs.md) | Next.js and Vercel | 16 | 3 | 10 | 3 | 3 | 5 | 7 | 1 |
-| **Total** | | **126** | **43** | **52** | **31** | **19** | **53** | **41** | **13** |
+| [nextjs](nextjs.md) | Next.js and Vercel | 16 | 4 | 10 | 2 | 3 | 5 | 7 | 1 |
+| **Total** | | **126** | **44** | **52** | **30** | **19** | **53** | **41** | **13** |
 
 ## By OSI layer
 
@@ -31,7 +31,7 @@
 | 4 Transport | 3 | 2 | 0 | 1 |
 | 5 Session | 2 | 0 | 2 | 0 |
 | 6 Presentation | 5 | 5 | 0 | 0 |
-| 7 Application | 112 | 36 | 50 | 26 |
+| 7 Application | 112 | 37 | 50 | 25 |
 
 ## All checks
 
@@ -150,7 +150,7 @@
 | [NEXT-01](nextjs.md#next-01-no-secret-keys-in-client-javascript) | critical | L7 | auto | No secret keys in client JavaScript |
 | [NEXT-02](nextjs.md#next-02-no-production-source-maps) | medium | L7 | auto | No production source maps |
 | [NEXT-03](nextjs.md#next-03-framework-not-advertised-x-powered-by) | low | L7 | auto | Framework not advertised (X-Powered-By) |
-| [NEXT-04](nextjs.md#next-04-nextjs-react-and-sharp-on-a-patched-release) | critical | L7 | review | Next.js, React and sharp on a patched release |
+| [NEXT-04](nextjs.md#next-04-nextjs-react-and-sharp-on-a-patched-release) | critical | L7 | auto | Next.js, React and sharp on a patched release |
 | [NEXT-05](nextjs.md#next-05-authorization-enforced-beyond-middleware-or-proxyts) | critical | L7 | assisted | Authorization enforced beyond middleware or proxy.ts |
 | [NEXT-06](nextjs.md#next-06-every-server-action-checks-the-caller-and-resource-ownership) | high | L7 | assisted | Every Server Action checks the caller and resource ownership |
 | [NEXT-07](nextjs.md#next-07-server-action-origin-check-not-weakened) | medium | L7 | assisted | Server Action origin check not weakened |
@@ -164,6 +164,6 @@
 | [NEXT-15](nextjs.md#next-15-vercel-cron-endpoints-require-cron_secret) | medium | L7 | assisted | Vercel cron endpoints require CRON_SECRET |
 | [NEXT-16](nextjs.md#next-16-no-internal-x-middleware-headers-in-responses) | medium | L7 | assisted | No internal x-middleware headers in responses |
 
-Automated proof tests built in: 43 (ACCESS-01, API-01, API-02, API-19, API-20, API-21, API-22, API-23, API-24, API-25, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06, BROWSER-07, BROWSER-08, BROWSER-20, BROWSER-21, BROWSER-22, BROWSER-23, CMS-01, CMS-02, CMS-03, CMS-04, INFRA-01, INFRA-02, INFRA-03, INFRA-04, INFRA-05, INFRA-06, INFRA-07, INFRA-11, INFRA-12, INFRA-24, INFRA-25, INFRA-26, INFRA-27, INFRA-28, NEXT-01, NEXT-02, NEXT-03).
+Automated proof tests built in: 44 (ACCESS-01, API-01, API-02, API-19, API-20, API-21, API-22, API-23, API-24, API-25, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-06, BROWSER-07, BROWSER-08, BROWSER-20, BROWSER-21, BROWSER-22, BROWSER-23, CMS-01, CMS-02, CMS-03, CMS-04, INFRA-01, INFRA-02, INFRA-03, INFRA-04, INFRA-05, INFRA-06, INFRA-07, INFRA-11, INFRA-12, INFRA-24, INFRA-25, INFRA-26, INFRA-27, INFRA-28, NEXT-01, NEXT-02, NEXT-03, NEXT-04).
 
 Settled from source code by `asa code`: 31 (ACCESS-01, ACCESS-02, ACCESS-06, ACCESS-08, ACCESS-11, API-05, API-08, API-30, API-31, API-32, API-33, AUTH-01, BROWSER-01, BROWSER-02, BROWSER-03, BROWSER-04, BROWSER-05, BROWSER-08, BROWSER-09, INFRA-08, INFRA-13, INFRA-15, NEXT-01, NEXT-02, NEXT-03, NEXT-04, NEXT-05, NEXT-06, NEXT-07, NEXT-11, NEXT-15).

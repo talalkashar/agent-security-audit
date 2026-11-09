@@ -68,7 +68,7 @@ def scan_flags(*, authorized, allow_supabase, auto_only, no_dns, dns_resolver, n
             "dns_resolver": None if no_dns else (dns_resolver or DEFAULT_RESOLVER), "no_ports": bool(no_ports),
             "rate_limit_path": rate_limit_path, "rate_limit_method": rate_limit_method, "budget": budget,
             "max_time": max_time, "max_pages": max_pages, "checks": list(checks or []), "code": code,
-            "osv": bool(code) and bool(osv)}
+            "osv": bool(osv)}
 
 
 def rate_limit_method(value):
@@ -244,7 +244,8 @@ def build_parser():
                          "report error \"not run: time budget\"")
     sc.add_argument("--code", metavar="PATH", help="also audit the site's source code at PATH and merge the results "
                     "(code evidence settles manual checks; a live fail always stands)")
-    sc.add_argument("--no-osv", action="store_true", help="with --code: skip the OSV dependency vulnerability lookup")
+    sc.add_argument("--no-osv", action="store_true", help="skip the OSV lookups (api.osv.dev): the Next.js version "
+                    "found in the site's JavaScript (NEXT-04) and, with --code, the dependency lookup")
 
     co = sub.add_parser("code", help="audit a project's source code statically (nothing is executed)")
     co.add_argument("path", nargs="?", default=".", help="project folder (default: the current folder)")
@@ -352,6 +353,7 @@ def _main(argv=None):
             "rate_limit_attempts": args.rate_limit_attempts, "allow_supabase": args.allow_supabase,
             "no_dns": args.no_dns, "no_ports": args.no_ports, "supabase_tables": _csv(args.supabase_table),
             "dns_resolver": args.dns_resolver, "max_pages": args.max_pages, "max_depth": args.max_depth,
+            "osv": not args.no_osv,
         }
         if args.max_time < 0:
             raise ValueError("--max-time must be 0 (no limit) or more seconds")

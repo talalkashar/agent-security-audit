@@ -109,7 +109,7 @@ class ScanCommandTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(data["tool"], "agent-security-audit")
         self.assertGreater(data["counts"]["fail"], 5)
-        self.assertEqual(len(data["results"]), 43)
+        self.assertEqual(len(data["results"]), 44)
         self.assertEqual(data["results"][0]["status"], "fail")
 
     def test_sarif(self):

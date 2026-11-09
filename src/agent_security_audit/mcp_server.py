@@ -138,7 +138,8 @@ TOOLS = [
                                              "and merge the results; use it for a local dev site. The project "
                                              "folder only, never a home or system folder"},
                 "no_osv": {"type": "boolean", "default": False,
-                           "description": "with code_path: skip the OSV dependency lookup (api.osv.dev)"},
+                           "description": "skip the OSV lookups (api.osv.dev): the Next.js version found in the "
+                                          "site's JavaScript (NEXT-04) and, with code_path, the dependency lookup"},
                 "max_time": {"type": "integer", "minimum": 10, "maximum": 3600, "default": int(MAX_TIME),
                              "description": "time budget for the whole scan in seconds; checks still waiting "
                                             "for a request when it runs out, or that would pass on a crawl it "
@@ -412,7 +413,7 @@ def tool_run_scan(target, authorized=False, checks=None, areas=None, stacks=None
         "rate_limit_attempts": 30 if rate_limit_attempts is None else rate_limit_attempts,
         "allow_supabase": bool(allow_supabase), "no_dns": bool(no_dns), "no_ports": bool(no_ports),
         "supabase_tables": supabase_tables or None,
-        "dns_resolver": dns_resolver or None, "max_pages": max_pages,
+        "dns_resolver": dns_resolver or None, "max_pages": max_pages, "osv": not no_osv,
     }
     max_time = MAX_TIME if max_time is None else max_time
     record, started = {}, runner.utc_now()

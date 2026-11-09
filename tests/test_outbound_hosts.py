@@ -26,14 +26,16 @@ CONTACTED = {
     "cloudflare-dns.com": "default DNS-over-HTTPS resolver for the DNS and email checks (checks/dns_email.py "
                           "DEFAULT_RESOLVER); --dns-resolver replaces it, --no-dns turns it off",
     "api.osv.dev": "OSV vulnerability database, queried with package names and versions from lockfiles by "
-                   "`asa code` and `asa scan --code` (code_audit/deps.py OSV_URL); --no-osv turns it off",
+                   "`asa code` and `asa scan --code` (code_audit/deps.py OSV_URL), and by `asa scan` with the Next.js "
+                   "version found in the site's JavaScript (OSV_QUERY_URL, checks/nextjs_version.py); --no-osv "
+                   "turns both off",
 }
 
 # Host part of every URL literal. "{}" stands for a value filled in at runtime.
 URL_HOSTS = {
     # Contacted (see CONTACTED).
     "cloudflare-dns.com": "default DoH resolver",
-    "api.osv.dev": "OSV querybatch endpoint",
+    "api.osv.dev": "OSV querybatch and query endpoints",
     # Derived from the target and contacted.
     "{}": "the target's own host (transport.py plain-HTTP redirect check, runner.py www/apex twin, webapp.py), "
           "or the lab's own address in lab.py",
@@ -156,10 +158,12 @@ class OutboundHostsTest(unittest.TestCase):
 
     def test_contacted_hosts_are_constants_and_documented(self):
         from agent_security_audit.checks.dns_email import DEFAULT_RESOLVER
-        from agent_security_audit.code_audit.deps import OSV_URL
+        from agent_security_audit.code_audit.deps import OSV_QUERY_URL, OSV_URL
         self.assertEqual(DEFAULT_RESOLVER, "https://cloudflare-dns.com/dns-query")
         self.assertEqual(OSV_URL, "https://api.osv.dev/v1/querybatch")
+        self.assertEqual(OSV_QUERY_URL, "https://api.osv.dev/v1/query")
         trust = (ROOT / "docs" / "TRUST.md").read_text(encoding="utf-8")
+        self.assertIn("`POST /v1/query` with JSON", trust, "docs/TRUST.md must list the scan's NEXT-04 OSV query")
         for host in CONTACTED:
             self.assertIn(host, trust, f"docs/TRUST.md does not mention {host}")
             self.assertIn(host, URL_HOSTS)

@@ -7,6 +7,7 @@ import json
 import posixpath
 import re
 import ssl
+import time
 import tomllib
 import urllib.request
 
@@ -16,6 +17,7 @@ from .base import make, plural
 from .project import LOCKFILES, Finding, is_test_path
 
 OSV_URL = "https://api.osv.dev/v1/querybatch"
+OSV_QUERY_URL = "https://api.osv.dev/v1/query"  # one package, full advisories (NEXT-04 live check)
 OSV_BATCH = 500
 MAX_RESPONSE = 20_000_000
 FRAMEWORK = {"next", "react", "react-dom", "sharp"}
@@ -88,6 +90,17 @@ PARSERS = {
 }
 
 
+def _post(url, payload, timeout):
+    """POST payload as JSON to an OSV endpoint and return the decoded answer. Raises OsvError on any failure."""
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers={
+        "Content-Type": "application/json", "User-Agent": f"agent-security-audit/{__version__}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl.create_default_context()) as resp:
+            return json.loads(resp.read(MAX_RESPONSE))
+    except (OSError, ValueError) as exc:
+        raise OsvError(f"{type(exc).__name__}: {exc}") from exc
+
+
 def query_osv(packages, timeout=20.0):
     """{(ecosystem, name, version): [vuln ids]} for every package. Raises OsvError when OSV cannot be reached."""
     context = ssl.create_default_context()
@@ -111,6 +124,30 @@ def query_osv(packages, timeout=20.0):
             if ids:
                 found[pkg] = ids
     return found
+
+
+def query_osv_vulns(ecosystem, name, version, timeout=20.0, max_pages=3, deadline=None):
+    """[advisory dict] that OSV lists for one package version, with affected ranges (the batch query gives ids
+    only). Reads at most max_pages pages and starts none after deadline (a time.monotonic() value). Raises OsvError
+    when OSV cannot be reached, answers out of shape or the deadline passes."""
+    vulns, token = [], None
+    for _ in range(max_pages):
+        if deadline is not None:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise OsvError("time budget for the scan used up")
+            timeout = min(timeout, left)
+        payload = {"package": {"ecosystem": ecosystem, "name": name}, "version": version}
+        if token:
+            payload["page_token"] = token
+        data = _post(OSV_QUERY_URL, payload, timeout)
+        if not isinstance(data, dict) or not isinstance(data.get("vulns", []), list):
+            raise OsvError("unexpected response from OSV")
+        vulns += [v for v in data.get("vulns", []) if isinstance(v, dict)]
+        token = data.get("next_page_token")
+        if not token or not isinstance(token, str):
+            return vulns
+    raise OsvError(f"OSV answer longer than {max_pages} pages")
 
 
 def dependencies(project, osv=True, osv_query=None, timeout=20.0):
