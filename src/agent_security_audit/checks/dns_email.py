@@ -96,6 +96,35 @@ def _all_of(terms):
     return next((t for t in terms if t.lstrip("+-~?") == "all"), None)
 
 
+def _cidr0_before_all(record):
+    """'+' or '?' when an ip4 or ip6 prefix of /0 appears before all, else None.
+
+    RFC 7208 evaluates left to right and stops at the first match, so ip4:0.0.0.0/0 -all matches every
+    IPv4 address and the trailing all never runs. A fail or softfail qualifier on that mechanism does not
+    let mail pass. a/0 and mx/0 are not judged here: they match only when the name has an address.
+    """
+    for term in record.lower().split()[1:]:
+        qual, mech = (term[0], term[1:]) if term[:1] in "+-~?" else ("+", term)
+        if mech == "all":
+            return None
+        if qual not in "+?":
+            continue
+        if _ip_prefix_zero(mech):
+            return qual
+    return None
+
+
+def _ip_prefix_zero(mech):
+    found = re.fullmatch(r"ip4:(\d{1,3}(?:\.\d{1,3}){3})/0", mech) or re.fullmatch(r"ip6:([0-9a-f:]+)/0", mech)
+    if not found:
+        return False
+    try:
+        ipaddress.ip_address(found.group(1))
+    except ValueError:
+        return False
+    return True
+
+
 def _walk_spf(ctx, record):
     """Expand include: and redirect= through the same resolver. Returns (lookups, problems, evidence, effective record),
     where the effective record is the one whose all mechanism decides (the redirect target when there is no all).
@@ -140,6 +169,9 @@ def _walk_spf(ctx, record):
                 # judge the record the include resolves to, after its own redirect (RFC 7208 5.2, 6.1)
                 if kind == "include" and _all_of(inner.lower().split()[1:]) in ("all", "+all"):
                     state["problems"].append(f"include {target} ends in +all, so it matches every server")
+                if kind == "include" and _cidr0_before_all(inner) == "+":
+                    state["problems"].append(f"include {target} matches every address with an ip4 or ip6 prefix of /0 "
+                                             "before all")
                 if kind == "redirect":
                     effective = inner
             if state["lookups"] > MAX_LOOKUPS:
@@ -182,8 +214,15 @@ def spf(ctx):
     if "+all" in terms or "all" in terms:
         return failed("INFRA-06", "SPF redirects to a record that ends in +all, which lets every server on the "
                       "internet send as this domain.", ev)
+    hole = _cidr0_before_all(effective)
+    if hole == "+":
+        return failed("INFRA-06", "SPF matches every address with an ip4 or ip6 prefix of /0 before all, so the "
+                      "trailing all never runs (RFC 7208 evaluates left to right).", ev)
     if "?all" in terms:
         return warned("INFRA-06", "SPF ends in ?all (neutral), which gives receivers no instruction.", ev)
+    if hole == "?":
+        return warned("INFRA-06", "SPF matches every address with ? on an ip4 or ip6 prefix of /0 before all, which "
+                      "gives receivers no instruction.", ev)
     if _all_of(terms) is None:
         return warned("INFRA-06", "SPF has no all mechanism; end it with -all or ~all.", ev)
     return passed("INFRA-06", f"SPF names the allowed senders, rejects or flags the rest, and needs {lookups} of "

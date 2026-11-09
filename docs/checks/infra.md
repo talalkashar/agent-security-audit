@@ -169,9 +169,9 @@ Publish exactly one `v=spf1` TXT record at the apex listing only senders in use 
 
 1. Query TXT for the apex over DNS over HTTPS through a public resolver. Skipped with --no-dns.
 2. Expand includes and redirects recursively through the same resolver (it stops once the limit is passed, so at most 11 queries) and count DNS-querying terms (include, a, mx, ptr, exists, redirect), as RFC 7208 4.6.4 does. A redirect is ignored when the record has an all mechanism; an include or redirect with a macro (%{...}) counts but is not expanded.
-3. Pass: exactly one v=spf1 record, 10 or fewer lookups, every include and redirect resolves to exactly one SPF record, and the deciding record (the redirect target when there is no all) ends in -all or ~all.
-4. Fail: none or more than one SPF record; +all, in the record, in an included record or in the redirect target; more than 10 lookups; an include or redirect that returns NXDOMAIN, has no SPF record or has more than one.
-5. Warning: ?all, or no all mechanism.
+3. Pass: exactly one v=spf1 record, 10 or fewer lookups, every include and redirect resolves to exactly one SPF record, and the deciding record (the redirect target when there is no all) ends in -all or ~all. An ip4 or ip6 mechanism with prefix length 0 and a pass qualifier must not appear before that all. RFC 7208 stops at the first match, so `ip4:0.0.0.0/0 -all` matches every IPv4 address and the trailing all never runs. A fail or softfail qualifier on that mechanism, and an all that comes first, still pass. `a/0` and `mx/0` are not treated as a match of every address: they match only when the name has one.
+4. Fail: none or more than one SPF record; +all, in the record, in an included record or in the redirect target; an ip4 or ip6 prefix of /0 with a pass qualifier before all, in the deciding record or in an included record; more than 10 lookups; an include or redirect that returns NXDOMAIN, has no SPF record or has more than one.
+5. Warning: ?all, a ? qualifier on an ip4 or ip6 prefix of /0 before all, or no all mechanism.
 
 ### Sources
 

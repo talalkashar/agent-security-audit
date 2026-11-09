@@ -841,6 +841,31 @@ class DnsTest(unittest.TestCase):
                 self.assertEqual(r.status, "fail")
                 self.assertIn(words, r.summary)
 
+    def test_spf_cidr0_before_all_does_not_pass(self):
+        # ip6:::/0 is "ip6:" plus the address "::" (RFC 7208 5.6). ip6::/0 is not a valid address.
+        fails = ["v=spf1 ip4:0.0.0.0/0 -all", "v=spf1 +ip4:0.0.0.0/0 -all", "v=spf1 ip6:::/0 -all",
+                 "v=spf1 ip6:0::0/0 -all", "v=spf1 ip4:192.0.2.1/0 -all"]
+        for record in fails:
+            with self.subTest(record=record):
+                result = dns_email.spf(self.spf_ctx({"example.com": [record]}))
+                self.assertEqual(result.status, "fail", result.summary)
+                self.assertIn("/0", result.summary)
+        self.assertEqual(dns_email.spf(self.spf_ctx({"example.com": ["v=spf1 -all ip4:0.0.0.0/0"]})).status, "pass")
+        self.assertEqual(dns_email.spf(self.spf_ctx({"example.com": ["v=spf1 -ip4:0.0.0.0/0 -all"]})).status, "pass")
+        self.assertEqual(dns_email.spf(self.spf_ctx({"example.com": ["v=spf1 ~ip4:0.0.0.0/0 -all"]})).status, "pass")
+        self.assertEqual(dns_email.spf(self.spf_ctx({"example.com": ["v=spf1 ip4:192.0.2.0/24 -all"]})).status, "pass")
+        self.assertEqual(dns_email.spf(self.spf_ctx({"example.com": ["v=spf1 a/0 -all"]})).status, "pass")
+        self.assertEqual(dns_email.spf(self.spf_ctx({"example.com": ["v=spf1 ip6::/0 -all"]})).status, "pass")
+        neutral = dns_email.spf(self.spf_ctx({"example.com": ["v=spf1 ?ip4:0.0.0.0/0 -all"]}))
+        self.assertEqual(neutral.status, "warn")
+        opened = {"example.com": ["v=spf1 include:open.test -all"], "open.test": ["v=spf1 ip4:0.0.0.0/0 -all"]}
+        included = dns_email.spf(self.spf_ctx(opened))
+        self.assertEqual(included.status, "fail")
+        self.assertIn("include open.test", included.summary)
+        redirected = {"example.com": ["v=spf1 redirect=_spf.example.com"],
+                      "_spf.example.com": ["v=spf1 ip4:0.0.0.0/0 -all"]}
+        self.assertEqual(dns_email.spf(self.spf_ctx(redirected)).status, "fail")
+
     def test_spf_redirect_ignored_when_all_present_and_macros_not_walked(self):
         c = self.spf_ctx({"example.com": ["v=spf1 -all redirect=gone.test"]}, ("gone.test",))
         self.assertEqual(dns_email.spf(c).status, "pass")

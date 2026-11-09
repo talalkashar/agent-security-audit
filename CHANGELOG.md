@@ -12,6 +12,7 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 - BROWSER-05 applies `<meta name="referrer">` after the header. The last single-keyword meta wins, so `unsafe-url` in the page does not pass behind a strict header.
 - INFRA-04 judges a sensitive file by its bytes. `Content-Type: text/html` (nginx's default type) no longer hides a `.env`, git file, SQL dump, npm token, Vercel project file or compose file that is not an HTML page.
 - NEXT-02 searches the whole saved source-map body for `"mappings"`. A key past the first 500 KB no longer passes, and a body cut off before the key is manual.
+- INFRA-06 fails an SPF record that matches every address with an `ip4` or `ip6` prefix of `/0` before `all`. `v=spf1 ip4:0.0.0.0/0 -all` no longer passes. A fail or softfail qualifier on that mechanism, and an `all` that comes first, still pass.
 
 ## 0.2.0 - unreleased draft (set the date when the release is tagged)
 
