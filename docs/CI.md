@@ -1,6 +1,6 @@
 # Continuous integration
 
-Three workflows live in `.github/workflows/`. Every third-party action is pinned to a full commit SHA, with the release tag in a trailing comment (`uses: owner/action@<sha> # vX.Y.Z`). Dependabot proposes SHA bumps. Every workflow starts with read-only `contents: read` permission, or with no permissions at all, and grants write scopes only to the job that needs them. Checkouts use `persist-credentials: false`.
+Four workflows live in `.github/workflows/`. Every third-party action is pinned to a full commit SHA, with the release tag in a trailing comment (`uses: owner/action@<sha> # vX.Y.Z`). Dependabot proposes SHA bumps. Every workflow starts with read-only `contents: read` permission, or with no permissions at all, and grants write scopes only to the job that needs them. Checkouts use `persist-credentials: false`.
 
 ## ci.yml: lint and tests
 
@@ -23,7 +23,7 @@ The test steps run in `bash` on all three operating systems (Git Bash on Windows
 
 ## codeql.yml: static analysis
 
-Runs CodeQL for Python on push and pull request to `main`, and once a week (Monday 06:23 UTC) so that new queries reach code nobody has changed. The workflow uses `build-mode: none` because the package is pure Python. Only this job holds `security-events: write`, which it needs to upload results to code scanning.
+Runs CodeQL for Python on push and pull request to `main`, and once a week (Monday 06:23 UTC) so that new queries reach code nobody has changed. The workflow uses `build-mode: none` because the package is pure Python. Only its analysis job holds `security-events: write`, which it needs to upload results to code scanning.
 
 **Reading a failure**
 
@@ -34,8 +34,6 @@ Runs CodeQL for Python on push and pull request to `main`, and once a week (Mond
 
 Runs on push to `main`, once a week (Tuesday 07:41 UTC), and on manual dispatch. It grades supply-chain practices: pinned dependencies, token permissions, branch protection, code review, a security policy, and others. It uploads a SARIF file to code scanning and keeps it as a 5-day artifact. With `publish_results: true` (which needs `id-token: write`) it also publishes the score to the public Scorecard API and badge.
 
-**It only reports once the repository is public.** On a private repository, publishing is refused and there is nothing to show.
-
 `publish_results` only accepts a minimal workflow: no top-level `env` or `defaults`, and only an allow-listed set of actions. That is why this file has no `concurrency` block. Keep it bare.
 
 **Reading a failure**
@@ -43,10 +41,24 @@ Runs on push to `main`, once a week (Tuesday 07:41 UTC), and on manual dispatch.
 - The job fails at the scorecard step with a publish or "workflow verification" error: someone added a non-allow-listed step, a top-level `env`/`defaults`, or a write permission at workflow level. Revert that change.
 - A low score is not a failure. Each check shows up as a code-scanning alert that includes the remediation steps.
 
+## release.yml: build and publish
+
+Runs only when the owner publishes a GitHub release. Two jobs:
+
+| Job | What it does |
+| --- | --- |
+| `build` | Checks out the release, installs `build==1.6.1`, runs `python -m build` and stores `dist/` (sdist and wheel) as an artifact. |
+| `publish` | Downloads `dist/` and uploads it to PyPI with `pypa/gh-action-pypi-publish` through [Trusted Publishing](https://docs.pypi.org/trusted-publishers/). It runs in the `pypi` environment and is the only job with `id-token: write`; no PyPI token is stored in the repository. |
+
+The one-time PyPI and environment setup, and the release steps, are in [INSTALL.md](INSTALL.md#publishing-to-pypi-owner-once).
+
+**Reading a failure**
+
+- *build* fails: the package does not build from a clean checkout. Run `python -m pip install build==1.6.1 && python -m build` locally.
+- *publish* fails with a trusted-publisher or OIDC error: the pending publisher on PyPI does not match the owner, repository, workflow file name or environment name. It fails with "file already exists" when that version was uploaded before; bump the version.
+
 ## Changing a workflow
 
 1. Pin any new action to a commit SHA. For annotated tags, take the `^{}` line: `git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>^{}'`. Put the tag in a comment.
 2. Check the YAML parses: `uvx --from pyyaml python -c 'import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]' .github/workflows/*.yml`
 3. Audit it: `uvx zizmor .github/workflows`. The default persona must report no findings. `--persona pedantic` reports one known item, the missing `concurrency` block in `scorecard.yml`, which is left out on purpose (see above).
-
-CodeQL and Scorecard jobs stay skipped while this repository is private. They run after the public launch; private code scanning requires an eligible GitHub Code Security plan. No repository visibility or billing settings are changed by these workflows.

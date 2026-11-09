@@ -12,9 +12,12 @@ Each statement names the source file it comes from, so you can check it against 
   record (its own `mta-sts.` host).
 - No telemetry, analytics, crash reporting or update check. Only six modules import a network or process module, and
   `tests/test_outbound_hosts.py` fails if that list or the set of host names in the source changes.
-- The only file the tool writes is the report you ask for with `--out`.
-- The package has no runtime dependencies (`dependencies = []` in `pyproject.toml`) and reads no environment
-  variables.
+- Scanning and the code audit write only the report you ask for with `--out`. `asa install <agent> --yes` (and only
+  with `--yes`) also writes that agent's config file, a `.bak` copy of it and, for two agents, the skill (see
+  [What is written to disk](#what-is-written-to-disk)).
+- The package has no runtime dependencies (`dependencies = []` in `pyproject.toml`). Scanning and the code audit read
+  no environment variables themselves; `asa install` reads the home folder
+  (`HOME`; `USERPROFILE` on Windows), `PATH` (to find `asa-mcp` and `uvx`) and, on Windows, `APPDATA`.
 
 ## Network requests
 
@@ -41,7 +44,7 @@ The client has four ways to open a connection:
 | The target's `www.` or apex twin | only when the target's root page redirects there over HTTPS | the scan then continues against that origin (`canonical_target` in `runner.py`); a redirect to any other host stops the scan with an error | n/a |
 | `cloudflare-dns.com` (default) or the URL given with `--dns-resolver` | DNS and email checks INFRA-06, 07, 11, 12, 27, 28 on a public hostname | `GET <resolver>?name=<name>&type=<TXT, MX, A, CAA or DS>[&cd=1]` with `Accept: application/dns-json` (`txt_records` in `checks/dns_email.py`, `dns_query` in `checks/network.py`). Names are the target host, its `www`/apex twin, `_dmarc.`, `_mta-sts.` and `_smtp._tls.` under the mail domain, and the names between the target host and its registered domain (CAA, DS). | `--no-dns` (MCP: `no_dns`). Skipped automatically for local hosts and IP-address targets (`_why_skip` in `checks/dns_email.py`). |
 | `mta-sts.<target domain>` | INFRA-12, only when DNS shows MX records and a `v=STSv1` record | `GET /.well-known/mta-sts.txt` (`mta_sts` in `checks/network.py`) | `--no-dns` |
-| `<project>.supabase.co` | ACCESS-01, only with `--allow-supabase`, and only if the site's own JavaScript names a project and a public (anon or publishable) key | `GET /rest/v1/` and one `HEAD /rest/v1/<table>?select=*&limit=1` per table (max 50) with `Prefer: count=exact` and the site's own public key (`checks/supabase.py`). Reports table names and row counts, not rows. | leave out `--allow-supabase`; for a local target it also needs `--authorized` |
+| `<project>.supabase.co` | ACCESS-01, only with `--allow-supabase`, and only if the site's own JavaScript names a project and a public (anon or publishable) key | `GET /rest/v1/` only when neither `--supabase-table` nor the site's JavaScript names a table, then one `HEAD /rest/v1/<table>?select=*&limit=1` per table (max 50) with `Prefer: count=exact` and the site's own public key (`checks/supabase.py`). Reports table names and row counts, not rows. | leave out `--allow-supabase`; for a local target it also needs `--authorized` |
 | `api.osv.dev` | `asa code`, `asa scan --code`, MCP `run_code_audit`, MCP `run_scan` with `code_path` | `POST /v1/querybatch` with JSON `{"queries": [{"package": {"ecosystem", "name"}, "version"}]}` for each package read from lockfiles, up to 500 per request (`query_osv` in `code_audit/deps.py`). No file contents, paths or project names. | `--no-osv` (MCP: `no_osv`) |
 
 The scanned site's content is not sent to any third party. Responses from the target are read and turned into
@@ -55,13 +58,47 @@ confirm they point at a loopback or private address (`_resolves_off_machine`).
 
 `asa lab` starts a practice site bound to `127.0.0.1` only (`lab.py`). It makes no outbound requests.
 
+### What "passive" sends
+
+Passive checks run on any target, without `--authorized`. They send no payloads and no guessed paths for sensitive
+files, but not all of their traffic is what a browser sends on its own:
+
+- a crawl of same-origin links (`crawl.py`), seeded from `/robots.txt` and `/sitemap.xml`; links whose path looks
+  like sign-out, delete, unsubscribe or a similar state change are skipped (`SKIP_LINK`), and on a host scanned
+  without `--authorized` the `robots.txt` Disallow paths are not visited;
+- `GET /.well-known/security.txt` (INFRA-05, `checks/exposure.py`) and a `.map` request next to each same-origin
+  script (NEXT-02, `checks/exposure.py`);
+- `GET /` with a made-up `Origin` header, including `null` (BROWSER-07, `checks/browser.py`);
+- one plain-HTTP request to the same host (INFRA-01, `checks/transport.py`);
+- TLS handshakes that offer only TLS 1.0, only TLS 1.1, or only weak cipher suites, to see whether the server refuses
+  them (INFRA-03, INFRA-26, `checks/transport.py`, `checks/network.py`).
+
+These are mild and common in scanners, but they are an automated scan. Organisations that forbid scanning third-party
+hosts should treat a passive scan the same way.
+
 ## What is written to disk
 
-- The report, only when you pass `--out FILE`; the CLI creates the parent folder if needed (`_emit` in `cli.py`).
-  Without `--out` the report goes to stdout.
-- Nothing else. There is no cache, config file, log file or state directory: a search for `open(` with a write mode,
-  `write_text`, `write_bytes`, `mkdir` and `tempfile` in the package finds only `_emit` in `cli.py`. The client's
-  response cache is an in-memory dict per run (`Client._cache` in `http.py`).
+- `asa scan` and `asa code` write the report, only when you pass `--out FILE`; the CLI creates the parent folder if
+  needed (`_emit` in `cli.py`). Without `--out` the report goes to stdout. There is no cache, log file or state
+  directory; the client's response cache is an in-memory dict per run (`Client._cache` in `http.py`).
+- `asa install <agent>` writes nothing without `--yes`: it prints the change. With `--yes` (`apply` in `install.py`)
+  it writes the files below, and nothing else:
+  - the agent's MCP config, merged with one `agent-security-audit` entry: `.mcp.json` (claude-code) or
+    `.vscode/mcp.json` (vscode) in the current folder; `~/.cursor/mcp.json`; `claude_desktop_config.json` in
+    `~/Library/Application Support/Claude/` (macOS), `%APPDATA%\Claude\` (Windows) or `~/.config/Claude/` (Linux);
+    `~/.config/devin/mcp_config.json`, plus `~/.codeium/windsurf/mcp_config.json` when that folder exists (windsurf);
+    `~/.codex/config.toml`; `~/.gemini/settings.json`; `~/.gemini/config/mcp_config.json` (antigravity)
+    (`mcp_targets` in `install.py`);
+  - the skill, for `claude-code` (`~/.claude/skills/agent-security-audit/SKILL.md`) and `codex`
+    (`~/.agents/skills/agent-security-audit/SKILL.md`) (`skill_targets`);
+  - `<file>.bak`, a copy of each existing file before it changes, beside the real file; if a `.bak` already exists it
+    stops instead of overwriting it;
+  - a temporary `.<file>.<random>` in the same folder, renamed over the config (`_replace_config`), and any missing
+    parent folder, created with mode `0700` (`_parent_directory`).
+
+  Project configs are never written through a symlink, and a home config only when its real path stays inside your
+  home folder. A file that is not plain JSON or valid TOML is left alone and the entry is printed instead. `--yes`
+  refuses to write on platforms without directory-handle support (Windows).
 - The MCP server writes nothing to disk. It returns reports over stdio and redirects anything a check prints to
   stderr, so stdout carries only protocol messages (`mcp_server.py`).
 - Python itself may write `__pycache__` bytecode next to the installed package, as for any Python package.
@@ -108,7 +145,7 @@ client.
 | Check | What it sends (file) |
 | --- | --- |
 | INFRA-04 | `GET` for known sensitive paths such as `/.env`, `/.env.local`, `/.git/` files and backups (`checks/exposure.py`) |
-| API-01 | only with `--rate-limit-path`: up to `--rate-limit-attempts` requests (default 30, max 60) of the given method and body to that path, stopping at the first 429 (`checks/ratelimit.py`). Use fake credentials. |
+| API-01 | up to `--rate-limit-attempts` requests (default 30, max 60), stopping at the first 429, to the path given with `--rate-limit-path` (POST by default, `--rate-limit-method`, `--rate-limit-body`); without that flag, to a same-origin POST login form the crawl found, never one whose page or action looks like sign-up or password reset, with the fake address `asa-rate-limit-probe@example.invalid` (`login_endpoint` in `checks/ratelimit.py`) |
 | API-02 | `GET /asa-missing-<random>`, `POST /api/asa-missing-<random>` with body `{`, and the same malformed body to a login endpoint found on the site (`checks/exposure.py`) |
 | API-19 | requests to the site's redirect parameters with `asa-redirect-probe.invalid` in several encodings; responses are read, redirects not followed (`checks/webapp.py`) |
 | API-20, 21, 22 | `GET` for directory listings, debug and status endpoints, and API description files (`checks/webapp.py`) |
@@ -132,6 +169,8 @@ client.
   `instructions` say the same (`UNTRUSTED_NOTE`, `INSTRUCTIONS` in `mcp_server.py`).
 - The Markdown, HTML and SARIF renderers escape the same fields for their format (`_clean`, `_md_escape`, HTML escaping
   in `report.py`), so a value cannot start a new Markdown line, inject a link or add HTML.
+- Tool errors (for example a redirect host or a malformed status line the target sent) get the same control-character
+  strip, length cap and untrusted-data note as a summary (`_tool_error` in `mcp_server.py`).
 - The MCP `run_scan` tool takes the same `authorized`, `allow_supabase`, `no_dns`, `no_ports` and `no_osv` switches
   as the CLI.
 
@@ -141,16 +180,25 @@ These measures reduce, but cannot remove, the chance that an agent acts on text 
 
 - Runtime: none. `pyproject.toml` has `dependencies = []`; the package uses only the Python standard library
   (Python 3.11 or later).
-- Development: `ruff==0.17.4`, pinned in `.github/workflows/ci.yml`. Tests use the standard library `unittest`.
+- Development: `ruff==0.17.4`, pinned in `.github/workflows/ci.yml`; `build==1.6.1`, pinned in
+  `.github/workflows/release.yml`. Tests use the standard library `unittest`.
 - CI actions are pinned by commit SHA, and the workflow token is read-only (`permissions: contents: read` in
   `.github/workflows/ci.yml`).
 
 ## Release provenance
 
-`.github/workflows/release.yml` is not on `main` at the time of writing. The version on the `r3-install` branch builds
-the package on a published GitHub release and uploads it to PyPI with Trusted Publishing (OIDC, `id-token: write` on
-the publish job only, no stored PyPI token), with every action pinned by SHA. Check that file on `main` before relying
-on this.
+Releases are git tags (`v0.2.0` is the first public one); the install commands in the docs pin that tag. When the
+owner publishes a GitHub release, `.github/workflows/release.yml` runs two jobs:
+
+- `build`: checks out the release (`persist-credentials: false`), installs `build==1.6.1` and runs `python -m build`
+  to make the sdist and wheel, then stores them as a workflow artifact.
+- `publish`: downloads that artifact and uploads it to PyPI with `pypa/gh-action-pypi-publish` through Trusted
+  Publishing (OIDC). Only this job has `id-token: write`, it runs in the `pypi` environment, and no PyPI token is
+  stored in the repository.
+
+The workflow token is otherwise read-only (`permissions: contents: read`) and every action is pinned by commit SHA.
+`docs/CI.md` describes the workflows and `docs/INSTALL.md` the one-time PyPI setup. To check what you install, compare
+the tag you pin with the release page, or read the source at that tag before installing it.
 
 ## Verify it yourself
 
@@ -163,8 +211,8 @@ PYTHONPATH=src python3 -m unittest tests.test_outbound_hosts -v
 # Every URL literal and every network, process, file-write and environment call
 grep -rnoE "https?://[^\"' )]+" src/agent_security_audit --include='*.py' | sort -u
 grep -rnE "import (socket|ssl|subprocess|urllib\.request|http\.client|http\.server)|from (socket|ssl|subprocess|urllib\.request|http)" src/agent_security_audit
-grep -rnE "os\.environ|getenv|subprocess|urlopen|create_connection|getaddrinfo" src/agent_security_audit
-grep -rnE "open\([^)]*['\"]w|write_text|write_bytes|mkdir|tempfile" src/agent_security_audit
+grep -rnE "os\.environ|getenv|Path\.home|shutil\.which|subprocess|urlopen|create_connection|getaddrinfo" src/agent_security_audit
+grep -rnE "open\([^)]*['\"]w|O_WRONLY|write_text|write_bytes|mkdir|makedirs|rename|tempfile" src/agent_security_audit
 
 # Use your own DNS-over-HTTPS resolver (any endpoint that answers application/dns-json), or none at all
 asa scan https://your-site.example --dns-resolver https://doh.internal.example/dns-query
@@ -187,7 +235,11 @@ asa scan https://your-site.example --no-ports
   (`tool_run_scan` passes `"dns_resolver": None` in `mcp_server.py`).
 - `--dns-resolver` must be an `https://` URL (`Client.external` refuses other schemes) and must speak the JSON DoH
   format.
-- DNS names sent to the resolver reveal which domain you are scanning to the resolver's operator.
+- DNS names sent to the resolver reveal which domain you are scanning to the resolver's operator. This is on by default
+  for public hosts; use `--no-dns` or your own resolver where that is not acceptable.
+- `--authorized` (MCP: `authorized=true`) is a statement by whoever runs the tool, or by the agent calling it. The tool
+  cannot check that the statement is true. The skill and the MCP instructions tell agents to set it only after the
+  user says they own the site or have written permission.
 - The local-host check in `scope.py` resolves `*.test` and `*.localhost` names once, before the scan; a resolver that
   changes its answer mid-scan is not covered.
 - `tests/test_outbound_hosts.py` scans string literals in the Python source. A host assembled from pieces at run time,
