@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..findings import location_ids
 from ..model import Result
 
 MAX_EVIDENCE = 25
@@ -16,7 +17,12 @@ def make(check_id, status, summary, findings=(), evidence=(), fix=""):
     if len(findings) > MAX_EVIDENCE:
         ev.append(f"... and {len(findings) - MAX_EVIDENCE} more")
     ev += list(evidence)
-    return Result(check_id, status, summary, ev, fix, [f.location() for f in findings[:MAX_LOCATIONS]])
+    kept = findings[:MAX_LOCATIONS]
+    locations = [f.location() for f in kept]
+    # The id hashes what was matched (the snippet), not the message, whose wording can change between versions.
+    for loc, fid in zip(locations, location_ids(check_id, locations, [f.snippet or f.note for f in kept])):
+        loc["finding_id"] = fid
+    return Result(check_id, status, summary, ev, fix, locations)
 
 
 def plural(n, word):

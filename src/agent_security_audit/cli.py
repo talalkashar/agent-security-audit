@@ -1,4 +1,4 @@
-"""Command line: asa list | show | rules | lab | scan | code | install, and `asa <url>` as a shortcut for `asa scan <url>`."""
+"""Command line: asa list | show | rules | lab | scan | code | diff | install, and `asa <url>` as a shortcut for `asa scan <url>`."""
 
 from __future__ import annotations
 
@@ -10,14 +10,14 @@ import shutil
 import sys
 from urllib.parse import urlsplit
 
-from . import __version__, catalog, code_audit, install, report, runner
+from . import __version__, catalog, code_audit, diff, install, report, runner
 from .checks.dns_email import DEFAULT_RESOLVER
 from .checks.ratelimit import ALLOWED_METHODS as ALLOWED_RATE_LIMIT_METHODS
 from .scope import ScopeError, check_dns_resolver, is_local_host
 
 FAIL_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-COMMANDS = ("list", "show", "rules", "lab", "scan", "code", "install")
-FORMATS = ("md", "json", "sarif", "html")
+COMMANDS = ("list", "show", "rules", "lab", "scan", "code", "diff", "install")
+FORMATS = ("md", "json", "sarif", "html", "junit", "jsonl")
 MAX_TIME = 300.0
 EXIT_NOT_RUN = 3
 FAIL_ON_ERROR = ("all", "any", "none")
@@ -28,6 +28,7 @@ MAIN_EPILOG = """examples:
   asa scan http://localhost:3000 --code .    scan and read the project's source in one run
   asa code .                                 audit the source only (nothing is executed)
   asa show AUTH-01                           one check in full: risk, build rule, proof steps
+  asa diff old.json new.json                 what was fixed, is new, regressed or is not proven between two runs
 
 exit codes (scan and code):
   0  nothing at or above --fail-on failed
@@ -40,10 +41,13 @@ FAIL_ON_ERROR_HELP = ("when an error (a check that could not run) makes the run 
                       "check that tried to run errored, or a check named with --check errored; 'any' on any error; "
                       "'none' never. A failed check (exit 1) takes precedence. With --fail-on none the default is "
                       "'none', so --fail-on none still always exits 0")
-EXTENSIONS = {".md": "md", ".json": "json", ".sarif": "sarif", ".html": "html", ".htm": "html"}
+EXTENSIONS = {".md": "md", ".json": "json", ".sarif": "sarif", ".html": "html", ".htm": "html", ".xml": "junit",
+              ".jsonl": "jsonl"}
 SCAN_EPILOG = """output:
-  --out FILE        write the full report to FILE; the format comes from --format, else from the
-                    extension (.md .json .sarif .html), else Markdown
+  --out FILE        write the full report to FILE. Repeat it to write several formats from one run.
+                    The format comes from the extension (.md .json .sarif .html, .xml = JUnit,
+                    .jsonl = JSON Lines); --format overrides it when there is only one --out.
+                    An unknown extension exits 2 before any request is sent.
   no --out          a terminal gets a short summary (counts and what to fix first); a pipe or file
                     gets the full Markdown report. --format always prints that full format.
   progress          one updating line on stderr while a terminal is attached; --quiet turns it off
@@ -59,15 +63,24 @@ exit codes:
 
 `asa <url> ...` is the same as `asa scan <url> ...`."""
 
+DIFF_EPILOG = """buckets: REGRESSED (pass -> fail/warn), NEW, STILL OPEN, NOT PROVEN (fail/warn -> error, manual,
+skip or missing, or pass -> error, manual or skip; never counted as fixed), FIXED (fail/warn -> pass only), NOT
+COMPARED (ran in one run only).
+
+exit codes:
+  0 ok · 1 a NEW or REGRESSED fail at or above --fail-on-new · 2 bad input or different targets"""
+
 
 def scan_flags(*, authorized, allow_supabase, auto_only, no_dns, dns_resolver, no_ports, rate_limit_path,
-               rate_limit_method, budget, max_time, max_pages, code, osv, insecure=False, checks=None):
+               rate_limit_method, budget, max_time, max_pages, code, osv, insecure=False, checks=None, areas=None,
+               stacks=None):
     """The settings of a scan, as recorded in the report's scope block (CLI and MCP alike)."""
     return {"authorized": bool(authorized), "allow_supabase": bool(allow_supabase), "auto_only": bool(auto_only),
             "insecure": bool(insecure), "no_dns": bool(no_dns),
             "dns_resolver": None if no_dns else (dns_resolver or DEFAULT_RESOLVER), "no_ports": bool(no_ports),
             "rate_limit_path": rate_limit_path, "rate_limit_method": rate_limit_method, "budget": budget,
-            "max_time": max_time, "max_pages": max_pages, "checks": list(checks or []), "code": code,
+            "max_time": max_time, "max_pages": max_pages, "checks": list(checks or []),
+            "areas": list(areas or []), "stacks": list(stacks or []), "code": code,
             "osv": bool(osv)}
 
 
@@ -207,8 +220,9 @@ def build_parser():
     sc.add_argument("--check", action="append", help="only these check ids (repeat or comma-separate)")
     sc.add_argument("--area", action="append")
     sc.add_argument("--stack", action="append", help=f"only checks for these stacks: {', '.join(catalog.STACKS)}")
-    sc.add_argument("--format", choices=FORMATS, help="md, json, sarif or html (see output below)")
-    sc.add_argument("--out", help="write the report here instead of stdout")
+    sc.add_argument("--format", choices=FORMATS, help="md, json, sarif, html, junit or jsonl (see output below)")
+    sc.add_argument("--out", action="append", help="write the report here instead of stdout; repeat for several "
+                    "formats from one run (see output below)")
     sc.add_argument("-q", "--quiet", action="store_true", help="no progress line on stderr")
     sc.add_argument("--auto-only", action="store_true", help="only the scanner checks; leave out code and logged-in checks")
     sc.add_argument("--fail-on", choices=("critical", "high", "medium", "low", "none"), default="high",
@@ -251,8 +265,9 @@ def build_parser():
     co.add_argument("path", nargs="?", default=".", help="project folder (default: the current folder)")
     co.add_argument("--check", action="append", help="only these check ids (repeat or comma-separate)")
     co.add_argument("--area", action="append")
-    co.add_argument("--format", choices=FORMATS, help="md, json, sarif or html (default as for scan)")
-    co.add_argument("--out", help="write the report here instead of stdout")
+    co.add_argument("--format", choices=FORMATS, help="md, json, sarif, html, junit or jsonl (default as for scan)")
+    co.add_argument("--out", action="append", help="write the report here instead of stdout; repeatable, the format "
+                    "comes from each extension (as for scan)")
     co.add_argument("-q", "--quiet", action="store_true", help="no progress output on stderr (as for scan)")
     co.add_argument("--fail-on", choices=("critical", "high", "medium", "low", "none"), default="high",
                     help="exit 1 when a failed check is at least this severe (default: high)")
@@ -260,6 +275,19 @@ def build_parser():
     co.add_argument("--no-osv", action="store_true",
                     help="skip the dependency vulnerability lookup (the only network call, to api.osv.dev)")
     co.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for OSV")
+
+    df = sub.add_parser("diff", help="compare two JSON reports of the same target: fixed, new, regressed, not proven",
+                        description="Compare two `--format json` reports of the same target. FIXED needs an observed "
+                        "pass; a finding that is now error, manual, skip or missing is NOT PROVEN, never fixed.",
+                        epilog=DIFF_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
+    df.add_argument("old", help="the earlier report (JSON)")
+    df.add_argument("new", help="the later report (JSON)")
+    df.add_argument("--format", choices=("text", "md", "json"), default="text", help="text (default), md or json")
+    df.add_argument("--out", help="write the diff here instead of stdout")
+    df.add_argument("--fail-on-new", choices=("critical", "high", "medium", "low", "none"), default="high",
+                    help="exit 1 when a NEW or REGRESSED fail is at least this severe (default: high)")
+    df.add_argument("--allow-different-target", action="store_true",
+                    help="compare reports whose targets differ (refused by default)")
 
     ins = sub.add_parser("install", help="add the MCP server (and the skill, where supported) to an agent's config",
                          description="Adds the asa-mcp server to one agent's MCP config, plus the skill for "
@@ -283,9 +311,26 @@ def _is_tty(stream):
 def _output_format(args):
     if args.format:
         return args.format
-    if args.out:
-        return EXTENSIONS.get(os.path.splitext(args.out)[1].lower(), "md")
     return "summary" if _is_tty(sys.stdout) else "md"
+
+
+def _out_plan(args):
+    """[(path, format)] for the --out files. Raises ValueError (exit 2) on an unknown extension or on --format with
+    several --out; _main calls it before the scan, so a typo costs no requests."""
+    outs = args.out or []
+    if args.format and len(outs) > 1:
+        raise ValueError("--format applies to a single --out; with several, each file's format comes from its "
+                         "extension (.md .json .sarif .html .xml .jsonl)")
+    if args.format:
+        return [(path, args.format) for path in outs]
+    plan = []
+    for path in outs:
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in EXTENSIONS:
+            raise ValueError(f"--out {path}: unknown extension {ext or '(none)'}; use .md .json .sarif .html, "
+                             ".xml (JUnit) or .jsonl (JSON Lines), or give --format")
+        plan.append((path, EXTENSIONS[ext]))
+    return plan
 
 
 def _progress(done, total, check_id, status):
@@ -331,12 +376,16 @@ def _main(argv=None):
             return 0
         if args.cmd == "lab":
             return run_lab(args.mode, args.port)
+        if args.cmd == "diff":
+            return diff.run(args.old, args.new, fmt=args.format, out=args.out, fail_on_new=args.fail_on_new,
+                            allow_different_target=args.allow_different_target, say=_say)
         if args.cmd == "install":
             try:
                 return install.run(args.agent, yes=args.yes, uvx=args.uvx)
             except install.InstallError as exc:
                 _say(exc)
                 return 2
+        _out_plan(args)  # bad --out or --format exits 2 here, before any request
         if args.cmd == "code":
             hosts, started = set(), runner.utc_now()
             target, results = runner.audit_code(args.path, osv=not args.no_osv, timeout=args.timeout,
@@ -383,7 +432,8 @@ def _main(argv=None):
                            no_dns=args.no_dns, dns_resolver=args.dns_resolver, no_ports=args.no_ports,
                            rate_limit_path=args.rate_limit_path, rate_limit_method=options["rate_limit_method"],
                            budget=args.budget, max_time=args.max_time, max_pages=args.max_pages, code=args.code,
-                           osv=not args.no_osv, insecure=args.insecure, checks=_csv(args.check))
+                           osv=not args.no_osv, insecure=args.insecure, checks=_csv(args.check),
+                           areas=_csv(args.area), stacks=stacks)
         scope = report.run_scope(interface="cli", mode="scan+code" if args.code else "scan", flags=flags,
                                  started=record.get("started", started), finished=runner.utc_now(), hosts=hosts,
                                  requests_sent=record.get("requests_sent"))
@@ -435,30 +485,40 @@ def exit_code(args, results):
     return 0
 
 
+RENDER = {"md": report.to_markdown, "json": report.to_json, "sarif": report.to_sarif, "html": report.to_html,
+          "junit": report.to_junit, "jsonl": report.to_jsonl}
+
+
 def _emit(args, target, results, scope=None):
+    outputs = _out_plan(args)
     fmt = _output_format(args)
-    if fmt == "summary":
+    if outputs:
+        text = None
+    elif fmt == "summary":
         # Quoted, so a folder with spaces or shell characters gives a command that can be pasted as is.
         again = f"asa {'code' if getattr(args, 'cmd', '') == 'code' else 'scan'} {shlex.quote(target)}"
         hint = f"Full report with evidence: {again} --out asa-report.html"
         text = report.summary_text(target, results, hint, width=_width(),
                                    next_step=_next_step(args, target, results))
     else:
-        render = {"md": report.to_markdown, "json": report.to_json, "sarif": report.to_sarif,
-                  "html": report.to_html}[fmt]
-        text = render(target, results, scope=scope)
-    if args.out:
+        text = RENDER[fmt](target, results, scope=scope)
+    # Every file comes from the same results and scope. One failed write does not stop the others; it makes exit 2.
+    write_failed = False
+    for path, out_fmt in outputs:
         try:
-            os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-            with open(args.out, "w", encoding="utf-8") as fh:
-                fh.write(text)
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(RENDER[out_fmt](target, results, scope=scope))
         except OSError as exc:
-            _say(f"could not write {args.out}: {exc.strerror or exc}")
-            return 2
+            _say(f"could not write {path}: {exc.strerror or exc}")
+            write_failed = True
+            continue
         c = report.counts(results)
-        print(f"asa: wrote {args.out} ({c['fail']} fail, {c['warn']} warn, {c['error']} error, {c['pass']} pass)",
+        print(f"asa: wrote {path} ({c['fail']} fail, {c['warn']} warn, {c['error']} error, {c['pass']} pass)",
               file=sys.stderr)
-    else:
+    if write_failed:
+        return 2
+    if text is not None:
         print(text, end="")
     code = exit_code(args, results)
     if code == EXIT_NOT_RUN:

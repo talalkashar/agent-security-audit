@@ -120,8 +120,9 @@ class FixtureTest(unittest.TestCase):
         results = by_id(self.vuln_results)
         self.assertIn("middleware.ts:5:", results["AUTH-01"].evidence[0])
         self.assertIn("supabase/migrations/0001_init.sql:2:", results["ACCESS-01"].evidence[0])
-        self.assertEqual(results["NEXT-02"].locations[0], {"path": "next.config.js", "line": 2,
-                                                           "message": "source maps on in production"})
+        loc = dict(results["NEXT-02"].locations[0])
+        self.assertRegex(loc.pop("finding_id"), r"^asa1-[0-9a-f]{16}$")
+        self.assertEqual(loc, {"path": "next.config.js", "line": 2, "message": "source maps on in production"})
         paths = {loc["path"] for loc in results["API-32"].locations}
         self.assertEqual(paths, {"app/api/notes/route.ts", "app.py"})
 

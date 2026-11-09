@@ -316,9 +316,12 @@ asa scan <url> --out asa-report.html            # one self-contained HTML page (
 asa scan <url> --format md                      # Markdown report for people
 asa scan <url> --format json --out asa.json     # JSON for tools and agents
 asa scan <url> --format sarif --out asa.sarif   # SARIF 2.1.0 for GitHub code scanning
+asa scan <url> --out asa.xml                    # JUnit XML for Jenkins, GitLab and Azure DevOps test screens
+asa scan <url> --out asa.jsonl                  # JSON Lines, one event per finding, for Splunk, Elastic or Sentinel
+asa scan <url> --out asa.sarif --out asa.html --out asa.xml   # several files from one scan
 ```
 
-With `--out`, the format comes from `--format`, else from the file extension (`.md`, `.json`, `.sarif`, `.html`), else Markdown. The Markdown and HTML reports open with "Fix these first" (up to 10 failed checks, most severe first, each with its fix) and a coverage table by OSI layer, then every result with its evidence. JSON adds the same as `fix_first` and `osi_layers`. The progress line goes to stderr only when it is a terminal; `--quiet` turns it off.
+`--out` can be repeated: every file is written from the same scan, and each file's format comes from its extension (`.md`, `.json`, `.sarif`, `.html`, `.xml` for JUnit, `.jsonl` for JSON Lines). `--format` overrides the extension when there is a single `--out`. An unknown extension, or `--format` with several `--out`, exits 2 before any request is sent. If one file cannot be written, the others are still written and the exit code is 2. In JUnit only a `pass` is a passing test: `fail` and `warn` are failures, `error` is an error, `manual` and `skip` are skipped. The exit code, not the test screen, is the gate (see [docs/CI.md](docs/CI.md#junit-and-json-lines)). The Markdown and HTML reports open with "Fix these first" (up to 10 failed checks, most severe first, each with its fix) and a coverage table by OSI layer, then every result with its evidence. JSON adds the same as `fix_first` and `osi_layers`. The progress line goes to stderr only when it is a terminal; `--quiet` turns it off.
 
 Passive checks run on any URL you give. Scan only sites you own or are allowed to test. Active probes on a non-local host run only with `--authorized`; otherwise they come back as `skip` with the reason.
 
@@ -356,6 +359,25 @@ jobs:
 ```
 
 Pin the actions to commit SHAs in your own workflow, as this repository does. Checks that only make sense on the deployed site (HTTPS redirect, certificate, HSTS) are reported as not applicable on localhost. Scan your preview or production URL with `--authorized` to cover them.
+
+## Comparing two runs
+
+`asa diff` compares two JSON reports of the same target, for a retest after a fix or a pull request gate on a project that already has a backlog:
+
+```sh
+asa scan https://example.com --format json --out before.json
+asa scan https://example.com --format json --out after.json
+asa diff before.json after.json                       # text; --format md or json, --out FILE
+asa diff before.json after.json --fail-on-new medium  # exit 1 on a new or regressed fail at medium or above
+```
+
+Each finding lands in one bucket: REGRESSED (passed before, fails or warns now; printed first), NEW, STILL OPEN (a severity change is noted), NOT PROVEN, FIXED and NOT COMPARED. FIXED needs an observed pass. A finding that is now `error`, `manual`, `skip` or missing from a run that selected its check is NOT PROVEN, never fixed, and so is a code location in a file the new run did not read (over the size cap, or a scan without `--code`). A pass that is now `error`, `manual` or `skip` is NOT PROVEN too: the new run lost that proof. A check that ran in only one of the two runs (for example it was not selected) is NOT COMPARED. The header warns when the asa version, the mode, `--authorized`, `--no-dns`, `--no-ports` or the check, area or stack selection differ, or the two URLs share a site but not a path; a report without a scope block (asa 0.1.x) has its flags marked unknown, never guessed. Reports for different targets are refused unless you pass `--allow-different-target`. Exit codes: 1 when a NEW or REGRESSED fail is at least `--fail-on-new` (default `high`), 2 on a file that is not an asa JSON report, and 0 otherwise.
+
+Findings are matched on the `finding_id` each JSON report carries (with `"report_schema": 1`; SARIF has it as the `asaFinding/v2` fingerprint). Ids for reports written without them are derived from the fields present, and the header says so. How the ids behave:
+
+- A live check has one id per check and site origin, however many paths it affects.
+- A code finding's id is the check, the file and what was matched, not the line, so a finding that moves keeps its id. Two identical findings in one file are told apart only by their order, so fixing the first can show the second as fixed and the first as still open.
+- A renamed file shows its findings as fixed plus new.
 
 ## Scope and safety
 

@@ -10,7 +10,7 @@ The one network call is the OSV vulnerability lookup for locked dependencies (tu
 from __future__ import annotations
 
 from .. import catalog
-from ..model import Result, errored
+from ..model import UNLISTED, Result, errored
 from . import ci, deps, nextjs, patterns, request_input, secrets, sql
 from .project import Project
 
@@ -25,6 +25,7 @@ CHECKS = tuple(dict.fromkeys(cid for mod in (*MODULES, deps) for cid in mod.CHEC
 STATIC_PROOF = frozenset({"NEXT-02", "NEXT-03", "NEXT-04", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02",
                           "BROWSER-03", "BROWSER-04", "BROWSER-05", "BROWSER-08"})
 NO_STATIC_PASS = frozenset(CHECKS) - STATIC_PROOF
+MAX_UNREAD = 100  # unread files named on one result; past it the result says UNLISTED
 
 
 def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=None):
@@ -47,6 +48,8 @@ def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=Non
     results = _static_only(results)
     if gap := project.coverage_gap():
         results = _not_proven(results, f"The audit did not cover the whole project: {gap}.")
+        for r in results:
+            r.unread = [*r.unread, UNLISTED]
     known = catalog.by_id()
     wanted = {i.upper() for i in ids} if ids else None
     out = [r for r in results if r.check_id in known and (wanted is None or r.check_id in wanted)
@@ -69,7 +72,7 @@ def _not_proven(results, note):
     for r in results:
         if r.status == "pass":
             r = Result(r.check_id, "manual", f"Not proven: {note} {r.summary}", r.evidence + [note], r.fix,
-                       r.locations)
+                       r.locations, r.unread)
         out.append(r)
     return out
 
@@ -79,8 +82,11 @@ def _unread(results, project):
     if not files:
         return results
     shown = ", ".join(files[:5]) + (f" and {len(files) - 5} more" if len(files) > 5 else "")
-    return _not_proven(results, f"{len(files)} file{'' if len(files) == 1 else 's'} over the size cap "
-                                f"{'was' if len(files) == 1 else 'were'} not read ({shown}).")
+    out = _not_proven(results, f"{len(files)} file{'' if len(files) == 1 else 's'} over the size cap "
+                               f"{'was' if len(files) == 1 else 'were'} not read ({shown}).")
+    for r in out:  # a fail keeps its status, but its locations in these files are unknown, not gone
+        r.unread = files[:MAX_UNREAD] + ([UNLISTED] if len(files) > MAX_UNREAD else [])
+    return out
 
 
 # Lower is stronger evidence of a flaw when merging a code result with a live one.
@@ -116,6 +122,6 @@ def merge(live, code):
             evidence += [f"{src_other} ({other.status}): {other.summary}"] + [f"{src_other}: {e}" for e in
                                                                              other.evidence[:10]]
         out.append(Result(keep.check_id, keep.status, keep.summary, evidence, keep.fix,
-                          keep.locations or other.locations))
+                          keep.locations or other.locations, c.unread))
     out += sorted(_static_only(by_id.values()), key=lambda r: (_MERGE_RANK[r.status], r.check_id))
     return out

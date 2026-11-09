@@ -63,6 +63,60 @@ Runs only when the maintainer publishes a GitHub release. PyPI's trusted publish
 
 How to verify the published files is in [TRUST.md](TRUST.md#release-provenance).
 
+## Gating a pull request on new findings
+
+A project with a backlog can fail a pull request only on what it adds. Audit the base branch and the pull request in the same folder (so both reports name the same project path), then compare them. With `actions/checkout` set to `fetch-depth: 0`:
+
+```sh
+asa code . --format json --out "$RUNNER_TEMP/head.json" --fail-on none
+git checkout --quiet "origin/$GITHUB_BASE_REF"
+asa code . --format json --out "$RUNNER_TEMP/base.json" --fail-on none
+git checkout --quiet -
+asa diff "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" --format md --out asa-diff.md
+```
+
+The last step exits 1 when the pull request adds a new or regressed fail at `high` or above (`--fail-on-new` changes the level), and `asa-diff.md` is ready to post as a comment. Write the reports outside the project folder, as here, so the second audit does not read the first report. A finding that moved keeps its id; a renamed file shows as fixed plus new. See [Comparing two runs](../README.md#comparing-two-runs).
+
+## JUnit and JSON Lines
+
+The exit code is the gate: some CI test screens count skipped tests as passed, so a run with `manual` or `skip` rows can look green there even when asa exits 1 or 3. Let the job fail on asa's exit code (`--fail-on`, `--fail-on-error`) and use the test screen to read the results.
+
+One scan can write every report a pipeline needs; repeat `--out` and each file's format comes from its extension:
+
+```sh
+asa scan http://localhost:3000 --auto-only --no-dns --out asa.xml --out asa.jsonl --out asa.sarif --out asa.html
+```
+
+`asa.xml` is JUnit XML with one `testsuite` and one `testcase` per check (`classname` `asa.<area>`, `name` `<ID> <title>`). Only `pass` is a passing testcase. `fail` is `<failure type="<severity>">`, `warn` is `<failure type="warn">`, `error` is `<error>`, and `manual` and `skip` are `<skipped message="manual: ...">` or `"skip: ..."`. The run's scope is in `<properties>`. It uses only the elements and attributes Jenkins (`junit`), GitLab (`artifacts:reports:junit`) and Azure DevOps (`PublishTestResults@2` with `testResultsFormat: JUnit`) all read:
+
+```xml
+<testsuites name="agent-security-audit" tests="3" failures="1" errors="0" skipped="1" time="2.140">
+  <testsuite name="asa http://localhost:3000" tests="3" failures="1" errors="0" skipped="1" time="2.140">
+    <properties>
+      <property name="asa.target" value="http://localhost:3000" />
+      <property name="asa.requests_sent" value="41" />
+    </properties>
+    <testcase classname="asa.nextjs" name="NEXT-03 Framework not advertised (X-Powered-By)" time="0">
+      <failure type="low" message="X-Powered-By: Next.js">X-Powered-By: Next.js
+fix: Set `poweredByHeader: false` in `next.config.*`. ...</failure>
+    </testcase>
+    <testcase classname="asa.auth" name="AUTH-01 Server authorization uses a verified identity, not getSession()" time="0">
+      <skipped message="manual: needs the code or a logged-in test" />
+    </testcase>
+    <testcase classname="asa.nextjs" name="NEXT-01 No secret keys in client JavaScript" time="0" />
+  </testsuite>
+</testsuites>
+```
+
+`asa.jsonl` is JSON Lines for a log pipeline: one event per result, or per source location for a code finding, then one event with `event.kind` `run` that carries the scope and counts. Field names follow ECS and are nested the way ECS JSON is (`event.kind` is `{"event": {"kind": ...}}`), so Elastic, Splunk (`spath`) and Sentinel read them as dotted fields. Every line carries `asa.schema` 1; a renamed or removed field bumps it. `asa.finding_id` is the id `asa diff` matches on. `@timestamp` is the run's finish time. Text from the scanned site is cleaned and capped.
+
+```json
+{"@timestamp": "2026-11-08T12:00:02Z", "event": {"kind": "finding", "dataset": "asa", "severity": 1}, "rule": {"id": "NEXT-03", "name": "Framework not advertised (X-Powered-By)", "category": "nextjs", "reference": "https://github.com/talalkashar/agent-security-audit/blob/main/docs/checks/nextjs.md#next-03-framework-not-advertised-x-powered-by"}, "url": {"original": "http://localhost:3000", "domain": "localhost"}, "asa": {"schema": 1, "target": "http://localhost:3000", "status": "fail", "severity": "low", "finding_id": "asa1-...", "cwe": ["CWE-200"], "owasp": ["A05:2021"]}, "message": "X-Powered-By: Next.js"}
+{"@timestamp": "2026-11-08T12:00:02Z", "event": {"kind": "run", "dataset": "asa"}, "asa": {"schema": 1, "target": "http://localhost:3000", "version": "0.2.0", "counts": {"fail": 1, "error": 0, "warn": 0, "manual": 1, "pass": 1, "skip": 0}, "scope": {"...": "..."}}, "url": {"original": "http://localhost:3000", "domain": "localhost"}}
+```
+
+`event.severity` is 4 for critical, 3 high, 2 medium, 1 low. A code finding adds `file.path` and `file.line`; a code audit has no `url` fields.
+
 ## Changing a workflow
 
 1. Pin any new action to a commit SHA. For annotated tags, take the `^{}` line: `git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>^{}'`. Put the tag in a comment.

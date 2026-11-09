@@ -282,6 +282,8 @@ def mark_untrusted(report_dict):
         r["evidence"] = cleaned
         if r.get("fix"):
             r["fix"] = _data(r["fix"], MAX_FIX)
+        if r.get("unread"):  # project file names
+            r["unread"] = [_data(p, MAX_PATH) for p in r["unread"]]
         for loc in r.get("locations") or []:
             if "path" in loc:
                 loc["path"] = _data(loc["path"], MAX_PATH)
@@ -428,7 +430,7 @@ def tool_run_scan(target, authorized=False, checks=None, areas=None, stacks=None
     flags = scan_flags(authorized=authorized, allow_supabase=allow_supabase, auto_only=auto_only, no_dns=no_dns,
                        dns_resolver=dns_resolver, no_ports=no_ports, rate_limit_path=rate_limit_path,
                        rate_limit_method=method, budget=300, max_time=max_time, max_pages=max_pages,
-                       code=code_path, osv=not no_osv, checks=checks)
+                       code=code_path, osv=not no_osv, checks=checks, areas=areas, stacks=stacks)
     if authorized:  # self-attested: the agent set it, the user was not asked by this tool
         flags["authorized_by"] = "the agent (MCP authorized=true)"
     scope = report.run_scope(interface="mcp", mode="scan+code" if code_path else "scan", flags=flags,

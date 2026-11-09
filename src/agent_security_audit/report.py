@@ -1,4 +1,5 @@
-"""Reports: JSON for tools, Markdown and HTML for people, SARIF for code scanning."""
+"""Reports: JSON for tools, Markdown and HTML for people, SARIF for code scanning, JUnit XML for CI test screens and
+JSON Lines for log pipelines."""
 
 from __future__ import annotations
 
@@ -8,10 +9,11 @@ import json
 import re
 import textwrap
 import unicodedata
+import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
-from . import __version__, catalog
+from . import __version__, catalog, findings
 
 ORDER = {"fail": 0, "error": 1, "warn": 2, "manual": 3, "pass": 4, "skip": 5}
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -20,6 +22,8 @@ LAYERS = {1: "Physical", 2: "Data link", 3: "Network", 4: "Transport", 5: "Sessi
           7: "Application"}
 LAYER_COLUMNS = ("pass", "fail", "warn", "manual")
 FIX_FIRST_MAX = 10
+# Major version of the JSON report layout. `asa diff` refuses a report with a major it does not know.
+REPORT_SCHEMA = 1
 # One word per status everywhere a person reads results, each with a short plain explanation.
 STATUS_HELP = (
     ("fail", "a defense is missing; fix it"),
@@ -116,14 +120,16 @@ def to_json(target, results, scope=None):
     checks = catalog.by_id()
     extra = {"scope": scope} if scope else {}
     return json.dumps({
-        "tool": "agent-security-audit", "version": __version__, "target": target, "generated": _now(), **extra,
+        "tool": "agent-security-audit", "report_schema": REPORT_SCHEMA, "version": __version__, "target": target,
+        "generated": _now(), **extra,
         "counts": counts(results),
         "fix_first": [{"check_id": r.check_id, "severity": chk.severity, "title": chk.title, "fix": fix}
                       for r, chk, fix in fix_first(results)],
         "osi_layers": {str(n): row for n, row in layer_coverage(results).items()},
         "results": [
-            {**r.to_dict(), "title": checks[r.check_id].title, "severity": checks[r.check_id].severity,
-             "osi_layer": checks[r.check_id].layer, "cwe": list(checks[r.check_id].cwe)}
+            {**findings.annotate(r.to_dict(), target)[0], "title": checks[r.check_id].title,
+             "severity": checks[r.check_id].severity, "osi_layer": checks[r.check_id].layer,
+             "cwe": list(checks[r.check_id].cwe)}
             for r in sort_results(results)
         ],
     }, indent=2)
@@ -459,16 +465,19 @@ def to_sarif(target, results, scope=None):
         if not r.locations:
             sarif_results.append({**base, "message": {"text": _clean(r.summary) or chk.title},
                                   "locations": [{"physicalLocation": {"artifactLocation": {"uri": target}}}],
-                                  "partialFingerprints": _fingerprint(r.check_id, target)})
+                                  "partialFingerprints": {**_fingerprint(r.check_id, target),
+                                                          "asaFinding/v2": findings.finding_id(r.check_id, target)}})
         # Code audit results: one SARIF result per source location, relative to the project root.
-        for loc in r.locations:
+        ids = [loc["finding_id"] for loc in findings.annotate(r.to_dict(), target)[0].get("locations", [])]
+        for loc, fid in zip(r.locations, ids):
             line = max(1, int(loc.get("line") or 1))
             uri = quote(str(loc["path"]))
             sarif_results.append({
                 **base, "message": {"text": _clean(f"{loc.get('message') or r.summary}. {r.summary}")},
                 "locations": [{"physicalLocation": {
                     "artifactLocation": {"uri": uri, "uriBaseId": "%SRCROOT%"}, "region": {"startLine": line}}}],
-                "partialFingerprints": _fingerprint(r.check_id, uri, line, _clean(loc.get("message") or "")),
+                "partialFingerprints": {**_fingerprint(r.check_id, uri, line, _clean(loc.get("message") or "")),
+                                        "asaFinding/v2": fid},
             })
     run = {"tool": {"driver": {"name": "agent-security-audit", "version": __version__,
                                "semanticVersion": __version__, "informationUri": REPO, "rules": rules}},
@@ -482,3 +491,117 @@ def to_sarif(target, results, scope=None):
     return json.dumps({
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json", "version": "2.1.0", "runs": [run],
     }, indent=2)
+
+
+# Code points XML 1.0 forbids even as character references. _plain already drops C0/C1 controls and surrogates; this
+# also drops the noncharacters U+FFFE and U+FFFF, so a value the scanned site chose can never make the file unparsable.
+XML_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+JUNIT_MAX_DETAIL = 25  # evidence lines and locations in one testcase body
+
+
+def _x(text, limit=MAX_TEXT):
+    return XML_ILLEGAL.sub("", _plain(text, limit))
+
+
+def _seconds(scope):
+    try:
+        start, end = datetime.fromisoformat(scope["started"]), datetime.fromisoformat(scope["finished"])
+        return f"{max(0.0, (end - start).total_seconds()):.3f}"
+    except (KeyError, TypeError, ValueError):
+        return "0"
+
+
+def _junit_detail(r, chk):
+    lines = [_x(r.summary)]
+    lines += [f"{_x(loc.get('path'), 300)}:{findings._line(loc)}: {_x(loc.get('message') or '', 300)}"
+              for loc in r.locations[:JUNIT_MAX_DETAIL]]
+    lines += [f"evidence: {_x(e, 500)}" for e in r.evidence[:JUNIT_MAX_DETAIL]]
+    lines.append(f"fix: {_x(r.fix or chk.build)}")
+    return "\n".join(lines)
+
+
+def to_junit(target, results, scope=None):
+    """JUnit XML: one testsuite, one testcase per result. Only a pass is a bare (passing) testcase: fail and warn are
+    <failure>, error is <error>, manual and skip are <skipped>. Uses only the elements and attributes Jenkins, GitLab
+    and Azure DevOps all read. Built with ElementTree (no DTD, no entities) from cleaned text."""
+    checks = catalog.by_id()
+    c = counts(results)
+    totals = {"tests": str(len(results)), "failures": str(c["fail"] + c["warn"]), "errors": str(c["error"]),
+              "skipped": str(c["manual"] + c["skip"]), "time": _seconds(scope or {})}
+    root = ET.Element("testsuites", {"name": "agent-security-audit", **totals})
+    suite = ET.SubElement(root, "testsuite", {"name": f"asa {_x(target, 300)}", **totals})
+    props = ET.SubElement(suite, "properties")
+    pairs = [(f"asa.{k}", v) for k, v in (("target", target), ("version", __version__))]
+    for key, value in (scope or {}).items():
+        if key == "flags":
+            pairs += [(f"asa.flag.{k}", _flag(v)) for k, v in value.items()]
+        elif key not in ("tool", "version"):
+            pairs.append((f"asa.{key}", _flag(value)))
+    for name, value in pairs:
+        ET.SubElement(props, "property", {"name": _x(name, 100), "value": _x(value)})
+    for r in sort_results(results):
+        chk = checks[r.check_id]
+        case = ET.SubElement(suite, "testcase", {"classname": f"asa.{chk.area}", "name": f"{r.check_id} {_x(chk.title)}",
+                                                 "time": "0"})
+        message = _x(r.summary, 300)
+        if r.status in ("fail", "warn"):
+            kind = chk.severity if r.status == "fail" else "warn"
+            ET.SubElement(case, "failure", {"type": kind, "message": message}).text = _junit_detail(r, chk)
+        elif r.status == "error":
+            ET.SubElement(case, "error", {"type": "error", "message": message}).text = _junit_detail(r, chk)
+        elif r.status in ("manual", "skip"):
+            ET.SubElement(case, "skipped", {"message": f"{r.status}: {message}"})
+    ET.indent(root)
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode") + "\n"
+
+
+JSONL_SCHEMA = 1  # major version of the JSON Lines field names; a renamed or removed field bumps it
+ECS_SEVERITY = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+
+def _scope_data(value, depth=0):
+    """A copy of a scope block with every string cleaned and capped, lists and nesting bounded, for the run event."""
+    if isinstance(value, str):
+        return _plain(value, 300)
+    if isinstance(value, dict) and depth < 4:
+        return {_plain(k, 100): _scope_data(v, depth + 1) for k, v in list(value.items())[:100]}
+    if isinstance(value, (list, tuple)) and depth < 4:
+        return [_scope_data(v, depth + 1) for v in value[:100]]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return _plain(_flag(value), 300)
+
+
+def to_jsonl(target, results, scope=None, *, now=_now):
+    """JSON Lines for log pipelines (Splunk, Elastic, Sentinel): one event per result per source location (a result
+    with no locations is one event), then one event with event.kind "run" carrying the scope and counts. Fields are
+    ECS-style and nested as ECS JSON is (event.kind is {"event": {"kind": ...}}). Every line carries asa.schema. The
+    timestamp is the run's finish time from the scope, else now()."""
+    checks = catalog.by_id()
+    scope = _scope_data(scope or {})
+    stamp = scope.get("finished") or scope.get("started") or now()
+    site = findings.origin(target)
+    url = {"original": _plain(target, 300), "domain": urlsplit(site).hostname} if site else None
+    lines = []
+    for r in sort_results(results):
+        chk = checks[r.check_id]
+        row, _ = findings.annotate(r.to_dict(), target)
+        asa = {"schema": JSONL_SCHEMA, "target": _plain(target, 300), "status": r.status, "severity": chk.severity,
+               "finding_id": row["finding_id"], "cwe": list(chk.cwe), "owasp": list(chk.owasp)}
+        event = {"@timestamp": stamp,
+                 "event": {"kind": "finding", "dataset": "asa", "severity": ECS_SEVERITY[chk.severity]},
+                 "rule": {"id": r.check_id, "name": chk.title, "category": chk.area,
+                          "reference": f"{REPO}/blob/main/docs/checks/{chk.area}.md#{_doc_anchor(chk)}"},
+                 **({"url": url} if url else {})}
+        locations = row.get("locations") or []
+        if not locations:
+            lines.append({**event, "asa": asa, "message": _plain(r.summary)})
+        for loc in locations:
+            lines.append({**event, "asa": {**asa, "finding_id": loc["finding_id"]},
+                          "file": {"path": _plain(loc.get("path"), 300), "line": findings._line(loc)},
+                          "message": _plain(f"{loc.get('message') or r.summary}. {r.summary}")})
+    lines.append({"@timestamp": stamp, "event": {"kind": "run", "dataset": "asa"},
+                  "asa": {"schema": JSONL_SCHEMA, "target": _plain(target, 300), "version": __version__,
+                          "counts": counts(results), "scope": scope},
+                  **({"url": url} if url else {})})
+    return "".join(json.dumps(line) + "\n" for line in lines)

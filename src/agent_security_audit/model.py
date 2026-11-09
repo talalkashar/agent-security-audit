@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 # warn: a weaker setting that is not a proven flaw.  manual: needs a person, test accounts or the code.
 # skip: does not apply to this target.  error: the check could not run (network, timeout).
 STATUSES = ("pass", "fail", "warn", "manual", "skip", "error")
+UNLISTED = "*"
 
 
 @dataclass
@@ -19,6 +20,9 @@ class Result:
     fix: str = ""
     # Source locations from the code audit: [{"path": "app/x.ts", "line": 3, "message": "..."}]. Empty for live checks.
     locations: list[dict] = field(default_factory=list)
+    # Project files the code audit could not read for this result (over the size cap); UNLISTED when the file cap
+    # left files out unnamed. `asa diff` never calls a location in one of them fixed. Empty for live checks.
+    unread: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.status not in STATUSES:
@@ -26,8 +30,9 @@ class Result:
 
     def to_dict(self):
         out = asdict(self)
-        if not out["locations"]:
-            del out["locations"]
+        for key in ("locations", "unread"):
+            if not out[key]:
+                del out[key]
         return out
 
 
