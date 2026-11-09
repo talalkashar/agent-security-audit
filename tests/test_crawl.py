@@ -58,6 +58,25 @@ class StubClient:
         return self.get("/")
 
 
+def serve(handle):
+    """127.0.0.1 server whose every GET is answered by handle(handler)."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            handle(self)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
 def ctx(routes, target=T, budget=None, **options):
     return Context(target, StubClient(target, routes, budget), options)
 
@@ -200,6 +219,40 @@ class CrawlTest(unittest.TestCase):
             raise ResponseTooSlow("no complete response within 1 s")
         c = ctx({"/": html('<a href="/a">a</a>'), "/a": slow})
         self.assertIn("/a answered too slowly", crawl_mod.crawl(c).cut)
+
+    def test_unreadable_page_marks_crawl_incomplete(self):
+        def reset(*_):
+            raise ConnectionResetError(54, "Connection reset by peer")
+        c = ctx({"/": html('<a href="/a">a</a>'), "/a": reset})
+        self.assertIn("/a could not be read (ConnectionResetError)", crawl_mod.crawl(c).cut)
+        self.assertTrue(c.cache["data_cut"])
+
+    def test_links_with_spaces_and_non_ascii_are_encoded_and_visited(self):
+        # http.client refuses a raw space (InvalidURL) and raises UnicodeEncodeError on non-ASCII, which used to stop
+        # the whole crawl. Browsers percent-encode both; so does the crawl.
+        self.assertEqual(crawl_mod._join(T + "/", "/caf\u00e9 menu?q=\u00e9#x"), T + "/caf%C3%A9%20menu?q=%C3%A9")
+        self.assertEqual(crawl_mod._join(T + "/", "/a%20b"), T + "/a%20b")  # already encoded: left alone
+        hits = []
+
+        def page(handler):
+            hits.append(handler.path)
+            body = b'<html><a href="/caf\xc3\xa9">c</a> <a href="/a b">s</a></html>' if handler.path == "/" else b"<p>x"
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/html; charset=utf-8")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.end_headers()
+            handler.wfile.write(body)
+        server, url = serve(page)
+        try:
+            c = Context(url, Client(url, delay=0), {"max_depth": 1})
+            site = crawl_mod.crawl(c)
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertIn("/caf%C3%A9", hits)
+        self.assertIn("/a%20b", hits)
+        self.assertEqual(len(site.pages), 3)
+        self.assertEqual(site.cut, "")
 
     def test_script_budget_cut_blocks_a_pass(self):
         from agent_security_audit.http import BudgetExceeded

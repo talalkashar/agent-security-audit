@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import threading
 import time
 from datetime import UTC, datetime
 from urllib.parse import urljoin, urlsplit
@@ -10,10 +11,10 @@ from urllib.parse import urljoin, urlsplit
 from . import catalog, code_audit
 from .checks import Context, load_all
 from .code_audit import deps
-from .http import NETWORK_ERRORS, Blocked, BudgetExceeded, Client, OffTarget
+from .http import NETWORK_ERRORS, TIME_BUDGET_MESSAGE, Blocked, BudgetExceeded, Client, OffTarget
 from .model import Result, errored, skipped
 from .report import _plain
-from .scope import ScopeError, check_target_allowed, normalize_target, owned, same_origin
+from .scope import ScopeError, check_private_allowed, check_target_allowed, normalize_target, owned, same_origin
 
 DETAIL_MAX = 160  # most characters of an exception's text quoted in an error; the rest may be the target's words
 
@@ -140,6 +141,11 @@ def manual_result(check):
 
 
 ACTIVE_SKIP = "Active probe not run: "
+# Once the scan deadline has passed, the runner waits this much longer for a running check before giving up on it.
+GRACE = 2.0
+OVERRAN_MESSAGE = ("not run: time budget for the scan used up while this check was still running (raise --max-time "
+                   "to allow more)")
+BLOCKED_PREFIX = "not run: the scan stopped at a firewall bot challenge"
 
 
 def probe_skipped(check):
@@ -147,12 +153,56 @@ def probe_skipped(check):
                              "Re-run with --authorized if you own this site or have written permission.")
 
 
+class _Overran(Exception):
+    pass
+
+
+def _call(fn, ctx, deadline):
+    """fn(ctx), but with a scan deadline the runner stops waiting GRACE seconds after it and raises _Overran, so a
+    check busy in CPU (a regex, a parser) cannot hold the scan past its time budget. Python cannot stop a thread:
+    the abandoned one runs on in the background, but the client refuses it any new request (the deadline passed)."""
+    if deadline is None:
+        return fn(ctx)
+    box = {}
+
+    def work():
+        try:
+            box["result"] = fn(ctx)
+        except BaseException as exc:  # noqa: BLE001 - handed to the runner thread, which re-raises it
+            box["error"] = exc
+
+    worker = threading.Thread(target=work, name="asa-check", daemon=True)
+    worker.start()
+    worker.join(max(0.0, deadline - time.monotonic()) + GRACE)
+    if worker.is_alive():
+        raise _Overran
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
+
+
+def _check_scope(target, client, authorized, private_needs_authorization):
+    """Scope checks on the addresses the client pinned: it connects only to those, so the checks hold all scan."""
+    try:
+        addresses = client.addresses()
+    except OSError:  # does not resolve: the name checks still run, and the first request reports it unreachable
+        addresses = []
+    check_target_allowed(target, addresses=addresses)
+    if private_needs_authorization:
+        check_private_allowed(target, addresses, authorized)
+
+
 def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=None, insecure=False,
-        budget=300, delay=0.05, timeout=10.0, include_manual=True, progress=None, max_time=None, record=None):
+        budget=300, delay=0.05, timeout=10.0, include_manual=True, progress=None, max_time=None, record=None,
+        private_needs_authorization=False):
     """Return (normalized_target, [Result]) for the selected checks. progress, when given, is called as
     progress(done, total, check_id, status) after each check. max_time, in seconds, is the scan's time budget:
     once it is used up no new request starts, and checks that still need one report an error. record, when given,
-    is a dict filled with the run's started/finished times (UTC), the hosts contacted and the requests sent."""
+    is a dict filled with the run's started/finished times (UTC), the hosts contacted and the requests sent.
+    A check still running GRACE seconds after the deadline is abandoned as an error and no later check runs. A
+    firewall challenge stops the scan: finished results are kept, and the remaining automated checks report an error
+    starting with BLOCKED_PREFIX. private_needs_authorization (for callers a scanned page could steer, such as the MCP
+    server) also refuses a private network target unless authorized."""
     started = utc_now()
     hosts = set()
     target = normalize_target(target)
@@ -161,23 +211,26 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
     client = RecordingClient(target, timeout=timeout, budget=budget, delay=delay, insecure=insecure,
                              deadline=deadline, hosts=hosts)
     sent = 0
+    addresses = None
     if check_ids_need_network(ids, areas, stacks):
-        check_target_allowed(target)
         try:
+            _check_scope(target, client, authorized, private_needs_authorization)
             final = canonical_target(target, client)
+            if final != target:
+                target = final
+                sent = client.sent
+                client = RecordingClient(target, timeout=timeout, budget=budget - client.sent, delay=delay,
+                                         insecure=insecure, deadline=deadline, hosts=hosts)
+                _check_scope(target, client, authorized, private_needs_authorization)
+            addresses = client.addresses()
         except Blocked as exc:
             raise ScopeError(_plain(str(exc), 300)) from exc
         except NETWORK_ERRORS as exc:
             raise ScopeError(f"could not reach {target}: {describe(exc)}") from exc
-        if final != target:
-            check_target_allowed(final)
-            target = final
-            sent = client.sent
-            client = RecordingClient(target, timeout=timeout, budget=budget - client.sent, delay=delay,
-                                     insecure=insecure, deadline=deadline, hosts=hosts)
-    may_probe = owned(target, authorized)
+    may_probe = owned(target, authorized, addresses)
     ctx = Context(target, client, dict(options or {}), authorized=authorized, owned=may_probe)
     results = []
+    stopped = ""  # why the remaining automated checks are not run (a firewall challenge, an abandoned check)
     chosen = [c for c in select(ids, areas, stacks)
               if include_manual or (c.mode == "auto" and c.id in registry)]
     for done, check in enumerate(chosen, 1):
@@ -192,11 +245,23 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
             if progress:
                 progress(done, len(chosen), check.id, "skip")
             continue
+        if stopped:
+            results.append(errored(check.id, stopped))
+            if progress:
+                progress(done, len(chosen), check.id, "error")
+            continue
         ctx.cache.pop("data_cut", None)
         try:
-            result = fn(ctx)
+            result = _call(fn, ctx, deadline)
+        except _Overran:
+            # The abandoned check may still write to ctx, so no later check may read it: stop here.
+            result = errored(check.id, OVERRAN_MESSAGE)
+            stopped = TIME_BUDGET_MESSAGE
         except Blocked as exc:
-            raise ScopeError(_plain(str(exc), 300)) from exc
+            # Responses from here on would describe the challenge page: keep what finished, run nothing more.
+            result = errored(check.id, f"{BLOCKED_PREFIX}: {_plain(str(exc), 300)}")
+            stopped = (f"{BLOCKED_PREFIX} earlier in the scan, so this check did not run. Allow this machine's IP in "
+                       "the firewall (or pause challenge mode) and scan again.")
         except BudgetExceeded as exc:
             result = errored(check.id, str(exc))
         except OffTarget as exc:

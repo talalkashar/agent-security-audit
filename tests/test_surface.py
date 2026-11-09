@@ -215,6 +215,7 @@ class MetadataTargetTest(unittest.TestCase):
         client = mock.Mock()
         client.get.return_value = mock.Mock(is_redirect=True, get=lambda k: "https://www.example.com/")
         with mock.patch.object(runner, "canonical_target", return_value="https://www.example.com"), \
+                mock.patch.object(runner.RecordingClient, "addresses", return_value=["192.0.2.10"]), \
                 mock.patch.object(runner, "check_target_allowed",
                                   side_effect=[None, scope.ScopeError("refusing to scan www")]) as check, \
                 self.assertRaises(scope.ScopeError):
@@ -368,6 +369,11 @@ class ExitCodeTest(unittest.TestCase):
 
     def test_manual_only_run_is_not_an_error(self):
         self.assertEqual(cli.exit_code(_args(), [Result("AUTH-01", "manual", "code")]), 0)
+
+    def test_a_scan_stopped_by_a_firewall_challenge_exits_3(self):
+        cut = [Result("NEXT-03", "pass", "ok"), Result("BROWSER-03", "error", f"{runner.BLOCKED_PREFIX}: cf-mitigated")]
+        self.assertEqual(cli.exit_code(_args(), cut), 3)
+        self.assertEqual(cli.exit_code(_args(fail_on_error="none"), cut), 0)
 
     def test_end_to_end_and_help(self):
         server, url = lab.serve("fixed", 0)

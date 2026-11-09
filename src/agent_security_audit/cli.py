@@ -426,7 +426,9 @@ def exit_code(args, results):
         return EXIT_NOT_RUN
     tried = [r for r in results if r.status not in ("manual", "skip")]
     named = {c.upper() for c in _csv(getattr(args, "check", None)) or []}
-    if len(errors) == len(tried) or any(r.check_id in named for r in errors):
+    # A firewall challenge mid-scan stops every later check, so the report is cut short: never a clean exit.
+    blocked = any(r.summary.startswith(runner.BLOCKED_PREFIX) for r in errors)
+    if blocked or len(errors) == len(tried) or any(r.check_id in named for r in errors):
         return EXIT_NOT_RUN
     return 0
 

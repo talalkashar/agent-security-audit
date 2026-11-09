@@ -60,6 +60,19 @@ class LabTest(unittest.TestCase):
         self.assertTrue(any("service_role" in e for e in r.evidence))
         self.assertFalse(any(lab.fake_jwt("service_role") in e for e in r.evidence))
 
+    def test_post_with_a_bad_content_length_still_answers(self):
+        import socket
+        server, _ = lab.serve("fixed", 0)
+        try:
+            for length in (b"-1", b"abc"):
+                with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=3) as sock:
+                    sock.sendall(b"POST /api/login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: " + length
+                                 + b"\r\n\r\n")
+                    self.assertTrue(sock.recv(64).startswith(b"HTTP/1."), length)
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_serve_rejects_unknown_mode(self):
         with self.assertRaises(ValueError):
             lab.serve("broken", 0)

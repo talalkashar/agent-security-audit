@@ -210,8 +210,11 @@ class LabHandler(BaseHTTPRequestHandler):
         return self._send(200, echo, "message/http")
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        if length:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length > 0:  # read(-1) would wait for the client to close the connection
             self.rfile.read(min(length, 65536))
         path = self.path.split("?")[0]
         vuln = self.mode == "vulnerable"

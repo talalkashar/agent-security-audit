@@ -418,7 +418,7 @@ def tool_run_scan(target, authorized=False, checks=None, areas=None, stacks=None
     record, started = {}, runner.utc_now()
     final, results = runner.run(target, authorized=bool(authorized), ids=checks or None, areas=areas or None,
                                 stacks=stacks or None, options=options, include_manual=not auto_only,
-                                max_time=max_time, record=record)
+                                max_time=max_time, record=record, private_needs_authorization=True)
     hosts = set(record.get("hosts_contacted", []))
     if code_path:
         selected = {c.id for c in runner.select(checks or None, areas or None, stacks or None)}

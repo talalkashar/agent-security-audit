@@ -26,6 +26,8 @@ METADATA_ADDRESSES = frozenset(ipaddress.ip_address(a) for a in (
     "fd00:ec2::254",    # AWS IMDS over IPv6
     "100.100.100.200",  # Alibaba Cloud
 ))
+# NAT64 prefixes (RFC 6052 well-known, RFC 8215 local use): the IPv4 address is the low 32 bits.
+NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
 
 
 class ScopeError(ValueError):
@@ -65,19 +67,38 @@ def normalize_target(url: str) -> str:
     return f"{parts.scheme}://{netloc}"
 
 
-def _resolves_off_machine(host: str) -> str | None:
+def _ip(text):
+    """An address as getaddrinfo or a URL gives it, zone dropped, with an IPv4 address carried inside an IPv6 one
+    (IPv4-mapped, 6to4, Teredo client, NAT64) unwrapped, so 64:ff9b::a9fe:a9fe is judged as 169.254.169.254.
+    Raises ValueError for text that is not an address."""
+    addr = ipaddress.ip_address(str(text).split("%")[0])
+    if addr.version == 6:
+        if addr.ipv4_mapped or addr.sixtofour:
+            return addr.ipv4_mapped or addr.sixtofour
+        if addr.teredo:
+            return addr.teredo[1]
+        if any(addr in net for net in NAT64):
+            return ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    return addr
+
+
+def _resolve(host: str):
+    """Every address host resolves to, or [] when it does not resolve (the scan will fail to connect)."""
+    try:
+        return [info[4][0] for info in socket.getaddrinfo(host, None)]
+    except (OSError, UnicodeError):
+        return []
+
+
+def _resolves_off_machine(host: str, addresses=None) -> str | None:
     """For a *.test or *.localhost name, return the first resolved address that is not loopback or private.
     Those names are trusted by suffix, but /etc/hosts, DNS or a search domain can still point them anywhere.
-    A name that does not resolve returns None (the scan will fail to connect). The check runs once, before the
-    scan, so a resolver that changes its answer mid-scan is not covered."""
+    A name that does not resolve returns None (the scan will fail to connect). Pass the addresses the scan's client
+    pinned (http.Client.addresses) so this check and every connection see the same answer."""
     if not host.lower().endswith(LOCAL_SUFFIXES):
         return None
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except (OSError, UnicodeError):
-        return None
-    for info in infos:
-        addr = ipaddress.ip_address(info[4][0].split("%")[0])
+    for text in _resolve(host) if addresses is None else addresses:
+        addr = _ip(text)
         if not (addr.is_loopback or addr.is_private):
             return str(addr)
     return None
@@ -85,8 +106,7 @@ def _resolves_off_machine(host: str) -> str | None:
 
 def _forbidden_address(addr) -> str | None:
     """Why a scan may not connect to this address, or None. Link-local covers 169.254.0.0/16 and fe80::/10."""
-    if addr.version == 6 and addr.ipv4_mapped:
-        addr = addr.ipv4_mapped
+    addr = _ip(addr)
     if addr in METADATA_ADDRESSES:
         return "a cloud metadata service address"
     if addr.is_link_local:
@@ -99,11 +119,12 @@ def _refuse(host: str, why: str) -> ScopeError:
                       "link-local services, with or without --authorized.")
 
 
-def check_target_allowed(target: str, resolve: bool = True) -> None:
+def check_target_allowed(target: str, resolve: bool = True, addresses=None) -> None:
     """Raise ScopeError when the target is a cloud metadata service or a link-local address, by name, by literal
     address, or (with resolve) by any address its name resolves to. Loopback and private addresses stay allowed:
     local and LAN dev servers are normal targets. A name that does not resolve passes (the scan will fail to
-    connect). The lookup runs once, before the scan; a resolver that changes its answer later is not covered."""
+    connect). Pass the addresses the scan's client pinned (http.Client.addresses): the client connects only to
+    those, so a resolver that changes its answer later cannot move the scan."""
     host = urlsplit(target).hostname or ""
     name = host.strip("[]").lower().rstrip(".")
     if name in METADATA_HOSTS:
@@ -119,18 +140,28 @@ def check_target_allowed(target: str, resolve: bool = True) -> None:
         return
     if not resolve:
         return
-    try:
-        infos = socket.getaddrinfo(name, None)
-    except (OSError, UnicodeError):
-        return
-    for info in infos:
+    for text in _resolve(name) if addresses is None else addresses:
         try:
-            resolved = ipaddress.ip_address(str(info[4][0]).split("%")[0])
+            resolved = _ip(text)
         except ValueError:
             continue
         why = _forbidden_address(resolved)
         if why:
             raise _refuse(host, f"a name that resolves to {resolved}, {why}")
+
+
+def check_private_allowed(target: str, addresses, authorized: bool) -> None:
+    """For callers a scanned page could steer (the MCP server): refuse a target on a private network (RFC 1918, ULA,
+    CGNAT; anything neither public nor loopback) unless the caller says it is authorized. Local dev names
+    (localhost, *.test, *.localhost) stay allowed; check_authorized still holds them to loopback or private."""
+    host = urlsplit(target).hostname or ""
+    if authorized or is_local_host(host):
+        return
+    for text in addresses:
+        addr = _ip(text)
+        if not addr.is_global and not addr.is_loopback:
+            raise ScopeError(f"{host} resolves to {addr}, a private network address. Scan it only if you own it or "
+                             "have written permission, and say so with authorized=true.")
 
 
 def check_dns_resolver(url: str) -> str:
@@ -149,16 +180,16 @@ def check_dns_resolver(url: str) -> str:
     return url
 
 
-def owned(target: str, authorized: bool) -> bool:
+def owned(target: str, authorized: bool, addresses=None) -> bool:
     """True when active probes may run: the user said they own the site, or it is a local dev host."""
     try:
-        check_authorized(target, authorized)
+        check_authorized(target, authorized, addresses)
     except ScopeError:
         return False
     return True
 
 
-def check_authorized(target: str, authorized: bool) -> None:
+def check_authorized(target: str, authorized: bool, addresses=None) -> None:
     if authorized:
         return
     host = urlsplit(target).hostname or ""
@@ -167,7 +198,7 @@ def check_authorized(target: str, authorized: bool) -> None:
             f"{host} is not a local development host. Test it only if you own it or have written "
             "permission, and say so with --authorized (CLI) or authorized=true (MCP)."
         )
-    public = _resolves_off_machine(host)
+    public = _resolves_off_machine(host, addresses)
     if public:
         raise ScopeError(
             f"{host} resolves to {public}, which is not a loopback or private address. Test it only if you own it "

@@ -16,7 +16,7 @@ import re
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from urllib.parse import parse_qsl, urldefrag, urljoin, urlsplit
+from urllib.parse import parse_qsl, quote, urldefrag, urljoin, urlsplit
 
 from .http import NETWORK_ERRORS, TIME_BUDGET_MESSAGE, BudgetExceeded, ResponseTooSlow, TimeBudgetExceeded
 from .scope import same_origin
@@ -33,6 +33,8 @@ NOT_PAGE = (".js", ".mjs", ".css", ".map", ".json", ".xml", ".txt", ".png", ".jp
             ".mp3", ".wav", ".ogg", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".csv", ".doc", ".docx", ".xls",
             ".xlsx", ".ppt", ".pptx", ".exe", ".dmg", ".apk")
 LOC = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.IGNORECASE)
+# Characters a URL may carry as they are; anything else (spaces, non-ASCII) is percent-encoded, as a browser does.
+URL_SAFE = "!#$%&'()*+,/:;=?@[]~"
 
 
 @dataclass
@@ -71,7 +73,7 @@ class Site:
     skipped: list = field(default_factory=list)     # URLs not requested because they look state-changing
     notes: list = field(default_factory=list)       # limits reached, errors
     timed_out: bool = False                         # the scan's time budget cut the crawl short
-    cut: str = ""                                   # why the crawl is incomplete (time or request budget, a slow page)
+    cut: str = ""  # why the crawl is incomplete (time or request budget, a page too slow to read or unreachable)
 
     def params(self):
         """{(path, name): example_url} for query parameters on same-origin links."""
@@ -89,10 +91,10 @@ class Site:
 
 
 def _join(base, value):
-    """urljoin without a fragment, or None for a URL that does not parse (a bad port or IPv6 literal on a hostile
-    page)."""
+    """urljoin without a fragment and with spaces and non-ASCII percent-encoded (http.client refuses both), or None
+    for a URL that does not parse (a bad port or IPv6 literal on a hostile page)."""
     try:
-        url = urldefrag(urljoin(base, value))[0]
+        url = quote(urldefrag(urljoin(base, value))[0], safe=URL_SAFE)
         urlsplit(url).port  # noqa: B018 - raises ValueError for a bad port
         return url
     except ValueError:
@@ -269,7 +271,8 @@ class _Crawler:
         except ResponseTooSlow as exc:  # the page answered but could not be read in full: coverage has a hole
             self.site.cut = self.site.cut or f"{urlsplit(url).path or '/'} answered too slowly to read ({exc})"
             self.site.notes.append(f"{urlsplit(url).path or '/'}: {type(exc).__name__}")
-        except NETWORK_ERRORS as exc:
+        except NETWORK_ERRORS as exc:  # a page the crawl could not read at all is a hole in coverage too
+            self.site.cut = self.site.cut or f"{urlsplit(url).path or '/'} could not be read ({type(exc).__name__})"
             self.site.notes.append(f"{urlsplit(url).path or '/'}: {type(exc).__name__}")
         return None
 
@@ -343,8 +346,8 @@ class _Crawler:
 
 def crawl(ctx):
     """The shared Site for this run. Crawls on first use. A check that reads a crawl the time or request budget cut
-    short (or with a page too slow to read) is flagged (ctx.cache["data_cut"]) so the runner never reports a pass
-    built on part of the site."""
+    short (or with a page too slow or failing to read) is flagged (ctx.cache["data_cut"]) so the runner never reports
+    a pass built on part of the site."""
     if "crawl" not in ctx.cache:
         ctx.cache["crawl"] = _Crawler(ctx).run()
     if ctx.cache["crawl"].cut:

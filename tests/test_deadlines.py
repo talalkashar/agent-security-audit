@@ -6,8 +6,9 @@ import time
 import unittest
 from unittest import mock
 
-from agent_security_audit import http, runner
+from agent_security_audit import http, lab, runner
 from agent_security_audit.http import TIME_BUDGET_MESSAGE, Client, TimeBudgetExceeded
+from agent_security_audit.model import passed
 
 FAST = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<p>hello</p>\n"
 
@@ -178,6 +179,53 @@ class ScanTimeBudgetTest(unittest.TestCase):
         self.assertTrue(stopped, [(r.check_id, r.status, r.summary) for r in results])
         self.assertTrue(all(r.status == "error" for r in stopped))
         self.assertIn("not run: time budget", TIME_BUDGET_MESSAGE)
+
+
+class CheckDeadlineTest(unittest.TestCase):
+    def test_a_check_busy_past_the_deadline_is_abandoned(self):
+        # A check stuck in CPU (a slow regex, a parser) never reaches the client's deadline test. The runner stops
+        # waiting GRACE seconds after the deadline, reports it as an error and runs no later check, because the
+        # abandoned thread may still write to the shared context.
+        release = threading.Event()
+
+        def busy(ctx):
+            while not release.is_set():
+                pass
+            return passed("INFRA-04", "should never be reported")
+
+        def quick(ctx):
+            return passed("NEXT-03", "should not run after an abandoned check")
+        registry = {"INFRA-04": busy, "NEXT-03": quick}
+        server, url = lab.serve("fixed", 0)
+        try:
+            with mock.patch.object(runner, "load_all", return_value=registry):
+                start = time.monotonic()
+                _, results = runner.run(url, ids=["INFRA-04", "NEXT-03"], delay=0, max_time=0.5)
+                elapsed = time.monotonic() - start
+        finally:
+            release.set()
+            server.shutdown()
+            server.server_close()
+        self.assertLess(elapsed, 0.5 + runner.GRACE + 2)
+        got = {r.check_id: r for r in results}
+        self.assertEqual((got["INFRA-04"].status, got["INFRA-04"].summary), ("error", runner.OVERRAN_MESSAGE))
+        self.assertEqual((got["NEXT-03"].status, got["NEXT-03"].summary), ("error", TIME_BUDGET_MESSAGE))
+
+    def test_results_and_errors_cross_the_worker_thread(self):
+        def boom(ctx):
+            raise KeyError("x")
+        with mock.patch.object(runner, "load_all", return_value={"INFRA-04": boom,
+                                                                 "NEXT-03": lambda ctx: passed("NEXT-03", "ok")}):
+            server, url = lab.serve("fixed", 0)
+            try:
+                _, results = runner.run(url, ids=["INFRA-04", "NEXT-03"], delay=0, max_time=30)
+            finally:
+                server.shutdown()
+                server.server_close()
+        got = {r.check_id: r for r in results}
+        self.assertEqual(got["INFRA-04"].status, "error")
+        self.assertIn("KeyError", got["INFRA-04"].summary)
+        self.assertEqual(got["NEXT-03"].status, "pass")
 
 
 if __name__ == "__main__":

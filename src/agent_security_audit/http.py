@@ -3,13 +3,16 @@
 - Every request stays on the target origin (see scope.same_origin); anything else raises.
 - A per-run request budget and a minimum delay keep scans gentle.
 - Redirects are never followed automatically, so checks can see them.
-- Response bodies are capped.
+- Response bodies are capped, and the per-run response cache stops growing at MAX_CACHE_BYTES.
+- The target's host is resolved once per run and every connection to it goes to those addresses, so a resolver
+  that changes its answer mid-scan (DNS rebinding) cannot move the scan to another machine.
 - Each response must arrive in full within the timeout (a watchdog cuts a server that trickles bytes), and an
   optional scan-level deadline stops new requests once the time budget is used up.
 """
 
 from __future__ import annotations
 
+import codecs
 import contextlib
 import errno
 import http.client
@@ -31,6 +34,9 @@ MAX_CACHE_BYTES = 50 * 1024 * 1024
 # connect() errors that come from this machine or its network, not from the target: no route (IPv6 without a route),
 # host unreachable, no usable source address, or a local firewall that forbids the connection.
 UNREACHABLE = {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL, errno.EACCES, errno.EPERM}
+# Text codecs no browser offers for a page. A hostile Content-Type could name one: punycode decoding is quadratic
+# (2 MB takes about a minute), and the others turn escape sequences in the body into characters.
+NOT_WEB_CHARSETS = ("punycode", "idna", "unicode-escape", "raw-unicode-escape", "utf-7")
 
 
 class BudgetExceeded(RuntimeError):
@@ -107,6 +113,8 @@ class Response:
             if k.lower() == "charset" and v:
                 charset = v.strip('"')
         try:
+            if codecs.lookup(charset).name in NOT_WEB_CHARSETS:
+                charset = "utf-8"
             return self.body.decode(charset, errors="replace")
         except (LookupError, UnicodeError):  # unknown charset, or one such as idna that cannot decode a body
             return self.body.decode("utf-8", errors="replace")
@@ -180,7 +188,7 @@ class Client:
         if parts.scheme != "https":
             raise OffTarget(f"refusing a TLS connection to {self.target}: target is not https")
         self._spend()
-        raw = socket.create_connection((parts.hostname, parts.port or 443), timeout=self.timeout)
+        raw = self._connect((parts.hostname, parts.port or 443), self.timeout)
         try:
             return context.wrap_socket(raw, server_hostname=parts.hostname)
         except BaseException:
@@ -194,6 +202,23 @@ class Client:
             self._all_addresses = list(dict.fromkeys(a[4][0] for a in socket.getaddrinfo(host, None,
                                                                                          type=socket.SOCK_STREAM)))
         return self._all_addresses
+
+    def addresses(self):
+        """Every address the target's host resolves to (looked up once per run). Every connection to the target goes
+        to these, so the runner's scope check and the requests see the same answer. Raises OSError when the host
+        does not resolve."""
+        return self._addresses()
+
+    def _connect(self, address, timeout, source_address=None):
+        """socket.create_connection for the target's host, tried against its pinned addresses in turn (as
+        create_connection tries each DNS answer) instead of resolving the name again."""
+        error = None
+        for ip in self._addresses():
+            try:
+                return socket.create_connection((ip, address[1]), timeout, source_address)
+            except OSError as exc:
+                error = exc
+        raise error
 
     def target_address(self):
         """The address port checks use: the first one, until a probe finds it unreachable from this machine (an IPv6
@@ -237,6 +262,8 @@ class Client:
             conn = http.client.HTTPSConnection(parts.hostname, port, timeout=self.timeout, context=context)
         else:
             conn = http.client.HTTPConnection(parts.hostname, port, timeout=self.timeout)
+        if (parts.hostname or "").lower() == (urlsplit(self.target).hostname or "").lower():
+            conn._create_connection = self._connect  # pinned addresses; the Host header and TLS name stay the name
         target_path = parts.path or "/"
         if parts.query:
             target_path += "?" + parts.query
@@ -269,7 +296,8 @@ class Client:
             raise ResponseTooSlow(watchdog.message)
         if not verify:
             why = challenge_of(resp)
-            if why:
+            if why:  # name the header only: its value is chosen by the server
+                why = why.partition(":")[0]
                 raise Blocked(f"{urlsplit(url).netloc} answered {resp.status} with a bot challenge ({why}). Its firewall "
                               "is blocking the scanner, so results would describe the challenge page, not the site. "
                               "Allow this machine's IP in the firewall (or pause challenge mode) and scan again.")
