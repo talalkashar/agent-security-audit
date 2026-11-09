@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import time
 from urllib.parse import urljoin, urlsplit
 
@@ -29,6 +30,9 @@ def _twin(a, b):
     return a != b and (a == "www." + b or b == "www." + a)
 
 
+_PLAIN_NETLOC = re.compile(r"[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?|\[[0-9A-Fa-f:.]{2,45}\](:[0-9]{1,5})?")
+
+
 def canonical_target(target, client):
     """Follow the root redirect when it goes to the same site's www/apex twin over HTTPS. Anything else off-origin
     is refused, because headers on a redirect say nothing about the real pages."""
@@ -41,8 +45,11 @@ def canonical_target(target, client):
         return target
     if nxt.scheme == "https" and _twin(here.hostname or "", nxt.hostname or ""):
         return normalize_target(f"https://{nxt.netloc}")
-    raise ScopeError(f"{target} redirects to {nxt.scheme}://{nxt.netloc}. Scan that URL directly "
-                     "(with --authorized if you own it).")
+    # The Location header is chosen by the server: name the origin only when it is a plain host[:port].
+    shown = f"{nxt.scheme}://{nxt.netloc}" if nxt.scheme in ("http", "https") and _PLAIN_NETLOC.fullmatch(
+        nxt.netloc) else "a location that is not a plain URL, not shown"
+    raise ScopeError(f"{target} redirects to another origin ({shown}). Scan that URL directly (with --authorized "
+                     "if you own it).")
 
 
 def select(ids=None, areas=None, stacks=None, modes=None):
@@ -101,7 +108,10 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
         except Blocked as exc:
             raise ScopeError(str(exc)) from exc
         except NETWORK_ERRORS as exc:
-            raise ScopeError(f"could not reach {target}: {type(exc).__name__}: {exc}") from exc
+            # An HTTP protocol error's text is server bytes (BadStatusLine holds the raw status line): name the type
+            # only. OS errors (DNS, refused, timeout) are worded locally, so their text stays.
+            why = f": {exc}" if isinstance(exc, OSError) else ""
+            raise ScopeError(f"could not reach {target}: {type(exc).__name__}{why}") from exc
         if final != target:
             target = final
             client = Client(target, timeout=timeout, budget=budget - client.sent, delay=delay, insecure=insecure,

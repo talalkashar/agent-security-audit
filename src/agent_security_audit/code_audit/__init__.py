@@ -17,6 +17,9 @@ from .project import Project
 MODULES = (secrets, sql, nextjs, patterns, request_input, ci)
 # Every catalog check the code audit can settle. Docs and `asa scan` hints read this.
 CHECKS = tuple(dict.fromkeys(cid for mod in (*MODULES, deps) for cid in mod.CHECKS))
+# Checks the code audit can only judge by the presence of an auth call, which never proves it gates the action.
+# They never pass from code alone: the analyzers report manual, and merge() downgrades any pass handed to it.
+PRESENCE_ONLY = frozenset({"NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01"})
 
 
 def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=None):
@@ -68,6 +71,12 @@ def _unread(results, project):
                                 f"{'was' if len(files) == 1 else 'were'} not read ({shown}).")
 
 
+def _presence_manual(r):
+    if r.status != "pass" or r.check_id not in PRESENCE_ONLY:
+        return r
+    return Result(r.check_id, "manual", f"Not proven by a static read: {r.summary}", r.evidence, r.fix, r.locations)
+
+
 # Lower is stronger evidence of a flaw when merging a code result with a live one.
 _MERGE_RANK = {"fail": 0, "warn": 1, "pass": 2, "error": 3, "manual": 4, "skip": 5}
 
@@ -86,6 +95,7 @@ def merge(live, code):
         if c is None:
             out.append(r)
             continue
+        c = _presence_manual(c)
         if r.status == "fail":
             keep, other = r, c
         elif c.status == "fail":
@@ -101,5 +111,5 @@ def merge(live, code):
                                                                              other.evidence[:10]]
         out.append(Result(keep.check_id, keep.status, keep.summary, evidence, keep.fix,
                           keep.locations or other.locations))
-    out += sorted(by_id.values(), key=lambda r: (_MERGE_RANK[r.status], r.check_id))
+    out += sorted((_presence_manual(r) for r in by_id.values()), key=lambda r: (_MERGE_RANK[r.status], r.check_id))
     return out

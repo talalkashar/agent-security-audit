@@ -246,6 +246,15 @@ class CrawlTest(unittest.TestCase):
         self.assertEqual(results[0].status, "error")
         self.assertIn("request budget", results[0].summary)
 
+    def test_next_chunks_is_linear_on_hostile_text(self):
+        # Every "~static/chunks/" is a match start; an unbounded lazy run made this quadratic (about 23 s for 240 KB),
+        # which hung the single-threaded MCP server.
+        import time
+        for text in ("~static/chunks/" * 20000, "static/chunks/" + "a/" * 1_000_000):
+            start = time.monotonic()
+            self.assertEqual(crawl_mod.next_chunks(text), [])
+            self.assertLess(time.monotonic() - start, 1.0)
+
     def test_next_chunks(self):
         text = ('"static/chunks/pages/about-1a2b.js" \\"static/chunks/app/page-9f.js\\" '
                 '"/_next/static/chunks/main-77.js" "https://cdn.other.test/_next/static/chunks/x.js" '

@@ -353,7 +353,7 @@ def _count(n, one):
 
 
 # Next.js lists route chunks in its build manifest and in the RSC payload of each page.
-NEXT_CHUNK = re.compile(r"(?<![\w/.-])(?:/_next/)?static/chunks/[\w\-.~%@\[\]/]+?\.js\b")
+NEXT_CHUNK = re.compile(r"(?<![\w/.-])(?:/_next/)?static/chunks/[\w\-.~%@\[\]/]{1,300}?\.js\b")
 
 
 def next_chunks(text):

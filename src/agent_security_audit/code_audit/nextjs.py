@@ -261,9 +261,10 @@ def route_handlers(project):
         return [make("NEXT-05", "manual", f"No route handler in {plural(len(routes), 'route file')} reaches data "
                      "directly in its file. Handlers that reach data through imported modules are not traced; "
                      "confirm each one checks the caller.")]
-    return [make("NEXT-05", "pass", f"Every route handler that touches data ({guarded} of {touching}, in "
-                 f"{plural(len(routes), 'route file')}) calls an auth, session or secret check. Presence only: "
-                 "confirm the check gates the action.")]
+    # A static read sees that a check is called, not that it gates the action: never a pass.
+    return [make("NEXT-05", "manual", f"Not proven: every route handler that touches data ({guarded} of {touching}, "
+                 f"in {plural(len(routes), 'route file')}) calls something that looks like an auth, session or "
+                 "secret check. A static read cannot tell whether it gates the action; confirm each one.")]
 
 
 def server_actions(project):
@@ -296,8 +297,9 @@ def server_actions(project):
                             f"{'changes or reads' if len(open_actions) == 1 else 'change or read'} data without an auth or session call. Every action is a public POST endpoint.",
                             open_actions))
         else:
-            out.append(make(cid, "pass", f"{plural(actions, 'Server Action')} found; every one that touches data "
-                            "calls an auth or session check. Presence only: confirm it also checks ownership."))
+            out.append(make(cid, "manual", f"Not proven: {plural(actions, 'Server Action')} found; every one that "
+                            "touches data calls something that looks like an auth or session check. A static read "
+                            "cannot tell whether it gates the action or checks ownership; confirm each one."))
     return out
 
 
@@ -328,9 +330,10 @@ def session_trust(project):
                      "cookie without verifying it. Use getClaims() or getUser() for every server-side decision.",
                      flagged)]
     if verified:
-        return [make("AUTH-01", "pass", f"{plural(verified, 'server file')} "
-                     f"{'uses' if verified == 1 else 'use'} getUser() or getClaims(); no server "
-                     "file relies on getSession() alone.")]
+        return [make("AUTH-01", "manual", f"Not proven: {plural(verified, 'server file')} "
+                     f"{'calls' if verified == 1 else 'call'} getUser() or getClaims(), and no server file reads "
+                     "getSession() without one. A static read cannot tell which value each decision uses; confirm "
+                     "server-side decisions use the verified user.")]
     if uses:
         return [make("AUTH-01", "skip", "Supabase auth is only used in client code.")]
     return []

@@ -91,12 +91,17 @@ class FixtureTest(unittest.TestCase):
         results = by_id(self.fixed_results)
         bad = {cid: r.summary for cid, r in results.items() if r.status in ("fail", "warn", "error")}
         self.assertEqual(bad, {})
-        for cid in ("NEXT-01", "ACCESS-01", "ACCESS-02", "ACCESS-06", "NEXT-05", "NEXT-06", "AUTH-01",
+        for cid in ("NEXT-01", "ACCESS-01", "ACCESS-02", "ACCESS-06",
                     "NEXT-15", "NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02", "BROWSER-03",
                     "BROWSER-04", "BROWSER-05", "BROWSER-08", "BROWSER-09", "API-30", "API-31", "API-32", "API-05",
                     "INFRA-13", "NEXT-04", "INFRA-15"):
             with self.subTest(check=cid):
                 self.assertEqual(results[cid].status, "pass", results[cid].summary)
+        # Auth checks seen only by their presence are never a pass from the code.
+        for cid in ("NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01"):
+            with self.subTest(check=cid):
+                self.assertEqual(results[cid].status, "manual", results[cid].summary)
+                self.assertTrue(results[cid].summary.startswith("Not proven"), results[cid].summary)
         # Server-side secret-key use is listed for review, not passed.
         self.assertEqual(results["ACCESS-08"].status, "manual")
         # A clean working tree says nothing about git history, so INFRA-08 is never a pass from the code.
@@ -232,9 +237,19 @@ class MergeTest(unittest.TestCase):
         code = [Result("AUTH-01", "pass", "verified", ["middleware.ts:3: getClaims"]),
                 Result("API-30", "pass", "no eval")]
         merged = by_id(code_audit.merge(live, code))
-        self.assertEqual(merged["AUTH-01"].status, "pass")
+        # AUTH-01 is presence only: a code pass handed to merge() still lands as manual, with its evidence.
+        self.assertEqual(merged["AUTH-01"].status, "manual")
         self.assertEqual(merged["AUTH-01"].evidence, ["code: middleware.ts:3: getClaims"])
         self.assertEqual(merged["API-30"].status, "pass")
+
+    def test_presence_only_code_pass_never_wins(self):
+        for cid in ("NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01"):
+            with self.subTest(check=cid):
+                live = [Result(cid, "manual", "Not visible from outside")]
+                merged = by_id(code_audit.merge(live, [Result(cid, "pass", "auth call found")]))
+                self.assertEqual(merged[cid].status, "manual")
+                alone = by_id(code_audit.merge([], [Result(cid, "pass", "auth call found")]))
+                self.assertEqual(alone[cid].status, "manual")
 
     def test_live_error_replaced_by_code(self):
         merged = code_audit.merge([Result("NEXT-02", "error", "timeout")], [Result("NEXT-02", "pass", "off")])
@@ -738,10 +753,26 @@ class AccuracyTest(unittest.TestCase):
                 "export const DELETE = withAuth(async () => supabase.from('notes').delete());\n"
                 "export function OPTIONS() {\n  return new Response(null);\n}\n")
         r = audit_files({"app/api/notes/route.ts": code})
-        self.assertEqual(r["NEXT-05"].status, "pass", r["NEXT-05"].evidence)
+        self.assertEqual(r["NEXT-05"].status, "manual", r["NEXT-05"].evidence)  # presence only, never a pass
         self.assertIn("2 of 2", r["NEXT-05"].summary)
         r = audit_files({"app/api/ping/route.ts": "export function GET() {\n  return Response.json({ ok: 1 });\n}\n"})
         self.assertEqual(r["NEXT-05"].status, "manual")  # no data seen is not proof that every handler is guarded
+
+    def test_auth_lookalike_or_unchecked_auth_is_never_a_pass(self):
+        # getUserById matches the auth heuristic but checks nothing; auth() whose result is ignored gates nothing.
+        for body in ("const user = await getUserById(params.id);\n  return db.select().from(t);",
+                     "const session = await auth();\n  return prisma.post.deleteMany({});"):
+            code = f"import {{ db, prisma }} from '@/db';\nexport async function GET(req, {{ params }}) {{\n  {body}\n}}\n"
+            with self.subTest(body=body):
+                self.assertNotEqual(audit_files({"app/api/x/route.ts": code})["NEXT-05"].status, "pass")
+        action = ("'use server';\nexport async function remove(id) {\n  await getUserById(id);\n"
+                  "  return db.delete(t);\n}\n")
+        r = audit_files({"app/actions.ts": action})
+        for cid in ("NEXT-06", "ACCESS-11"):
+            with self.subTest(check=cid):
+                self.assertNotEqual(r[cid].status, "pass", r[cid].summary)
+        server = "export async function GET() {\n  const { data } = await supabase.auth.getUser();\n}\n"
+        self.assertEqual(audit_files({"app/api/me/route.ts": server})["AUTH-01"].status, "manual")
 
     def test_authorization_word_in_a_string_is_not_a_guard(self):
         code = ("export async function GET() {\n  if (!ok) return Response.json({ error: \"authorization required\" });\n"
@@ -750,7 +781,7 @@ class AccuracyTest(unittest.TestCase):
         self.assertEqual(r["NEXT-05"].status, "warn")
         code = ("export async function GET(req) {\n  if (req.headers.get('authorization') !== key) return deny();\n"
                 "  return supabase.from('notes').select();\n}\n")
-        self.assertEqual(audit_files({"app/api/notes/route.ts": code})["NEXT-05"].status, "pass")
+        self.assertEqual(audit_files({"app/api/notes/route.ts": code})["NEXT-05"].status, "manual")
 
     def test_unbalanced_scan_never_lends_a_sibling_guard(self):
         # The regex literal holds a quote, so the depth scan stays inside a "string" and the sibling declaration

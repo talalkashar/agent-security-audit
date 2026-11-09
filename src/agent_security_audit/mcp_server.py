@@ -401,6 +401,13 @@ HANDLERS = {
 }
 
 
+def _tool_error(text):
+    """An error can quote the target (a redirect host, a raw status line, a file path), so it gets the same control
+    character strip, length cap and untrusted-data note as a report summary."""
+    return {"content": [{"type": "text", "text": _data(text, MAX_SUMMARY) + "\nNote: " + UNTRUSTED_NOTE}],
+            "isError": True}
+
+
 def call_tool(params):
     name = params.get("name")
     if name not in TOOLS_BY_NAME:
@@ -413,11 +420,10 @@ def call_tool(params):
         with contextlib.redirect_stdout(sys.stderr):
             out = HANDLERS[name](**args)
     except (ToolError, ScopeError, catalog.CatalogError, ValueError) as exc:
-        return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
+        return _tool_error(str(exc))
     except Exception as exc:  # noqa: BLE001 - a tool failure is a tool result, not a protocol error
-        log(f"{name} failed: {type(exc).__name__}: {exc}")
-        return {"content": [{"type": "text", "text": f"{name} failed: {type(exc).__name__}: {exc}"}],
-                "isError": True}
+        log(f"{name} failed: {type(exc).__name__}: {_data(str(exc), MAX_SUMMARY)}")
+        return _tool_error(f"{name} failed: {type(exc).__name__}: {exc}")
     if isinstance(out, Report):
         result = {"content": [{"type": "text", "text": out.summary}, {"type": "text", "text": out.text}],
                   "isError": False}

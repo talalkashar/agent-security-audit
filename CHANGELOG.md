@@ -4,6 +4,9 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 
 ## Unreleased
 
+- Code audit: NEXT-05, NEXT-06, ACCESS-11 and AUTH-01 are judged only by the presence of an auth call, so they are now `manual` ("Not proven") instead of `pass`, and `merge()` never lets such a code pass replace a live result.
+- MCP: every tool error is control-stripped, length-capped and carries the untrusted-data note. A cross-origin redirect names the origin only when it is a plain host[:port], and an unreachable target no longer quotes a raw HTTP status line.
+- Crawl: the Next.js chunk pattern is bounded, so a hostile page can no longer stall a scan or the MCP server with quadratic regex work.
 - `asa code [path]`, `asa scan --code <path>` and the `run_code_audit` MCP tool: a static code audit that settles 29 checks with file:line evidence (SARIF locations included), with an OSV lookup for locked dependencies (`--no-osv` to skip).
 - README: honest headline counts (live proof tests, checks settled from code, guided checks) and the OSI layer table are now generated from the catalog by `scripts/gen_docs.py` and checked by the docs-sync test; real terminal output from the practice site; a screenshot of the HTML report; every `asa` command in the README is checked against the CLI parser.
 - Reports: text in backticks in summaries and fixes renders as code (`<code>` in HTML, a code span in Markdown) instead of literal backticks. Values from the scanned site stay escaped.
