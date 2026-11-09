@@ -20,8 +20,9 @@ dependencies, and can be forked and kept as is.
 
 - Versions follow [Semantic Versioning](https://semver.org/). While the version is 0.x, a minor release may change
   check IDs, statuses or report fields; the changelog says so when it does.
-- Only the maintainer can publish. A release is a signed `vX.Y.Z` tag on `main` plus a GitHub release; the
-  `release.yml` workflow tests the tagged commit, builds, attests and publishes to PyPI after a manual approval on the
+- Only the maintainer can publish. The maintainer tags a commit on `main` as `vX.Y.Z`, signs the tag, and publishes a
+  GitHub release for it (the workflow checks neither the signature nor the branch); the `release.yml` workflow tests
+  the tagged commit, builds, attests and publishes to PyPI after a manual approval on the
   `pypi` environment. The steps are in [docs/INSTALL.md](docs/INSTALL.md#publishing-to-pypi-maintainer) and how to
   verify a release is in [docs/TRUST.md](docs/TRUST.md#release-provenance).
 

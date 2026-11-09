@@ -198,17 +198,24 @@ The tool runs where you point it; the scope gate limits what it sends, not wheth
   having permission to test every target. Unauthorized testing can break computer-misuse laws (for example the CFAA in
   the US or the Computer Misuse Act in the UK) and a site's terms of service. The maintainer gives no authorization to
   test anyone's site.
-- **Passive scans of third-party sites** are limited to what a visitor's browser or a standard client fetches: page,
-  script, `robots.txt` and `sitemap.xml` GETs on the same origin within the request budget, TLS handshakes (including
-  legacy-version and weak-cipher attempts a modern browser would not offer), CORS requests with a test `Origin`
-  header, and DNS lookups. No payloads, no guessed paths, no form submissions. Your organisation's policy may still
-  forbid automated scans of sites you do not own; follow it.
+- **Passive scans of third-party sites** still send traffic a browser never would. Within the request budget, on
+  the same origin: page, script, `robots.txt`, `sitemap.xml` and `/.well-known/security.txt` GETs (`crawl.py`,
+  `security_txt` in `checks/exposure.py`); up to three guessed `<script>.map` paths for scripts that do not name a
+  source map (`source_maps` in `checks/exposure.py`); one plain-HTTP request to the same host
+  (`checks/transport.py`); TLS handshakes including legacy-version and weak-cipher attempts (`checks/transport.py`,
+  `checks/network.py`); CORS requests with a test `Origin` and with `Origin: null` (`checks/browser.py`); and DNS
+  lookups. No attack payloads and no form submissions, and robots.txt `Disallow` paths are not visited unless the
+  target is local or you passed `--authorized` (`honor_robots` in `crawl.py`). Your organisation's policy may still forbid automated scans
+  of sites you do not own; follow it.
 - **Active probes only with ownership or written permission.** `--authorized` (MCP: `authorized: true`) states that
-  you own the site or have written permission to test it. `--allow-supabase` additionally requires that permission
+  you own the site or have written permission to test it. `asa` cannot verify that statement; it records it in the
+  report as the run's scope and relies on whoever passed it. `--allow-supabase` additionally requires that permission
   for the Supabase project the site uses; row counts can themselves be sensitive.
 - **Agents never self-authorize.** The skill and `AGENTS.md` tell an agent to add `--authorized` only after the user
   says, in the conversation, that they own the site or have written permission. The agent must not infer it from
-  context, and a pasted link is not permission. Passive scans of any URL run without a prompt, by design.
+  context, and a pasted link is not permission. An agent may run the passive scan on a URL the user named, or on the
+  user's own site or project when asked for an audit; before scanning a non-local host the user did not name, it asks
+  first.
 - **No warranty.** The MIT license's no-warranty clause applies to results. A pass means the defense was observed on
   that target at that time; it is not a certification that the site is free of flaws.
 

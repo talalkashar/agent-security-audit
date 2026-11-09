@@ -23,6 +23,8 @@ Lint with ruff if you have it (`ruff check .`); the settings are in `ruff.toml`.
    - `proof`: a safe, non-destructive way to show the defense working on a running site the tester owns, with clear pass and fail conditions
    - `mode`: `auto` (the scanner runs it), `assisted` (an agent with a headless browser and test accounts) or `review` (code, dashboard or policy)
    - `stacks`: any of `any`, `nextjs`, `supabase`, `vercel`, `node`
+   - `probe` (optional): `passive` (the default) or `active`. An `active` check sends requests a visitor would not (sensitive-file fetches, login attempts, malformed requests, port probes) and runs only on a local host or with `--authorized`
+   - `owasp` (optional): a list of distinct category IDs, like `["A01:2021", "A01:2025", "API1:2023"]`; `scripts/gen_docs.py` builds docs/OWASP.md from them
    - `sources`: at least one, each with a `title` and an `https` URL. Use primary sources: OWASP (ASVS, Cheat Sheets, WSTG), CWE, NIST, vendor security docs and advisories, CVE entries. No invented incidents, CVE numbers or statistics.
 3. **Regenerate the docs**: `python3 scripts/gen_docs.py`. The test suite fails if `docs/checks/` or the catalog table in `README.md` is out of date.
 
