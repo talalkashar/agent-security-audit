@@ -33,10 +33,17 @@ OWNER_COLUMN = re.compile(r"\b(user_id|owner_id|author_id|profile_id|created_by|
                           r"uid)\b|references\s+auth\s*\.\s*users", re.IGNORECASE)
 USER_TABLES = {"profiles", "users", "accounts", "user_profiles", "customers", "orders", "messages", "payments",
                "subscriptions", "addresses"}
+DRIFT = ("Migrations are not the database: objects made in the Supabase dashboard or changed outside the "
+         "migrations are not read, so the static read cannot pass this check.")
 DOLLAR = re.compile(r"\$[A-Za-z_]*\$")
-OPEN_EXPRESSIONS = {"true", "auth.role()='authenticated'", "'authenticated'=auth.role()", "auth.uid()isnotnull",
-                    "auth.role()in('authenticated')", "auth.role()in('authenticated','anon')",
-                    "auth.role()in('anon','authenticated')"}
+# Expressions that let any caller (or any signed-in caller) through: role-only tests and tautologies.
+OPEN_EXPRESSIONS = {"true", "auth.role()='authenticated'", "'authenticated'=auth.role()", "auth.uid() is not null",
+                    "auth.role() in ('authenticated')", "auth.role() in ('authenticated','anon')",
+                    "auth.role() in ('anon','authenticated')", "not false", "1=1", "'1'='1'"}
+# The only expressions recognised as an owner check: the caller's id compared with a column of the row.
+CALLER = r"(?:auth\.uid\(\)|\(auth\.jwt\(\)->>'sub'\)|auth\.jwt\(\)->>'sub')"
+COLUMN = r"(?!auth\.)[a-z_][\w$]*(?:\.[a-z_][\w$]*)?"
+OWNER_CHECK = re.compile(rf"(?:{CALLER}={COLUMN}|{COLUMN}={CALLER})")
 
 
 def split_sql(text):
@@ -112,14 +119,83 @@ def _expr(rest, keyword):
     return rest[m.end():i - 1]
 
 
-def _open(expr):
-    if expr is None:
-        return False
-    e = re.sub(r"\s+", "", expr.lower())
-    e = re.sub(r"\(select(auth\.\w+\(\))\)", r"\1", e)
-    while e.startswith("(") and e.endswith(")"):
-        e = e[1:-1]
-    return e in OPEN_EXPRESSIONS
+def _norm_expr(expr):
+    """Lowercase, one space between words, none around operators; (select auth.uid()) -> auth.uid(); casts dropped;
+    outer parentheses removed."""
+    e = re.sub(r"\s+", " ", expr.lower()).strip()
+    e = re.sub(r"\s*::\s*[a-z_]+(?:\s*\[\s*\])?", "", e)
+    e = re.sub(r"\s*([=<>!,]|->>|->)\s*", r"\1", e)
+    e = re.sub(r"\(\s+", "(", re.sub(r"\s+\)", ")", e))
+    e = re.sub(r"\(select (auth\.\w+\(\))\)", r"\1", e)
+    while e.startswith("(") and e.endswith(")") and _closes_at_end(e):
+        e = e[1:-1].strip()
+    return e
+
+
+def _closes_at_end(e):
+    depth = 0
+    for i, c in enumerate(e):
+        depth += {"(": 1, ")": -1}.get(c, 0)
+        if depth == 0 and i < len(e) - 1:
+            return False
+    return True
+
+
+def _split_top(e, word):
+    """e split on a top-level (outside parentheses and quotes) ` and ` / ` or `."""
+    parts, depth, quote, start, i = [], 0, False, 0, 0
+    sep = f" {word} "
+    while i < len(e):
+        c = e[i]
+        if c == "'":
+            quote = not quote
+        elif not quote and c in "()":
+            depth += 1 if c == "(" else -1
+        elif not quote and depth == 0 and e.startswith(sep, i):
+            parts.append(e[start:i])
+            i += len(sep)
+            start = i
+            continue
+        i += 1
+    return parts + [e[start:]]
+
+
+def classify(expr):
+    """'owner' (the row's owner column is compared with the caller's id), 'open' (a tautology or a role-only test
+    that lets every caller through) or 'unknown' (anything else: a static read cannot judge it)."""
+    e = _norm_expr(expr)
+    for word, combine in (("or", _any_or), ("and", _all_and)):
+        parts = _split_top(e, word)
+        if len(parts) > 1:
+            return combine([classify(p) for p in parts])
+    if OWNER_CHECK.fullmatch(e):
+        return "owner"
+    sides = e.split("=")
+    if e in _OPEN or (len(sides) == 2 and sides[0] == sides[1] and sides[0]):
+        return "open"
+    return "unknown"
+
+
+_OPEN = frozenset(_norm_expr(x) for x in OPEN_EXPRESSIONS)
+
+
+def _any_or(kinds):
+    """An OR lets a row through when any branch does."""
+    return "open" if "open" in kinds else "owner" if set(kinds) == {"owner"} else "unknown"
+
+
+def _all_and(kinds):
+    """An AND with an owner check is limited to the owner, whatever else it tests."""
+    return "owner" if "owner" in kinds else "open" if set(kinds) == {"open"} else "unknown"
+
+
+def _policy_kind(p):
+    """The weakest of the policy's using and with check expressions; a policy with neither cannot be judged."""
+    kinds = [classify(e) for e in (p["using"], p["check"]) if e is not None]
+    for kind in ("open", "unknown", "owner"):
+        if kind in kinds:
+            return kind
+    return "unknown"
 
 
 def exposed_schemas(project):
@@ -207,18 +283,27 @@ def supabase_sql(project):
                             f"{'never enables' if len(no_rls) == 1 else 'never enable'} row-level security in the migrations, so the public anon key can read and write them.",
                             no_rls, [files_note]))
     elif exposed:
-        results.append(make("ACCESS-01", "pass", "Every table created in an exposed schema "
-                            f"({len(exposed)}) enables row-level security in the migrations (policies are judged under ACCESS-02).",
-                            evidence=[files_note]))
+        # Never a pass: migrations are not the database. Tables made in the dashboard, or by drift, are not seen.
+        results.append(make("ACCESS-01", "manual", "Not proven: every table created in an exposed schema "
+                            f"({len(exposed)}) enables row-level security in the migrations. Tables made in the "
+                            "dashboard or changed outside the migrations are not seen; confirm on the database "
+                            "(asa scan --allow-supabase, or the Supabase security advisor).",
+                            evidence=[files_note, DRIFT]))
     else:
         results.append(make("ACCESS-01", "skip", "The SQL files create no tables in an exposed schema.",
                             evidence=[files_note]))
 
-    hard, soft = [], []
+    hard, soft, unknown, owner = [], [], [], 0
     for p in policies:
         if p["restrictive"] or p["table"].split(".")[0] not in schemas:
+            continue  # a restrictive policy can only narrow access
+        kind = _policy_kind(p)
+        if kind == "owner":
+            owner += 1
             continue
-        if not (_open(p["using"]) or _open(p["check"])):
+        if kind == "unknown":
+            unknown.append(_finding(p["where"], f"{p['cmd']} policy on {p['table']} is not a recognised owner check "
+                                    "(auth.uid() compared with a column); confirm it limits rows to their owner"))
             continue
         who = "anyone, signed in or not" if p["roles"] in ("public", "anon") or "anon" in p["roles"] \
             else "any signed-in user"
@@ -228,14 +313,22 @@ def supabase_sql(project):
     if hard:
         results.append(make("ACCESS-02", "fail", f"{plural(len(hard), 'policy')} on user-data tables "
                             f"{'allows' if len(hard) == 1 else 'allow'} every row to any caller instead of the row's owner. Compare the owner column with "
-                            "(select auth.uid()).", hard + soft))
+                            "(select auth.uid()).", hard + soft + unknown))
     elif soft:
         results.append(make("ACCESS-02", "warn", SUSPECTED + f"{plural(len(soft), 'policy')} "
                             f"{'allows' if len(soft) == 1 else 'allow'} every row "
-                            "(using (true) or any signed-in user). Fine only for public content tables.", soft))
-    elif policies:
-        results.append(make("ACCESS-02", "pass", f"None of {plural(len(policies), 'policy')} in the migrations is "
-                            "open to every row or to any signed-in user.", evidence=[files_note]))
+                            "(using (true) or any signed-in user). Fine only for public content tables.", soft + unknown))
+    elif unknown:
+        results.append(make("ACCESS-02", "manual", f"{plural(len(unknown), 'policy')} "
+                            f"{'uses' if len(unknown) == 1 else 'use'} an expression a static read cannot judge (only "
+                            "auth.uid() compared with a column counts as an owner check). Confirm each one limits "
+                            "rows to their owner.", unknown, [files_note]))
+    elif owner:
+        # Never a pass: permissive policies are OR'd, so one open policy made outside the migrations opens the table.
+        results.append(make("ACCESS-02", "manual", f"Not proven: every policy in the migrations ({owner}) compares "
+                            "an owner column with auth.uid(). Policies made outside the migrations are not seen; "
+                            "confirm with two test accounts that one cannot read or change the other's rows.",
+                            evidence=[files_note, DRIFT]))
 
     risky = []
     for name, v in views.items():
@@ -257,9 +350,11 @@ def supabase_sql(project):
                             "can bypass row-level security. Use security_invoker views and move "
                             "security definer functions to a private schema.", risky))
     elif views or functions:
-        results.append(make("ACCESS-06", "pass", f"{plural(len(views), 'view')} and {plural(len(functions), 'function')}"
-                            " checked: views use security_invoker and no security definer function sits in an "
-                            "exposed schema.", evidence=[files_note]))
+        results.append(make("ACCESS-06", "manual", f"Not proven: {plural(len(views), 'view')} and "
+                            f"{plural(len(functions), 'function')} in the migrations checked: views use "
+                            "security_invoker and no security definer function is callable through the API. Views "
+                            "and functions made outside the migrations are not seen; confirm on the database.",
+                            evidence=[files_note, DRIFT]))
     return results
 
 

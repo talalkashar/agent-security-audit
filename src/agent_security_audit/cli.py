@@ -5,16 +5,40 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from urllib.parse import urlsplit
 
 from . import __version__, catalog, code_audit, install, report, runner
-from .scope import ScopeError, is_local_host
+from .checks.dns_email import DEFAULT_RESOLVER
+from .checks.ratelimit import ALLOWED_METHODS as ALLOWED_RATE_LIMIT_METHODS
+from .scope import ScopeError, check_dns_resolver, is_local_host
 
 FAIL_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 COMMANDS = ("list", "show", "rules", "lab", "scan", "code", "install")
 FORMATS = ("md", "json", "sarif", "html")
 MAX_TIME = 300.0
+EXIT_NOT_RUN = 3
+FAIL_ON_ERROR = ("all", "any", "none")
+MAIN_EPILOG = """examples:
+  asa lab &                                  start the practice site at http://127.0.0.1:8642
+  asa scan http://127.0.0.1:8642            prove the defenses on a running site
+  asa http://localhost:3000                  shortcut: a URL first is the same as `asa scan <url>`
+  asa scan http://localhost:3000 --code .    scan and read the project's source in one run
+  asa code .                                 audit the source only (nothing is executed)
+  asa show AUTH-01                           one check in full: risk, build rule, proof steps
+
+exit codes (scan and code):
+  0  nothing at or above --fail-on failed
+  1  a failed check at or above --fail-on (default high)
+  2  usage or scope error (bad URL, refused target, unknown check id)
+  3  checks could not run (see --fail-on-error)
+
+Run `asa <command> --help` for each command's options."""
+FAIL_ON_ERROR_HELP = ("when an error (a check that could not run) makes the run exit 3: 'all' (default) when every "
+                      "check that tried to run errored, or a check named with --check errored; 'any' on any error; "
+                      "'none' never. A failed check (exit 1) takes precedence. With --fail-on none the default is "
+                      "'none', so --fail-on none still always exits 0")
 EXTENSIONS = {".md": "md", ".json": "json", ".sarif": "sarif", ".html": "html", ".htm": "html"}
 SCAN_EPILOG = """output:
   --out FILE        write the full report to FILE; the format comes from --format, else from the
@@ -28,7 +52,32 @@ ownership:
   (sensitive-file fetches, login rate limit, malformed requests, Supabase reads) run on local hosts,
   and on other hosts only with --authorized: you own the site or have written permission.
 
+exit codes:
+  0 ok · 1 a failed check at or above --fail-on · 2 usage or scope error · 3 checks could not run
+  (--fail-on-error; default: every check that tried errored, or a check named with --check errored)
+
 `asa <url> ...` is the same as `asa scan <url> ...`."""
+
+
+def scan_flags(*, authorized, allow_supabase, auto_only, no_dns, dns_resolver, no_ports, rate_limit_path,
+               rate_limit_method, budget, max_time, max_pages, code, osv, insecure=False, checks=None):
+    """The settings of a scan, as recorded in the report's scope block (CLI and MCP alike)."""
+    return {"authorized": bool(authorized), "allow_supabase": bool(allow_supabase), "auto_only": bool(auto_only),
+            "insecure": bool(insecure), "no_dns": bool(no_dns),
+            "dns_resolver": None if no_dns else (dns_resolver or DEFAULT_RESOLVER), "no_ports": bool(no_ports),
+            "rate_limit_path": rate_limit_path, "rate_limit_method": rate_limit_method, "budget": budget,
+            "max_time": max_time, "max_pages": max_pages, "checks": list(checks or []), "code": code,
+            "osv": bool(code) and bool(osv)}
+
+
+def rate_limit_method(value):
+    """The rate-limit probe's HTTP method, upper-cased; only ALLOWED_RATE_LIMIT_METHODS (POST), so the probe can
+    never send DELETE, PUT or another method that changes data."""
+    method = str(value or "POST").strip().upper()
+    if method not in ALLOWED_RATE_LIMIT_METHODS:
+        raise ValueError(f"rate-limit method must be {' or '.join(sorted(ALLOWED_RATE_LIMIT_METHODS))}, "
+                         f"got {report.shorten(str(value), 20)!r}")
+    return method
 
 
 def rules_markdown(checks):
@@ -91,6 +140,12 @@ def _code_hint(args):
     return "asa: tip: this folder has a package.json; add --code . to settle code checks from the source"
 
 
+def _say(msg):
+    """An error line for the terminal. Messages can quote the target (a redirect host, a status line), so control
+    characters and escape sequences are removed and the length is capped."""
+    print(f"asa: {report._plain(str(msg), 600)}", file=sys.stderr)
+
+
 def run_lab(mode, port):
     import time
 
@@ -99,7 +154,7 @@ def run_lab(mode, port):
     try:
         server, url = lab.serve(mode, port)
     except OSError as exc:
-        print(f"asa: could not listen on port {port} ({exc.strerror or exc}); pass another --port", file=sys.stderr)
+        _say(f"could not listen on port {port} ({exc.strerror or exc}); pass another --port")
         return 2
     print(f"asa lab ({mode}) at {url}  -  try: asa scan {url} --rate-limit-path /api/login  (Ctrl-C to stop)",
           file=sys.stderr)
@@ -112,7 +167,8 @@ def run_lab(mode, port):
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="asa", description="Security checks you build in, then prove on the running site.")
+    p = argparse.ArgumentParser(prog="asa", description="Security checks you build in, then prove on the running site.",
+                                epilog=MAIN_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=f"agent-security-audit {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -132,9 +188,15 @@ def build_parser():
                     help=f"comma-separated, from: {', '.join(catalog.STACKS)} (default: all)")
     ru.add_argument("--area", action="append")
 
-    lb = sub.add_parser("lab", help="run the local practice site (vulnerable or fixed) to try the scanner on")
-    lb.add_argument("--mode", choices=("vulnerable", "fixed"), default="vulnerable")
-    lb.add_argument("--port", type=int, default=8642)
+    lb = sub.add_parser("lab", help="run the local practice site (vulnerable or fixed) to try the scanner on",
+                        description="Serve a practice site on 127.0.0.1 only, to try the scanner on. Stop it with "
+                                    "Ctrl-C.", epilog="example: asa lab --mode fixed --port 8643",
+                        formatter_class=argparse.RawDescriptionHelpFormatter)
+    lb.add_argument("--mode", choices=("vulnerable", "fixed"), default="vulnerable",
+                    help="vulnerable (default): the controls are missing, so checks fail; fixed: the same site with "
+                         "the controls in place, so they pass")
+    lb.add_argument("--port", type=int, default=8642,
+                    help="port on 127.0.0.1 to listen on (default 8642; 0 picks a free port)")
 
     sc = sub.add_parser("scan", help="run the proof tests against a running site", epilog=SCAN_EPILOG,
                         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -150,8 +212,11 @@ def build_parser():
     sc.add_argument("--auto-only", action="store_true", help="only the scanner checks; leave out code and logged-in checks")
     sc.add_argument("--fail-on", choices=("critical", "high", "medium", "low", "none"), default="high",
                     help="exit 1 when a failed check is at least this severe (default: high)")
+    sc.add_argument("--fail-on-error", choices=FAIL_ON_ERROR, help=FAIL_ON_ERROR_HELP)
     sc.add_argument("--rate-limit-path", help="endpoint to prove rate limiting on, e.g. /api/auth/login")
-    sc.add_argument("--rate-limit-method", default="POST")
+    sc.add_argument("--rate-limit-method", default="POST", type=str.upper, choices=sorted(ALLOWED_RATE_LIMIT_METHODS),
+                    help="HTTP method of the rate-limit probe: POST only, so it never sends a method that changes "
+                         "data")
     sc.add_argument("--rate-limit-body", help="request body for the rate-limit probe (use fake credentials)")
     sc.add_argument("--rate-limit-content-type", default="application/json")
     sc.add_argument("--rate-limit-attempts", type=int, default=30, help="max requests for the probe (max 60)")
@@ -160,7 +225,8 @@ def build_parser():
                          "on a local target this also needs --authorized)")
     sc.add_argument("--supabase-table", action="append",
                     help="Supabase table to test (default: names from .from() calls in the site's JavaScript)")
-    sc.add_argument("--dns-resolver", help="DNS-over-HTTPS JSON endpoint (default https://cloudflare-dns.com/dns-query)")
+    sc.add_argument("--dns-resolver", help=f"DNS-over-HTTPS JSON endpoint, https only (default {DEFAULT_RESOLVER}); "
+                                           "the DNS and email checks send it the target's DNS names")
     sc.add_argument("--no-dns", action="store_true", help="skip DNS and email checks (they query a public resolver)")
     sc.add_argument("--no-ports", action="store_true",
                     help="skip the TCP connect checks on database and admin ports (INFRA-24, INFRA-25)")
@@ -185,8 +251,10 @@ def build_parser():
     co.add_argument("--area", action="append")
     co.add_argument("--format", choices=FORMATS, help="md, json, sarif or html (default as for scan)")
     co.add_argument("--out", help="write the report here instead of stdout")
+    co.add_argument("-q", "--quiet", action="store_true", help="no progress output on stderr (as for scan)")
     co.add_argument("--fail-on", choices=("critical", "high", "medium", "low", "none"), default="high",
                     help="exit 1 when a failed check is at least this severe (default: high)")
+    co.add_argument("--fail-on-error", choices=FAIL_ON_ERROR, help=FAIL_ON_ERROR_HELP)
     co.add_argument("--no-osv", action="store_true",
                     help="skip the dependency vulnerability lookup (the only network call, to api.osv.dev)")
     co.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for OSV")
@@ -199,7 +267,7 @@ def build_parser():
     ins.add_argument("agent", choices=install.AGENTS)
     ins.add_argument("--yes", action="store_true", help="write the change (default: dry run that prints it)")
     ins.add_argument("--uvx", action="store_true",
-                     help="run the server with `uvx --from git+<repo> asa-mcp` instead of the installed asa-mcp")
+                     help="run the server with `uvx --from agent-security-audit==<version> asa-mcp` (the pinned PyPI release) instead of the installed asa-mcp")
     return p
 
 
@@ -262,14 +330,20 @@ def _main(argv=None):
             try:
                 return install.run(args.agent, yes=args.yes, uvx=args.uvx)
             except install.InstallError as exc:
-                print(f"asa: {exc}", file=sys.stderr)
+                _say(exc)
                 return 2
         if args.cmd == "code":
-            target, results = code_audit.run(args.path, osv=not args.no_osv, timeout=args.timeout,
-                                             ids=_csv(args.check), areas=_csv(args.area))
-            return _emit(args, target, results)
+            hosts, started = set(), runner.utc_now()
+            target, results = runner.audit_code(args.path, osv=not args.no_osv, timeout=args.timeout,
+                                                ids=_csv(args.check), areas=_csv(args.area), hosts=hosts)
+            scope = report.run_scope(interface="cli", mode="code", started=started, finished=runner.utc_now(),
+                                     hosts=hosts, flags={"osv": not args.no_osv, "checks": _csv(args.check) or [],
+                                                         "areas": _csv(args.area) or []})
+            return _emit(args, target, results, scope)
+        if args.dns_resolver:
+            check_dns_resolver(args.dns_resolver)
         options = {
-            "rate_limit_path": args.rate_limit_path, "rate_limit_method": args.rate_limit_method,
+            "rate_limit_path": args.rate_limit_path, "rate_limit_method": rate_limit_method(args.rate_limit_method),
             "rate_limit_body": args.rate_limit_body, "rate_limit_content_type": args.rate_limit_content_type,
             "rate_limit_attempts": args.rate_limit_attempts, "allow_supabase": args.allow_supabase,
             "no_dns": args.no_dns, "no_ports": args.no_ports, "supabase_tables": _csv(args.supabase_table),
@@ -283,53 +357,106 @@ def _main(argv=None):
             print(hint, file=sys.stderr)
         authorized = args.authorized
         show_progress = not args.quiet and _is_tty(sys.stderr)
+        record, started = {}, runner.utc_now()
         try:
             target, results = runner.run(
                 args.target, authorized=authorized, ids=_csv(args.check), areas=_csv(args.area),
                 stacks=stacks, options=options, insecure=args.insecure, budget=args.budget,
                 timeout=args.timeout, include_manual=not args.auto_only, max_time=args.max_time or None,
-                progress=_progress if show_progress else None)
+                progress=_progress if show_progress else None, record=record)
         finally:
             if show_progress:
                 sys.stderr.write("\r\x1b[K")
                 sys.stderr.flush()
+        hosts = set(record.get("hosts_contacted", []))
         if args.code:
             selected = {c.id for c in runner.select(_csv(args.check), _csv(args.area), stacks)}
-            _, code_results = code_audit.run(args.code, osv=not args.no_osv)
+            _, code_results = runner.audit_code(args.code, osv=not args.no_osv, hosts=hosts)
             results = code_audit.merge(results, [r for r in code_results if r.check_id in selected])
+        flags = scan_flags(authorized=authorized, allow_supabase=args.allow_supabase, auto_only=args.auto_only,
+                           no_dns=args.no_dns, dns_resolver=args.dns_resolver, no_ports=args.no_ports,
+                           rate_limit_path=args.rate_limit_path, rate_limit_method=options["rate_limit_method"],
+                           budget=args.budget, max_time=args.max_time, max_pages=args.max_pages, code=args.code,
+                           osv=not args.no_osv, insecure=args.insecure, checks=_csv(args.check))
+        scope = report.run_scope(interface="cli", mode="scan+code" if args.code else "scan", flags=flags,
+                                 started=record.get("started", started), finished=runner.utc_now(), hosts=hosts,
+                                 requests_sent=record.get("requests_sent"))
     except (ScopeError, catalog.CatalogError, ValueError) as exc:
-        print(f"asa: {exc}", file=sys.stderr)
+        _say(exc)
         return 2
-    return _emit(args, target, results)
+    return _emit(args, target, results, scope)
 
 
-def _emit(args, target, results):
+def _width():
+    return max(60, min(120, shutil.get_terminal_size((100, 24)).columns))
+
+
+def _next_step(args, target, results):
+    """The summary's last line: what to do about the manual results."""
+    n = report.counts(results)["manual"]
+    if not n:
+        return ""
+    checks = f"{n} manual check{'s' if n != 1 else ''}"
+    if getattr(args, "cmd", "") == "code":
+        return (f"Next: {checks} need the running site or a logged-in test: asa scan <url> --code {target} "
+                "(asa show <ID> gives each one's proof steps).")
+    if getattr(args, "code", None):
+        return (f"Next: {checks} need a logged-in test or a config review: asa show <ID> gives each one's proof "
+                "steps.")
+    return (f"Next: {checks} need the code or a logged-in test: asa scan {target} --code . "
+            "(run it from the project folder; asa show <ID> gives each one's proof steps).")
+
+
+def exit_code(args, results):
+    """0, 1 (a failed check at or above --fail-on) or 3 (checks could not run, per --fail-on-error)."""
+    checks = catalog.by_id()
+    if args.fail_on != "none":
+        limit = FAIL_RANK[args.fail_on]
+        if any(r.status == "fail" and FAIL_RANK[checks[r.check_id].severity] <= limit for r in results):
+            return 1
+    policy = getattr(args, "fail_on_error", None) or ("none" if args.fail_on == "none" else "all")
+    errors = [r for r in results if r.status == "error"]
+    if policy == "none" or not errors:
+        return 0
+    if policy == "any":
+        return EXIT_NOT_RUN
+    tried = [r for r in results if r.status not in ("manual", "skip")]
+    named = {c.upper() for c in _csv(getattr(args, "check", None)) or []}
+    if len(errors) == len(tried) or any(r.check_id in named for r in errors):
+        return EXIT_NOT_RUN
+    return 0
+
+
+def _emit(args, target, results, scope=None):
     fmt = _output_format(args)
     if fmt == "summary":
         again = f"asa code {target}" if getattr(args, "cmd", "") == "code" else f"asa scan {target}"
         hint = f"Full report with evidence: {again} --out asa-report.html"
-        text = report.summary_text(target, results, hint)
+        text = report.summary_text(target, results, hint, width=_width(),
+                                   next_step=_next_step(args, target, results))
     else:
         render = {"md": report.to_markdown, "json": report.to_json, "sarif": report.to_sarif,
                   "html": report.to_html}[fmt]
-        text = render(target, results)
+        text = render(target, results, scope=scope)
     if args.out:
         try:
             os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
             with open(args.out, "w", encoding="utf-8") as fh:
                 fh.write(text)
         except OSError as exc:
-            print(f"asa: could not write {args.out}: {exc.strerror or exc}", file=sys.stderr)
+            _say(f"could not write {args.out}: {exc.strerror or exc}")
             return 2
         c = report.counts(results)
-        print(f"asa: wrote {args.out} ({c['fail']} failed, {c['warn']} warnings, {c['pass']} passed)", file=sys.stderr)
+        print(f"asa: wrote {args.out} ({c['fail']} fail, {c['warn']} warn, {c['error']} error, {c['pass']} pass)",
+              file=sys.stderr)
     else:
         print(text, end="")
-    if args.fail_on == "none":
-        return 0
-    checks = catalog.by_id()
-    limit = FAIL_RANK[args.fail_on]
-    return 1 if any(r.status == "fail" and FAIL_RANK[checks[r.check_id].severity] <= limit for r in results) else 0
+    code = exit_code(args, results)
+    if code == EXIT_NOT_RUN:
+        n = report.counts(results)["error"]
+        _say(f"exit {EXIT_NOT_RUN}: {n} check{'s' if n != 1 else ''} could not run (see the error rows; "
+             "--fail-on-error none ignores this)")
+    return code
 
 
 if __name__ == "__main__":

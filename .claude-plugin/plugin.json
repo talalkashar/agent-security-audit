@@ -1,6 +1,6 @@
 {
   "name": "agent-security-audit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Security checks a coding agent builds into a website, then proves on the running site with evidence. Build rules and proof tests for Next.js, Supabase and Vercel, mapped to OSI layers 1-7.",
   "author": {
     "name": "Talal Kashar",

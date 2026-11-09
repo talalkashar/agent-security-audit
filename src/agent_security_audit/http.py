@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import http.client
 import re
 import socket
@@ -25,6 +26,11 @@ from .scope import is_local_host, same_origin
 
 USER_AGENT = f"agent-security-audit/{__version__} (+https://github.com/talalkashar/agent-security-audit)"
 MAX_BODY = 2 * 1024 * 1024
+# The response cache stops adding entries once it holds this many body bytes, so a run's memory stays bounded.
+MAX_CACHE_BYTES = 50 * 1024 * 1024
+# connect() errors that come from this machine or its network, not from the target: no route (IPv6 without a route),
+# host unreachable, no usable source address, or a local firewall that forbids the connection.
+UNREACHABLE = {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL, errno.EACCES, errno.EPERM}
 
 
 class BudgetExceeded(RuntimeError):
@@ -123,6 +129,7 @@ class Client:
         self.sent = 0
         self._last = 0.0
         self._cache = {}
+        self._cache_bytes = 0
 
     def url(self, path):
         return urljoin(self.target + "/", path.lstrip("/")) if not path.startswith(("http://", "https://")) else path
@@ -180,26 +187,43 @@ class Client:
             raw.close()
             raise
 
-    def target_address(self):
-        """The first address the target's host resolves to, looked up once per run (for port checks)."""
-        if not hasattr(self, "_address"):
+    def _addresses(self):
+        """Every address the target's host resolves to, in resolver order, looked up once per run."""
+        if not hasattr(self, "_all_addresses"):
             host = urlsplit(self.target).hostname
-            self._address = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)[0][4][0]
+            self._all_addresses = list(dict.fromkeys(a[4][0] for a in socket.getaddrinfo(host, None,
+                                                                                         type=socket.SOCK_STREAM)))
+        return self._all_addresses
+
+    def target_address(self):
+        """The address port checks use: the first one, until a probe finds it unreachable from this machine (an IPv6
+        address without an IPv6 route) and moves on to the next, as an HTTPS connection would."""
+        if not hasattr(self, "_address"):
+            self._address = self._addresses()[0]
         return self._address
 
     def probe_port(self, port, timeout=2.0):
         """Open a TCP connection to the target's own address on `port` and close it at once, sending nothing.
-        Counts against the budget like a request. Returns "open", "closed" (refused) or "filtered" (no answer)."""
-        address = self.target_address()
+        Counts against the budget like a request. Returns "open", "closed" (refused), "filtered" (no answer) or
+        "unreachable" (this machine has no route to the address, or a local firewall refused the connection: that
+        says nothing about the target)."""
+        self.target_address()
         self._spend()
-        try:
-            sock = socket.create_connection((address, port), timeout=min(timeout, self.timeout))
-        except ConnectionRefusedError:
-            return "closed"
-        except OSError:  # timed out, or a firewall answered host/port unreachable
-            return "filtered"
-        sock.close()
-        return "open"
+        while True:
+            try:
+                sock = socket.create_connection((self._address, port), timeout=min(timeout, self.timeout))
+            except ConnectionRefusedError:
+                return "closed"
+            except OSError as exc:
+                if exc.errno not in UNREACHABLE:  # timed out, or no answer at all
+                    return "filtered"
+                rest = self._addresses()[self._addresses().index(self._address) + 1:]
+                if not rest:
+                    return "unreachable"
+                self._address = rest[0]  # the address this machine cannot reach; try the next one
+                continue
+            sock.close()
+            return "open"
 
     def _send(self, method, url, headers, body, cache, verify=False):
         key = (method, url, tuple(sorted((headers or {}).items())), body)
@@ -249,8 +273,9 @@ class Client:
                 raise Blocked(f"{urlsplit(url).netloc} answered {resp.status} with a bot challenge ({why}). Its firewall "
                               "is blocking the scanner, so results would describe the challenge page, not the site. "
                               "Allow this machine's IP in the firewall (or pause challenge mode) and scan again.")
-        if cache:
+        if cache and self._cache_bytes + len(resp.body) <= MAX_CACHE_BYTES:
             self._cache[key] = resp
+            self._cache_bytes += len(resp.body)
         return resp
 
     def get(self, path="/", **kw):

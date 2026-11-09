@@ -92,8 +92,15 @@ def certificate(ctx):
     return passed("INFRA-02", f"The certificate is valid for {days} more days.", ev)
 
 
+# Only these mean the server refused the protocol version: its protocol_version alert, or a reply in a version this
+# client did not offer. A handshake_failure (no shared cipher), a reset or a closed connection could have other causes.
+VERSION_REFUSALS = ("TLSV1_ALERT_PROTOCOL_VERSION", "UNSUPPORTED_PROTOCOL", "WRONG_SSL_VERSION",
+                    "ALERT PROTOCOL VERSION", "UNSUPPORTED PROTOCOL")
+
+
 def _try_version(client, version):
-    """Return the negotiated version string, None if the server refused, or 'client' if this machine cannot offer it."""
+    """Return the negotiated version string, None if the server refused the version, 'client' if this machine cannot
+    offer it, 'cert' if the certificate did not verify, or ('inconclusive', reason) for any other handshake error."""
     context = ssl.create_default_context()
     try:
         context.minimum_version = version
@@ -107,11 +114,14 @@ def _try_version(client, version):
     except ssl.SSLCertVerificationError:
         return "cert"
     except ssl.SSLError as exc:
-        if "NO_PROTOCOLS_AVAILABLE" in str(exc).upper() or "no protocols available" in str(exc).lower():
+        text = f"{getattr(exc, 'reason', '') or ''} {exc}".upper()
+        if "NO_PROTOCOLS_AVAILABLE" in text or "NO PROTOCOLS AVAILABLE" in text:
             return "client"
-        return None
-    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
-        return None
+        if any(r in text for r in VERSION_REFUSALS):
+            return None
+        return ("inconclusive", getattr(exc, "reason", None) or type(exc).__name__)
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
+        return ("inconclusive", type(exc).__name__)
 
 
 @auto("INFRA-03")
@@ -120,10 +130,13 @@ def legacy_tls(ctx):
         return skipped("INFRA-03", "Target is plain HTTP; there is no TLS to check.")
     if _local(ctx):
         return skipped("INFRA-03", "Local development host; TLS versions are tested on the deployed site.")
-    accepted, untested, ev = [], [], []
+    accepted, untested, unclear, ev = [], [], [], []
     for name, version in (("TLS 1.0", ssl.TLSVersion.TLSv1), ("TLS 1.1", ssl.TLSVersion.TLSv1_1)):
         got = _try_version(ctx.client, version)
-        if got == "client":
+        if isinstance(got, tuple):
+            unclear.append(name)
+            ev.append(f"{name}: handshake failed without a protocol-version refusal ({str(got[1])[:80]})")
+        elif got == "client":
             untested.append(name)
             ev.append(f"{name}: this machine's OpenSSL cannot offer it")
         elif got == "cert":
@@ -135,6 +148,10 @@ def legacy_tls(ctx):
             ev.append(f"{name}: refused")
     if accepted:
         return failed("INFRA-03", f"The server still accepts {', '.join(accepted)}.", ev)
+    if unclear:
+        return Result("INFRA-03", "manual", f"The handshake for {', '.join(unclear)} failed for a reason other than a "
+                      "protocol-version refusal (for example no shared cipher, or the connection was dropped), so it "
+                      "is not proven that the server refuses the version. Run `testssl.sh` or an online TLS test.", ev)
     if untested:
         return skipped("INFRA-03", f"Could not test {', '.join(untested)} from this machine (its TLS library has them "
                        "turned off). Run `testssl.sh` or an online TLS test instead.")

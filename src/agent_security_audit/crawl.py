@@ -251,6 +251,10 @@ class _Crawler:
     def fetch(self, url):
         """GET a same-origin URL, or None when the budget, the crawl cap or the network stops it."""
         if not self.room():
+            # The URL in hand (and any still queued) goes unvisited, so the crawl is incomplete: no per-page check
+            # may pass on it.
+            self.site.cut = self.site.cut or ("not run: the crawl stopped at its share of the request budget before "
+                                              "every page was visited (raise --budget)")
             self.stop("stopped early to keep request budget for the checks")
             return None
         try:
@@ -352,14 +356,18 @@ def _count(n, one):
     return f"{n} {one if n == 1 else one + 's'}"
 
 
-# Next.js lists route chunks in its build manifest and in the RSC payload of each page.
-NEXT_CHUNK = re.compile(r"(?<![\w/.-])(?:/_next/)?static/chunks/[\w\-.~%@\[\]/]{1,300}?\.js\b")
+# Next.js lists route chunks in its build manifest and in the RSC payload of each page. The path after
+# static/chunks/ is bounded (real chunk paths are far shorter), so a hostile script full of "static/chunks/" starts
+# costs linear time, not quadratic.
+NEXT_CHUNK = re.compile(r"(?<![\w/.-])(?:/_next/)?static/chunks/[\w\-.~%@\[\]/]{1,200}?\.js\b")
+# Only the first 500 KB of a page or script is searched for chunk paths.
+MAX_CHUNK_SCAN = 500_000
 
 
 def next_chunks(text):
-    """Same-origin paths of Next.js chunks referenced in a page or script."""
+    """Same-origin paths of Next.js chunks referenced in a page or script (first MAX_CHUNK_SCAN characters)."""
     out = []
-    for m in NEXT_CHUNK.finditer(text):
+    for m in NEXT_CHUNK.finditer(text[:MAX_CHUNK_SCAN]):
         path = m.group(0)
         out.append(path if path.startswith("/_next/") else "/_next/" + path)
     return out

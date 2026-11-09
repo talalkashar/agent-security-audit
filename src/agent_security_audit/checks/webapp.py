@@ -311,14 +311,21 @@ def open_redirect(ctx):
         else:
             ev.append(f"GET {path}?{name}=<{len(REDIRECT_PROBES)} probe forms> -> "
                       + (f"redirects stay on {', '.join(sorted(stays))}" if stays else "no redirect"))
-    if len(candidates) > MAX_REDIRECT_PROBES:
-        ev.append(f"{count(len(candidates) - MAX_REDIRECT_PROBES, 'more parameter')} not probed")
+    left = candidates[MAX_REDIRECT_PROBES:]
+    if left:
+        ev.append(f"{count(len(left), 'more parameter')} not probed: "
+                  + ", ".join(f"{p}?{n}=" for p, n, _ in left[:5]) + (", ..." if len(left) > 5 else ""))
     if open_:
         return failed("API-19", f"Open redirect: {', '.join(open_)} sends visitors to any site named in the "
                       "parameter, which phishing links and OAuth token theft rely on.", ev)
     n = min(len(candidates), MAX_REDIRECT_PROBES)
-    return passed("API-19", f"{count(n, 'redirect parameter')} refused an off-site destination in all "
-                  f"{len(REDIRECT_PROBES)} probe forms (absolute, //host, /\\host, https:host, double-encoded).", ev)
+    if left:
+        return Result("API-19", "manual", f"No server-side redirect to the probe host from the {count(n, 'parameter')} "
+                      f"probed, but {count(len(left), 'more redirect parameter')} {are(len(left))} untested (limit "
+                      f"{MAX_REDIRECT_PROBES}). Test them by hand (see the proof steps).", ev)
+    return passed("API-19", f"No server-side redirect to the probe host from {count(n, 'redirect parameter')} in all "
+                  f"{len(REDIRECT_PROBES)} probe forms (absolute, //host, /\\host, https:host, double-encoded). "
+                  "Redirects done in JavaScript are not covered.", ev)
 
 
 # --- API-20 directory listing ---------------------------------------------------------------------------------------

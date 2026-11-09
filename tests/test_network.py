@@ -114,7 +114,9 @@ class PortsTest(unittest.TestCase):
     def test_ssh_warns_rdp_fails(self):
         self.assertEqual(network.admin_ports(ctx(ports={22: "open"})).status, "warn")
         self.assertEqual(network.admin_ports(ctx(ports={22: "open", 3389: "open"})).status, "fail")
-        self.assertEqual(network.admin_ports(ctx()).status, "pass")
+        self.assertEqual(network.admin_ports(ctx(ports={23: "closed"})).status, "pass")
+        # Every probe timed out: local egress filtering cannot be ruled out, so not a pass.
+        self.assertEqual(network.admin_ports(ctx()).status, "manual")
 
     def test_each_port_probed_once_per_run(self):
         c = ctx(ports={22: "open"})
@@ -180,8 +182,11 @@ class ProbePortTest(unittest.TestCase):
 
 class CipherTest(unittest.TestCase):
     def run_with(self, broken, static_rsa):
+        # `broken` is the answer to the 3DES family; the other broken families are refused.
         def fake(client, ciphers):
-            return broken if ciphers == network.BROKEN_CIPHERS else static_rsa
+            if ciphers == network.STATIC_RSA:
+                return static_rsa
+            return broken if ciphers.startswith("3DES") else None
         with mock.patch.object(network, "_try_ciphers", fake):
             return network.weak_ciphers(ctx())
 

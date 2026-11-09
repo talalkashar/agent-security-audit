@@ -66,7 +66,13 @@ def fake_jwt(role):
 
 class CspTest(unittest.TestCase):
     def status(self, *headers):
-        return browser.csp(home_with(*headers)).status
+        # Each response gets a fresh nonce, as a real server must (a repeated nonce is its own test).
+        served = []
+
+        def route(m, u, h, b):
+            served.append(u)
+            return resp(200, [(k, v.replace("'nonce-", f"'nonce-{len(served)}")) for k, v in headers], "<html></html>")
+        return browser.csp(ctx_for(route)).status
 
     def test_parse(self):
         p = browser.parse_csp("default-src 'self'; script-src 'self' 'nonce-a'; script-src *")
@@ -304,8 +310,9 @@ class CookieTest(unittest.TestCase):
         self.assertEqual(self.status("__Host-session=x; Path=/; Secure; SameSite=Lax"), "fail")
 
     def test_prefix_alone_is_not_a_session(self):
-        self.assertEqual(self.status("__Host-theme=dark; Path=/; Secure; SameSite=Lax"), "pass")
-        self.assertEqual(self.status("__Secure-lang=en; Secure; SameSite=Lax"), "pass")
+        # Not a session cookie, so nothing is wrong, but no session cookie was observed either: manual, not pass.
+        self.assertEqual(self.status("__Host-theme=dark; Path=/; Secure; SameSite=Lax"), "manual")
+        self.assertEqual(self.status("__Secure-lang=en; Secure; SameSite=Lax"), "manual")
 
     def test_supabase_cookie_without_httponly_warns(self):
         self.assertEqual(self.status("sb-abc-auth-token=x; Secure; SameSite=Lax"), "warn")
@@ -323,7 +330,9 @@ class CookieTest(unittest.TestCase):
 class CorsTest(unittest.TestCase):
     def run_cors(self, reflect, credentials):
         def route(m, u, h, b):
-            headers = []
+            headers = [("Content-Type", "text/html")] if "Origin" not in h else []
+            if "Origin" not in h and u.endswith("/"):  # the crawl: a home page that links an API route
+                return resp(200, headers, '<html><a href="/api/user">me</a></html>')
             if reflect and "Origin" in h:
                 headers.append(("Access-Control-Allow-Origin", h["Origin"]))
                 if credentials:
@@ -341,8 +350,11 @@ class CorsTest(unittest.TestCase):
         self.assertEqual(self.run_cors(False, False).status, "pass")
 
     def test_wildcard_is_not_reflection(self):
-        ctx = ctx_for(lambda m, u, h, b: resp(200, [("Access-Control-Allow-Origin", "*")]))
-        self.assertEqual(browser.cors(ctx).status, "pass")
+        def route(m, u, h, b):
+            if "Origin" not in h and u.endswith("/"):
+                return resp(200, [("Content-Type", "text/html")], '<html><a href="/api/user">me</a></html>')
+            return resp(200, [("Access-Control-Allow-Origin", "*")])
+        self.assertEqual(browser.cors(ctx_for(route)).status, "pass")
 
 
 class SensitiveFilesTest(unittest.TestCase):
