@@ -305,13 +305,18 @@ def referrer(ctx):
 
 
 def _referrer(resp):
-    value = resp.get("referrer-policy")
-    ev = [_hdr(resp, "referrer-policy")]
-    if not value:
+    # Fetch collects every Referrer-Policy field, in order. The last recognised token wins; unknown tokens are ignored.
+    values = resp.get_all("referrer-policy")
+    ev = [f"referrer-policy: {', '.join(values)}" if values else "referrer-policy: (not set)"]
+    if not any(value.strip() for value in values):
         return warned("BROWSER-05", "No Referrer-Policy; modern browsers default to strict-origin-when-cross-origin, "
                       "older ones may send full URLs.", ev)
-    # The last recognised token wins in browsers; unknown tokens are ignored.
-    tokens = [t.strip().lower() for t in value.split(",") if t.strip().lower() in KNOWN_REFERRER]
+    tokens = []
+    for value in values:
+        for token in value.split(","):
+            token = token.strip().lower()
+            if token in KNOWN_REFERRER:
+                tokens.append(token)
     if not tokens:
         return warned("BROWSER-05", "Referrer-Policy has no value browsers recognise, so they use their default; set "
                       "strict-origin-when-cross-origin.", ev)

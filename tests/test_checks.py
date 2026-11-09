@@ -229,6 +229,19 @@ class HeaderChecksTest(unittest.TestCase):
                 self.assertEqual(browser.referrer(home_with(("Referrer-Policy", value))).status, want)
         self.assertEqual(browser.referrer(home_with()).status, "warn")
 
+    def test_referrer_repeated_fields_use_the_last_recognised_token(self):
+        # Fetch combines every Referrer-Policy field. A later unsafe-url must not pass behind an earlier safe token.
+        cases = [(("no-referrer", "unsafe-url"), "fail"),
+                 (("strict-origin-when-cross-origin", "unsafe-url"), "fail"),
+                 (("unsafe-url", "strict-origin"), "pass"),
+                 (("unsafe-url", "x-future"), "fail"),
+                 (("x-future", "no-referrer"), "pass"),
+                 (("origin", "strict-origin-when-cross-origin"), "pass")]
+        for values, want in cases:
+            with self.subTest(values=values):
+                headers = tuple(("Referrer-Policy", value) for value in values)
+                self.assertEqual(browser.referrer(home_with(*headers)).status, want)
+
     def test_nosniff_and_framing(self):
         self.assertEqual(browser.nosniff(home_with(("X-Content-Type-Options", "nosniff"))).status, "pass")
         self.assertEqual(browser.nosniff(home_with()).status, "fail")

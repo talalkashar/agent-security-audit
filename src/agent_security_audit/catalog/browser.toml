@@ -99,7 +99,7 @@ stacks = ["any"]
 risk = """Without a strict Referrer-Policy, the full URL of a page, including reset, invite or auth codes in the query string, is sent in the `Referer` header to every third-party resource and outbound link. The token-flow test is BROWSER-16."""
 build = """Send `Referrer-Policy: strict-origin-when-cross-origin` site-wide (OWASP cheat sheet value) and `no-referrer` on auth callback, reset and invite routes."""
 proof = """1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result.
-2. Pass on every page: `Referrer-Policy` is `strict-origin-when-cross-origin`, `strict-origin`, `same-origin` or `no-referrer`.
+2. Pass on every page: `Referrer-Policy` is `strict-origin-when-cross-origin`, `strict-origin`, `same-origin` or `no-referrer`. Repeated fields are one list: the last recognised token wins, and an unknown token is ignored.
 3. Fail: `unsafe-url` or `no-referrer-when-downgrade`. Warning: header missing (modern browsers default to `strict-origin-when-cross-origin`), `origin` or `origin-when-cross-origin`."""
 sources = [
   { title = "OWASP HTTP Headers Cheat Sheet", url = "https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html" },

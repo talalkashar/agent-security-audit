@@ -8,6 +8,7 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 - MCP tool `diff_reports` compares two in-memory asa JSON reports and does not read files. Different targets are refused unless `allow_different_target` is true. `gate.would_fail` follows `asa diff`'s exit rule. FIXED still needs an observed pass.
 - MCP string arguments are length-capped and reject control characters. `rate_limit_body` may contain newlines.
 - API-23 does not pass when one of `/graphql` and `/api/graphql` refuses introspection and the other is unproven (generic JSON errors, or an auth, throttle, gateway or firewall answer). A path that is not an endpoint still allows the pass.
+- BROWSER-05 combines every `Referrer-Policy` field and uses the last recognised token. A later `unsafe-url` does not pass because an earlier field was strict.
 
 ## 0.2.0 - unreleased draft (set the date when the release is tagged)
 
