@@ -144,6 +144,26 @@ class GraphqlProofTest(unittest.TestCase):
         coded = {"errors": [{"message": "x", "extensions": {"code": "GRAPHQL_VALIDATION_FAILED"}}]}
         self.assertEqual(self.run_check(400, coded).status, "pass")
 
+    def test_proven_refusal_does_not_pass_when_the_other_path_is_unproven(self):
+        proven = resp(400, [("Content-Type", "application/json")],
+                      json.dumps({"errors": [{"message": "GraphQL introspection is not allowed"}]}))
+        unclear = resp(400, [("Content-Type", "application/json")],
+                       json.dumps({"errors": [{"message": "Bad request"}]}))
+        hidden = resp(401, [("Content-Type", "application/json")], json.dumps({"error": "unauthorized"}))
+        for proven_path, other_path in (("/graphql", "/api/graphql"), ("/api/graphql", "/graphql")):
+            with self.subTest(kind="unclear", path=other_path):
+                out = webapp.graphql_introspection(ctx({proven_path: proven, other_path: unclear}))
+                self.assertEqual(out.status, "manual")
+                self.assertIn(proven_path, out.summary)
+                self.assertIn(other_path, out.summary)
+            with self.subTest(kind="hidden", path=other_path):
+                out = webapp.graphql_introspection(ctx({proven_path: proven, other_path: hidden}))
+                self.assertEqual(out.status, "manual")
+                self.assertIn(f"{other_path} (401)", out.summary)
+        # A sibling that is not an endpoint does not block the pass.
+        self.assertEqual(webapp.graphql_introspection(ctx({"/api/graphql": proven, "/graphql": resp(404)})).status,
+                         "pass")
+
 
 class SupabaseProofTest(unittest.TestCase):
     PROJECT = "https://" + "abcdefghijklmnopqrst" + ".supabase.co"

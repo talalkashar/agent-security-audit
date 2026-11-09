@@ -540,6 +540,15 @@ def graphql_introspection(ctx):
         return warned("API-23", f"GraphQL introspection is on at {', '.join(open_)}: anyone can download the full "
                       "schema, including admin and internal fields. Turn it off in production unless the API is "
                       "public by design, and make sure every resolver checks authorization.", ev)
+    # One proven refusal does not cover the other path. A 404 sibling is neither unclear nor hidden, so it still passes.
+    if closed and unclear:
+        return Result("API-23", "manual", f"GraphQL at {', '.join(closed)} refuses introspection, but "
+                      f"{', '.join(unclear)} answered with errors that do not prove it is GraphQL. Confirm that path "
+                      "by hand.", ev)
+    if closed and hidden:
+        return Result("API-23", "manual", f"GraphQL at {', '.join(closed)} refuses introspection, but "
+                      f"{', '.join(hidden)} answered with an auth, throttle, gateway or firewall status, so whether "
+                      "GraphQL is behind it is not known.", ev)
     if closed:
         return passed("API-23", f"GraphQL at {', '.join(closed)} refuses introspection.", ev)
     if unclear:
