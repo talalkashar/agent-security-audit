@@ -197,6 +197,8 @@ class SupabaseProofTest(unittest.TestCase):
         self.assertIn("profiles (42 rows)", " ".join(r.evidence))
         for method, url, headers, body in c.client.calls:
             self.assertEqual(method, "HEAD")
+            self.assertTrue(url.startswith(self.PROJECT + "/rest/v1/"), url)
+            self.assertIn("limit=1", url)
             self.assertEqual(headers.get("Prefer"), "count=exact")
             self.assertIsNone(body)
         _, r = self.run_check({"notes": (200, "*/0")})

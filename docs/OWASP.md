@@ -4,7 +4,7 @@
 
 How the catalog maps to the OWASP Top 10 (2021 and 2025) and the OWASP API Security Top 10 (2023). A check can map to several categories or to none. List the checks for one category with `asa list --owasp A01` (every list that has an A01) or `asa list --owasp A01:2021`.
 
-- **Live test**: `asa scan` proves it on the running site. **From code**: `asa code` settles it from the source. **Guided**: the agent follows the written proof steps (`asa show <ID>`).
+- **Live test**: `asa scan` proves it on the running site. **From code**: `asa code` reads it from the source; only 11 of these checks can pass from code; a pass on any other becomes manual. **Guided**: the agent follows the written proof steps (`asa show <ID>`).
 - A count says how many checks touch a category. It is not a score, and no category is fully proven by a scan: a pass means the defense was observed working on that target at that time.
 
 ## OWASP Top 10:2021

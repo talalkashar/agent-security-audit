@@ -63,7 +63,7 @@ class DocsSyncTest(unittest.TestCase):
         n = self.gen.coverage(checks, automated)
         self.assertEqual(n["total"], len(checks))
         self.assertIn(f"**{n['total']} checks, mapped to OSI layers 1 to 7:** {n['live']} live proof tests", readme)
-        self.assertIn(f"{n['code']} settled from source code", readme)
+        self.assertIn(f"{n['code']} that the code audit reads (`asa code`; {n['static']} of them can pass from code", readme)
         self.assertIn(f"{n['guided']} guided checks", readme)
         self.assertEqual(n["guided"], n["total"] - n["live"] - n["code"] + n["both"])
         for layer, name in self.gen.LAYERS.items():

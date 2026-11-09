@@ -116,27 +116,34 @@ def layer_table(checks):
     return lines
 
 
+# The README is also the PyPI page, where relative links break, so its generated links are absolute.
+REPO_URL = "https://github.com/talalkashar/agent-security-audit"
+BLOB_URL = REPO_URL + "/blob/main/"
+
+
 def readme_block(checks):
-    lines = [START, "", "Checks by area:", ""] + area_table(checks, "docs/checks/")
+    lines = [START, "", "Checks by area:", ""] + area_table(checks, BLOB_URL + "docs/checks/")
     lines += ["", "Checks by OSI layer:", ""] + layer_table(checks) + ["", END]
     return "\n".join(lines)
 
 
 def coverage(checks, automated):
     """How each check is settled: a live proof test (`asa scan`), the code audit (`asa code`), both, or neither
-    (guided: the agent follows the written proof steps)."""
+    (guided: the agent follows the written proof steps). `code` counts the checks the code audit reads;
+    `static` counts the ones it can also pass (code_audit.STATIC_PROOF); the rest never pass from code."""
     live = [c for c in checks if c.id in automated]
     code = [c for c in checks if c.id in code_audit.CHECKS]
     return {"total": len(checks), "live": len(live), "active": sum(c.probe == "active" for c in live),
-            "code": len(code), "both": sum(c.id in automated for c in code),
+            "code": len(code), "static": sum(c.id in code_audit.STATIC_PROOF for c in code),
+            "both": sum(c.id in automated for c in code),
             "guided": sum(c.id not in automated and c.id not in code_audit.CHECKS for c in checks)}
 
 
 def headline_block(checks, automated):
     n = coverage(checks, automated)
     return (f"**{n['total']} checks, mapped to OSI layers 1 to 7:** {n['live']} live proof tests (`asa scan`; "
-            f"{n['live'] - n['active']} passive, {n['active']} active), {n['code']} settled from source code "
-            f"(`asa code`; {n['both']} of them also have a live test) and {n['guided']} guided checks that the agent "
+            f"{n['live'] - n['active']} passive, {n['active']} active), {n['code']} that the code audit reads "
+            f"(`asa code`; {n['static']} of them can pass from code, {n['both']} also have a live test) and {n['guided']} guided checks that the agent "
             "works through with written proof steps.")
 
 
@@ -209,7 +216,7 @@ def _owasp_anchor(oid):
 def owasp_block(checks, automated):
     lines = []
     for key, name in catalog.OWASP_LISTS.items():
-        lines += [f"**{name}**", ""] + _owasp_table(checks, automated, key, "docs/OWASP.md") + [""]
+        lines += [f"**{name}**", ""] + _owasp_table(checks, automated, key, BLOB_URL + "docs/OWASP.md") + [""]
     unmapped = [c.id for c in checks if not c.owasp]
     lines.append(f"{len(checks) - len(unmapped)} of {len(checks)} checks map to at least one category; the other "
                  f"{len(unmapped)} ({', '.join(unmapped)}) sit outside these lists. A count is how many checks touch a category, not a score: one category is never fully "
@@ -221,7 +228,8 @@ def skill_coverage(checks, automated):
     n = coverage(checks, automated)
     covered = {o for c in checks for o in c.owasp}
     every = "every category in them has" if covered == set(catalog.OWASP) else "most categories have"
-    return (f"Coverage: {n['total']} checks ({n['live']} live proof tests, {n['code']} settled from code, "
+    return (f"Coverage: {n['total']} checks ({n['live']} live proof tests, {n['code']} read by the code audit "
+            f"({n['static']} of them can pass from code), "
             f"{n['guided']} guided), mapped to the OWASP Top 10 (2021 and 2025) and the OWASP API Security Top 10 (2023); {every} at least one check. List one category with "
             "`asa list --owasp A01`; docs/OWASP.md in the repository names the thin spots.")
 
@@ -231,8 +239,9 @@ def render_owasp(checks, automated):
              ("How the catalog maps to the OWASP Top 10 (2021 and 2025) and the OWASP API Security Top 10 (2023). "
               "A check can map to several categories or to none. List the checks for one category with "
               "`asa list --owasp A01` (every list that has an A01) or `asa list --owasp A01:2021`."), "",
-             ("- **Live test**: `asa scan` proves it on the running site. **From code**: `asa code` settles it from "
-              "the source. **Guided**: the agent follows the written proof steps (`asa show <ID>`)."),
+             ("- **Live test**: `asa scan` proves it on the running site. **From code**: `asa code` reads it from "
+              f"the source; only {len(code_audit.STATIC_PROOF)} of these checks can pass from code; a "
+              "pass on any other becomes manual. **Guided**: the agent follows the written proof steps (`asa show <ID>`)."),
              ("- A count says how many checks touch a category. It is not a score, and no category is fully proven by "
               "a scan: a pass means the defense was observed working on that target at that time."), ""]
     for key, name in catalog.OWASP_LISTS.items():
@@ -298,8 +307,10 @@ def render_index(checks, automated):
                      f"{_cell(c.title)} |")
     lines += ["", f"Automated proof tests built in: {len(automated)} ("
               + ", ".join(sorted(automated)) + ")."]
-    lines += ["", f"Settled from source code by `asa code`: {len(code_audit.CHECKS)} ("
-              + ", ".join(sorted(code_audit.CHECKS)) + ")."]
+    lines += ["", f"Read from source code by `asa code`: {len(code_audit.CHECKS)} ("
+              + ", ".join(sorted(code_audit.CHECKS)) + ").",
+              "", f"Of those, only {len(code_audit.STATIC_PROOF)} can pass from code ("
+              + ", ".join(sorted(code_audit.STATIC_PROOF)) + "); a pass on any other becomes manual."]
     return "\n".join(lines) + "\n"
 
 
