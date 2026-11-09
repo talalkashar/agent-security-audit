@@ -17,9 +17,10 @@ from .project import Project
 MODULES = (secrets, sql, nextjs, patterns, request_input, ci)
 # Every catalog check the code audit can settle. Docs and `asa scan` hints read this.
 CHECKS = tuple(dict.fromkeys(cid for mod in (*MODULES, deps) for cid in mod.CHECKS))
-# Checks the code audit can only judge by the presence of an auth call, which never proves it gates the action.
-# They never pass from code alone: the analyzers report manual, and merge() downgrades any pass handed to it.
-PRESENCE_ONLY = frozenset({"NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01"})
+# Checks a static read can never pass: it finds an auth call or an RLS statement, not proof that it gates every
+# request on the running system. The analyzers report these as manual with the evidence; run() enforces it.
+NO_STATIC_PASS = frozenset({"NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01", "ACCESS-01", "ACCESS-02", "ACCESS-06",
+                            "NEXT-15"})
 
 
 def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=None):
@@ -39,6 +40,9 @@ def run(path=".", *, osv=True, osv_query=None, timeout=20.0, ids=None, areas=Non
         results += _unread(deps.dependencies(project, osv=osv, osv_query=osv_query, timeout=timeout), project)
     except Exception as exc:  # noqa: BLE001
         results.append(errored("INFRA-13", f"dependency analyzer failed: {type(exc).__name__}: {exc}"))
+    guessed = [r for r in results if r.check_id in NO_STATIC_PASS]
+    results = [r for r in results if r.check_id not in NO_STATIC_PASS] + \
+        _not_proven(guessed, "A static read cannot prove this check.")
     if gap := project.coverage_gap():
         results = _not_proven(results, f"The audit did not cover the whole project: {gap}.")
     known = catalog.by_id()
@@ -71,12 +75,6 @@ def _unread(results, project):
                                 f"{'was' if len(files) == 1 else 'were'} not read ({shown}).")
 
 
-def _presence_manual(r):
-    if r.status != "pass" or r.check_id not in PRESENCE_ONLY:
-        return r
-    return Result(r.check_id, "manual", f"Not proven by a static read: {r.summary}", r.evidence, r.fix, r.locations)
-
-
 # Lower is stronger evidence of a flaw when merging a code result with a live one.
 _MERGE_RANK = {"fail": 0, "warn": 1, "pass": 2, "error": 3, "manual": 4, "skip": 5}
 
@@ -84,9 +82,10 @@ _MERGE_RANK = {"fail": 0, "warn": 1, "pass": 2, "error": 3, "manual": 4, "skip":
 def merge(live, code):
     """Combine live scan results with code audit results for the same checks.
 
-    A live fail always stands. A code fail beats a live pass or warn (the flaw is in the source). Otherwise a live
-    pass/warn stands and a code result fills in where the scan could only say manual, skip or error. Evidence from
-    both sides is kept, prefixed with where it came from.
+    A live fail always stands. A code fail beats a live pass or warn (the flaw is in the source). A code pass never
+    replaces a live manual or error: a pass needs observed evidence, so the live status stands and the code result
+    is kept as evidence. Otherwise a live pass/warn stands and a code result fills in where the scan could only say
+    manual, skip or error. Evidence from both sides is kept, prefixed with where it came from.
     """
     by_id = {r.check_id: r for r in code}
     out = []
@@ -95,12 +94,11 @@ def merge(live, code):
         if c is None:
             out.append(r)
             continue
-        c = _presence_manual(c)
         if r.status == "fail":
             keep, other = r, c
         elif c.status == "fail":
             keep, other = c, r
-        elif r.status in ("pass", "warn"):
+        elif r.status in ("pass", "warn") or (c.status == "pass" and r.status in ("manual", "error")):
             keep, other = r, c
         else:
             keep, other = c, r
@@ -111,5 +109,5 @@ def merge(live, code):
                                                                              other.evidence[:10]]
         out.append(Result(keep.check_id, keep.status, keep.summary, evidence, keep.fix,
                           keep.locations or other.locations))
-    out += sorted((_presence_manual(r) for r in by_id.values()), key=lambda r: (_MERGE_RANK[r.status], r.check_id))
+    out += sorted(by_id.values(), key=lambda r: (_MERGE_RANK[r.status], r.check_id))
     return out

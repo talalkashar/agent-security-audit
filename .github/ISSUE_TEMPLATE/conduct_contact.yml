@@ -1,0 +1,18 @@
+name: Code of conduct contact request
+description: Ask the maintainer to contact you privately about a code of conduct concern. Put no details here.
+title: "Conduct: contact request"
+labels: ["conduct"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is public. Do not describe the incident or name anyone here. The maintainer will reply in this
+        issue with a private way to talk, then close it. To report privately from the start instead, see
+        CODE_OF_CONDUCT.md.
+  - type: checkboxes
+    id: no-details
+    attributes:
+      label: Confirm
+      options:
+        - label: I have not included any details of the incident or the people involved.
+          required: true

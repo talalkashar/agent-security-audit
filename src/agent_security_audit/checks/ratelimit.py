@@ -15,6 +15,9 @@ FAKE_PASSWORD = "asa-not-a-real-password"
 DEFAULT_BODY = f'{{"email":"{FAKE_EMAIL}","password":"{FAKE_PASSWORD}"}}'
 MAX_ATTEMPTS = 60
 MIN_VERDICT = 10  # fewer attempts than this cannot show that no limit exists
+# The only method the probe sends. A login is a POST; repeating PUT, PATCH, DELETE or a custom verb could change or
+# delete data. The CLI and MCP layers import this to restrict their input.
+ALLOWED_METHODS = ("POST",)
 # Words that mean the server started refusing attempts. Underscores and hyphens count as spaces, so Firebase's
 # TOO_MANY_ATTEMPTS_TRY_LATER matches "too many".
 LIMIT_WORDS = ("too many", "rate limit", "try again later", "slow down", "locked", "lockout", "captcha",
@@ -35,15 +38,22 @@ def _path(url):
 
 
 def login_endpoint(ctx):
-    """{path, method, body, ctype, source} for the login endpoint: --rate-limit-path, else a same-origin POST login
-    form found by the crawl. None when there is neither."""
+    """{path, method, body, ctype, source, detected, refused} for the login endpoint: --rate-limit-path, else a
+    same-origin POST login form found by the crawl. None when there is neither. `refused` names why a given path or
+    method must not be probed (a method other than POST, or a sign-up or reset path); it is None otherwise."""
     path = ctx.opt("rate_limit_path")
     if path:
-        method = str(ctx.opt("rate_limit_method", "POST")).upper()
-        return {"path": path, "method": method,
-                "body": ctx.opt("rate_limit_body", DEFAULT_BODY) if method not in ("GET", "HEAD") else None,
+        method = str(ctx.opt("rate_limit_method", "POST")).strip().upper()
+        refused = None
+        if method not in ALLOWED_METHODS:
+            refused = (f"method {method[:20]!r} is not allowed for the rate-limit probe (only "
+                       f"{', '.join(ALLOWED_METHODS)}), because repeated requests with it could change data")
+        elif NOT_LOGIN_PATH.search(_path(ctx.client.url(path))):
+            refused = (f"{_path(ctx.client.url(path))[:120]} looks like a sign-up, invite or reset endpoint, and "
+                       "repeated attempts there could create accounts or send mail")
+        return {"path": path, "method": method, "body": ctx.opt("rate_limit_body", DEFAULT_BODY),
                 "ctype": ctx.opt("rate_limit_content_type", "application/json"), "source": "--rate-limit-path",
-                "detected": False}
+                "detected": False, "refused": refused}
     for form in crawl(ctx).forms:
         where = _path(form.page) + " " + _path(form.action)
         if (form.method != "post" or sum(t == "password" for _, t in form.inputs) != 1
@@ -54,7 +64,7 @@ def login_endpoint(ctx):
                   if name and (kind in ("password", "email") or (kind == "text" and USER_FIELD.search(name)))]
         return {"path": _path(form.action), "method": "POST", "body": urlencode(fields),
                 "ctype": "application/x-www-form-urlencoded", "source": f"password form on {_path(form.page)}",
-                "detected": True}
+                "detected": True, "refused": None}
     return None
 
 
@@ -69,6 +79,9 @@ def login_rate_limit(ctx):
     if not target:
         return Result("API-01", "manual", "No login form found on the crawled pages. Name the login endpoint to prove "
                       "rate limiting: --rate-limit-path /api/auth/login (MCP: rate_limit_path).", [])
+    if target["refused"]:
+        return Result("API-01", "error", f"Not probed: {target['refused']}. Name the login endpoint with "
+                      "--rate-limit-path and leave --rate-limit-method at POST.", [f"source: {target['source']}"])
     method, path, body = target["method"], target["path"], target["body"]
     attempts = max(1, min(int(ctx.opt("rate_limit_attempts", 30)), MAX_ATTEMPTS))
     headers = {"Content-Type": target["ctype"]} if body is not None else {}

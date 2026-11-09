@@ -91,17 +91,21 @@ class FixtureTest(unittest.TestCase):
         results = by_id(self.fixed_results)
         bad = {cid: r.summary for cid, r in results.items() if r.status in ("fail", "warn", "error")}
         self.assertEqual(bad, {})
-        for cid in ("NEXT-01", "ACCESS-01", "ACCESS-02", "ACCESS-06",
-                    "NEXT-15", "NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02", "BROWSER-03",
+        for cid in ("NEXT-01", "NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02", "BROWSER-03",
                     "BROWSER-04", "BROWSER-05", "BROWSER-08", "BROWSER-09", "API-30", "API-31", "API-32", "API-05",
                     "INFRA-13", "NEXT-04", "INFRA-15"):
             with self.subTest(check=cid):
                 self.assertEqual(results[cid].status, "pass", results[cid].summary)
-        # Auth checks seen only by their presence are never a pass from the code.
-        for cid in ("NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01"):
+        # Guards and RLS found by a static read are evidence, not proof: manual, never pass.
+        for cid in ("ACCESS-01", "ACCESS-02", "ACCESS-06", "NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01",
+                    "NEXT-15"):
             with self.subTest(check=cid):
                 self.assertEqual(results[cid].status, "manual", results[cid].summary)
-                self.assertTrue(results[cid].summary.startswith("Not proven"), results[cid].summary)
+                self.assertTrue(results[cid].summary.startswith("Not proven:"), results[cid].summary)
+        self.assertTrue(any(e.startswith("app/api/notes/route.ts:6:") for e in results["NEXT-05"].evidence))
+        self.assertIn("app/actions.ts:7:", results["NEXT-06"].evidence[0])
+        self.assertIn("app/api/cron/cleanup/route.ts:4:", results["NEXT-15"].evidence[0])
+        self.assertIn("rejects a mismatch here", results["NEXT-15"].evidence[0])
         # Server-side secret-key use is listed for review, not passed.
         self.assertEqual(results["ACCESS-08"].status, "manual")
         # A clean working tree says nothing about git history, so INFRA-08 is never a pass from the code.
@@ -232,28 +236,32 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(merged[0].summary, "live saw a key")
         self.assertIn("code (pass): code clean", merged[0].evidence)
 
-    def test_code_fills_manual_and_adds_new(self):
+    def test_code_pass_never_replaces_live_manual(self):
+        # Used to merge to pass: a static guess beat the live "not proven".
         live = [Result("AUTH-01", "manual", "Not visible from outside", ["proof steps"])]
         code = [Result("AUTH-01", "pass", "verified", ["middleware.ts:3: getClaims"]),
                 Result("API-30", "pass", "no eval")]
         merged = by_id(code_audit.merge(live, code))
-        # AUTH-01 is presence only: a code pass handed to merge() still lands as manual, with its evidence.
         self.assertEqual(merged["AUTH-01"].status, "manual")
-        self.assertEqual(merged["AUTH-01"].evidence, ["code: middleware.ts:3: getClaims"])
-        self.assertEqual(merged["API-30"].status, "pass")
+        self.assertEqual(merged["AUTH-01"].summary, "Not visible from outside")
+        self.assertIn("code (pass): verified", merged["AUTH-01"].evidence)
+        self.assertIn("code: middleware.ts:3: getClaims", merged["AUTH-01"].evidence)
+        self.assertEqual(merged["API-30"].status, "pass")  # no live result: the code result is added as is
 
-    def test_presence_only_code_pass_never_wins(self):
-        for cid in ("NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01"):
-            with self.subTest(check=cid):
-                live = [Result(cid, "manual", "Not visible from outside")]
-                merged = by_id(code_audit.merge(live, [Result(cid, "pass", "auth call found")]))
-                self.assertEqual(merged[cid].status, "manual")
-                alone = by_id(code_audit.merge([], [Result(cid, "pass", "auth call found")]))
-                self.assertEqual(alone[cid].status, "manual")
-
-    def test_live_error_replaced_by_code(self):
+    def test_code_pass_never_replaces_live_error(self):
         merged = code_audit.merge([Result("NEXT-02", "error", "timeout")], [Result("NEXT-02", "pass", "off")])
-        self.assertEqual(merged[0].status, "pass")
+        self.assertEqual(merged[0].status, "error")
+        self.assertIn("code (pass): off", merged[0].evidence)
+
+    def test_code_fail_warn_and_manual_still_fill_in(self):
+        for live_status in ("manual", "error", "skip"):
+            for code_status in ("fail", "warn", "manual"):
+                with self.subTest(live=live_status, code=code_status):
+                    merged = code_audit.merge([Result("NEXT-05", live_status, "live")],
+                                              [Result("NEXT-05", code_status, "code", ["route.ts:3: x"])])
+                    self.assertEqual(merged[0].status, code_status)
+        merged = code_audit.merge([Result("NEXT-02", "skip", "n/a")], [Result("NEXT-02", "pass", "off")])
+        self.assertEqual(merged[0].status, "pass")  # a skip is not a live observation to protect
 
 
 class GitIndexTest(unittest.TestCase):
@@ -715,7 +723,8 @@ class AccuracyTest(unittest.TestCase):
             audit_files({"app/api/x/route.ts": route + tail})
             self.assertLess(time.monotonic() - start, 5.0)
         self.assertFalse(nextjs._has_auth("const m = 'call getUser() later';"))
-        self.assertTrue(nextjs._has_auth("const m = 'x'; await supabase.auth.getUser();"))
+        self.assertTrue(nextjs._has_auth("const m = 'x'; const { data: { user } } = await supabase.auth.getUser();"
+                                         " if (!user) return deny();"))
 
     def test_sanitizer_bindings_are_read_once_per_file(self):
         from agent_security_audit.code_audit import patterns
@@ -747,14 +756,15 @@ class AccuracyTest(unittest.TestCase):
         r = audit_files({"app/api/x/route.ts": code})
         self.assertIn(r["NEXT-05"].status, ("fail", "warn"), r["NEXT-05"].summary)
 
-    def test_route_helper_auth_counts_and_all_guarded_pass(self):
+    def test_route_helper_auth_counts_and_all_guarded_stay_manual(self):
         code = ("async function requireOwner() { return supabase.auth.getUser(); }\n"
                 "export async function GET() {\n  await requireOwner();\n  return supabase.from('notes').select();\n}\n"
                 "export const DELETE = withAuth(async () => supabase.from('notes').delete());\n"
                 "export function OPTIONS() {\n  return new Response(null);\n}\n")
         r = audit_files({"app/api/notes/route.ts": code})
-        self.assertEqual(r["NEXT-05"].status, "manual", r["NEXT-05"].evidence)  # presence only, never a pass
+        self.assertEqual(r["NEXT-05"].status, "manual", r["NEXT-05"].evidence)  # was pass: presence is not proof
         self.assertIn("2 of 2", r["NEXT-05"].summary)
+        self.assertIn("app/api/notes/route.ts:3:", r["NEXT-05"].evidence[0])
         r = audit_files({"app/api/ping/route.ts": "export function GET() {\n  return Response.json({ ok: 1 });\n}\n"})
         self.assertEqual(r["NEXT-05"].status, "manual")  # no data seen is not proof that every handler is guarded
 
@@ -790,8 +800,8 @@ class AccuracyTest(unittest.TestCase):
                 "async function requireUser() { return supabase.auth.getUser(); }\n")
         r = audit_files({"app/api/notes/route.ts": code})
         self.assertIn(r["NEXT-05"].status, ("warn", "manual"))
-        code = ("export async function GET() {\n  const re = /'/;\n  await supabase.auth.getUser();\n"
-                "  return supabase.from('notes').select();\n}\n")
+        code = ("export async function GET() {\n  const re = /'/;\n  const { data } = await supabase.auth.getUser();\n"
+                "  if (!data.user) return deny();\n  return supabase.from('notes').select();\n}\n")
         self.assertEqual(audit_files({"app/api/notes/route.ts": code})["NEXT-05"].status, "manual")
 
     def test_file_cap_makes_passes_manual(self):

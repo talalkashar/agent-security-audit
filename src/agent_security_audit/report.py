@@ -6,6 +6,7 @@ import hashlib
 import html
 import json
 import re
+import textwrap
 import unicodedata
 from datetime import UTC, datetime
 from urllib.parse import quote
@@ -19,6 +20,15 @@ LAYERS = {1: "Physical", 2: "Data link", 3: "Network", 4: "Transport", 5: "Sessi
           7: "Application"}
 LAYER_COLUMNS = ("pass", "fail", "warn", "manual")
 FIX_FIRST_MAX = 10
+# One word per status everywhere a person reads results, each with a short plain explanation.
+STATUS_HELP = (
+    ("fail", "a defense is missing; fix it"),
+    ("warn", "weak or partial"),
+    ("error", "the check could not run"),
+    ("manual", "needs the code or a logged-in test"),
+    ("pass", "observed working"),
+    ("skip", "does not apply here, or an active probe was not allowed"),
+)
 DISCLAIMER = ("A pass means the defense was observed working on this target at this time. It is not a guarantee "
               "that the site has no other flaws.")
 
@@ -58,10 +68,55 @@ def layer_coverage(results):
     return out
 
 
-def to_json(target, results):
+def count_line(results):
+    """'3 fail · 1 warn · 0 error · 12 manual · 20 pass · 4 skip': the status names, in report order."""
+    c = counts(results)
+    return " · ".join(f"{c[s]} {s}" for s, _ in STATUS_HELP)
+
+
+def status_legend():
+    return " · ".join(f"{s}: {why}" for s, why in STATUS_HELP)
+
+
+def run_scope(*, interface, mode, flags, started=None, finished=None, hosts=(), requests_sent=None):
+    """What a run did, for the report's audit trail: tool version, where it was started from (cli or mcp), mode
+    (scan, code, or scan+code), the flags in effect, the hosts contacted, the requests sent and the start and end
+    times (UTC)."""
+    return {"tool": "agent-security-audit", "version": __version__, "interface": interface, "mode": mode,
+            "flags": dict(flags), "hosts_contacted": sorted(set(hosts)), "requests_sent": requests_sent,
+            "started": started, "finished": finished}
+
+
+def _flag(value):
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    if value is None:
+        return "-"
+    if isinstance(value, (list, tuple)):
+        return ",".join(map(str, value)) or "-"
+    return str(value)
+
+
+def scope_lines(scope):
+    """(label, text) pairs describing a run's scope, shared by the Markdown and HTML reports."""
+    flags = ", ".join(f"{k}={_flag(v)}" for k, v in scope.get("flags", {}).items())
+    hosts = ", ".join(scope.get("hosts_contacted") or []) or "none"
+    tool = (f"{scope.get('tool', 'agent-security-audit')} {scope.get('version', __version__)}, "
+            f"run from {scope.get('interface', '-')}, mode {scope.get('mode', '-')}")
+    lines = [("Tool", tool), ("Flags", flags or "-"), ("Hosts contacted", hosts)]
+    if scope.get("requests_sent") is not None:
+        lines.append(("Requests to the target", str(scope["requests_sent"])))
+    lines.append(("Time (UTC)", f"started {scope.get('started') or '-'}, finished {scope.get('finished') or '-'}"))
+    return lines
+
+
+def to_json(target, results, scope=None):
     checks = catalog.by_id()
+    extra = {"scope": scope} if scope else {}
     return json.dumps({
-        "tool": "agent-security-audit", "version": __version__, "target": target, "generated": _now(),
+        "tool": "agent-security-audit", "version": __version__, "target": target, "generated": _now(), **extra,
         "counts": counts(results),
         "fix_first": [{"check_id": r.check_id, "severity": chk.severity, "title": chk.title, "fix": fix}
                       for r, chk, fix in fix_first(results)],
@@ -136,16 +191,16 @@ def _md_code(text):
     return f"{fence}{pad}{text}{pad}{fence}"
 
 
-def to_markdown(target, results):
+def to_markdown(target, results, scope=None):
     checks = catalog.by_id()
-    c = counts(results)
     lines = [
         f"# Security proof report: {target}",
         "",
         f"Generated {_now()} by agent-security-audit {__version__}.",
         "",
-        (f"**{c['fail']} failed · {c['warn']} warnings · {c['error']} could not run · {c['manual']} to check in code "
-        f"· {c['pass']} passed · {c['skip']} not applicable**"),
+        f"**{count_line(results)}**",
+        "",
+        status_legend(),
         "",
         "## Fix these first",
         "",
@@ -170,6 +225,9 @@ def to_markdown(target, results):
                 lines += ["", "Evidence:", ""] + [f"- {_md_code(e)}" for e in r.evidence[:20]]
             fix = _md_inline(r.fix) if r.fix else chk.build
             lines += ["", f"Fix: {fix}"]
+    if scope:
+        lines += ["", "## Scope of this run", ""]
+        lines += [f"- {label}: {_md_escape(text)}" for label, text in scope_lines(scope)]
     lines += ["", DISCLAIMER]
     return "\n".join(lines) + "\n"
 
@@ -182,25 +240,59 @@ def _plain(text, limit=MAX_TEXT):
     return C1_CONTROL.sub(" ", _clean(text, limit))
 
 
-def summary_text(target, results, hint=""):
-    """A compact plain-text summary for a terminal or an agent: counts, then what to fix first."""
+def shorten(text, limit, more=""):
+    """Plain text cut at a word boundary before limit characters, never mid-word, then ' ...' and `more` (say,
+    where the rest is). Text that fits is returned whole."""
+    text = _plain(text, max(limit * 4, MAX_TEXT))
+    if len(text) <= limit:
+        return text
+    head = text[:limit + 1]
+    cut = head[:head.rfind(" ")] if " " in head else text[:limit]
+    return cut.rstrip(" ,;:") + " ..." + (f" {more}" if more else "")
+
+
+def _wrap(text, width, indent):
+    if not width:
+        return [indent + text]
+    return textwrap.wrap(text, width, initial_indent=indent, subsequent_indent=" " * len(indent),
+                         break_long_words=False, break_on_hyphens=False) or [indent]
+
+
+def _where(r):
+    """'path:line' of a code finding's first location, plus how many more, or ''."""
+    locs = [loc for loc in r.locations or [] if loc.get("path")]
+    if not locs:
+        return ""
+    first = f"{_plain(str(locs[0]['path']), 200)}:{int(locs[0].get('line') or 1)}"
+    return first + (f" (and {len(locs) - 1} more)" if len(locs) > 1 else "")
+
+
+def summary_text(target, results, hint="", width=100, next_step=""):
+    """A compact plain-text summary for a terminal or an agent: counts with what each status means, what to fix
+    first (with file:line for code findings), the hint, then the next step for manual results. Lines wrap at word
+    boundaries to width."""
     c = counts(results)
-    lines = [f"asa: {target}",
-             (f"{c['fail']} failed · {c['warn']} warnings · {c['error']} could not run · {c['manual']} to check in "
-              f"code · {c['pass']} passed · {c['skip']} not applicable"), ""]
+    lines = [f"asa: {_plain(target, 300)}", *_wrap(count_line(results), width, ""),
+             *_wrap(status_legend(), width, "  "), ""]
     first = fix_first(results)
     if first:
         lines.append("Fix these first:")
         for i, (r, chk, fix) in enumerate(first, 1):
-            lines += [f"{i:>2}. [{chk.severity}] {r.check_id} {_plain(chk.title)}: {_plain(r.summary, 160)}",
-                      f"    Fix: {_plain(fix, 200)}"]
+            lines += _wrap(f"[{chk.severity}] {r.check_id} {_plain(chk.title)}: {shorten(r.summary, 160)}", width,
+                           f"{i:>2}. ")
+            where = _where(r)
+            if where:
+                lines += _wrap(f"At: {where}", width, "    ")
+            lines += _wrap(f"Fix: {shorten(fix, 200, f'(asa show {r.check_id})')}", width, "    ")
         more = c["fail"] - len(first)
         if more > 0:
             lines.append(f"    ...and {more} more failed checks in the full report.")
     else:
         lines.append("Nothing failed.")
     if hint:
-        lines += ["", hint]
+        lines += ["", *_wrap(hint, width, "")]
+    if next_step:  # last, so the next step is what the reader sees at the prompt
+        lines += ["", *_wrap(next_step, width, "")]
     return "\n".join(lines) + "\n"
 
 
@@ -251,14 +343,12 @@ def _status(status):
     return f'<span class="s s-{_h(status)}">{_h(status)}</span>'
 
 
-def to_html(target, results):
+def to_html(target, results, scope=None):
     """One self-contained page: inline CSS, no scripts, no external requests. Every value from the target is
     escaped, and a Content-Security-Policy forbids loading anything even if escaping were ever missed."""
     checks = catalog.by_id()
     c = counts(results)
     ordered = sort_results(results)
-    labels = (("fail", "failed"), ("warn", "warnings"), ("error", "could not run"), ("manual", "to check in code"),
-              ("pass", "passed"), ("skip", "not applicable"))
     out = ["<!doctype html>", '<html lang="en">', "<head>", '<meta charset="utf-8">',
            '<meta name="viewport" content="width=device-width, initial-scale=1">',
            "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'\">",
@@ -267,8 +357,8 @@ def to_html(target, results):
            f"<h1>Security proof report: {_h(target)}</h1>",
            f'<p class="muted">Generated {_h(_now())} by agent-security-audit {_h(__version__)}.</p>',
            '<ul class="counts">']
-    out += [f'<li class="s-{k}"><b>{c[k]}</b>{label}</li>' for k, label in labels]
-    out += ["</ul>", "<h2>Fix these first</h2>"]
+    out += [f'<li class="s-{k}" title="{_h(why)}"><b>{c[k]}</b>{k}</li>' for k, why in STATUS_HELP]
+    out += ["</ul>", f'<p class="muted">{_h(status_legend())}</p>', "<h2>Fix these first</h2>"]
     first = fix_first(results)
     if first:
         out.append('<ol class="first">')
@@ -302,6 +392,10 @@ def to_html(target, results):
                 out.append("<p>Evidence:</p>")
                 out += [f"<pre>{_h(e)}</pre>" for e in r.evidence[:20]]
             out += [f"<p>Fix: {_h_inline(r.fix or chk.build)}</p>", "</section>"]
+    if scope:
+        out += ["<h2>Scope of this run</h2>", "<ul>"]
+        out += [f"<li><b>{_h(label)}:</b> {_h(text)}</li>" for label, text in scope_lines(scope)]
+        out.append("</ul>")
     out += [f"<footer><p>{_h(DISCLAIMER)}</p></footer>", "</body>", "</html>"]
     return "\n".join(out) + "\n"
 
@@ -343,7 +437,11 @@ def _fingerprint(*parts):
     return {"asaFinding/v1": hashlib.sha256("|".join(map(str, parts)).encode()).hexdigest()[:32]}
 
 
-def to_sarif(target, results):
+def _sarif_time(value):
+    return value.replace("+00:00", "Z") if isinstance(value, str) else None
+
+
+def to_sarif(target, results, scope=None):
     """SARIF 2.1.0 for GitHub code scanning: one rule per check that ran, one result per failed or warned check
     (or per source location for the code audit). Valid against the OASIS schema; see tests/test_report.py."""
     checks = catalog.by_id()
@@ -371,9 +469,15 @@ def to_sarif(target, results):
                     "artifactLocation": {"uri": uri, "uriBaseId": "%SRCROOT%"}, "region": {"startLine": line}}}],
                 "partialFingerprints": _fingerprint(r.check_id, uri, line, _clean(loc.get("message") or "")),
             })
+    run = {"tool": {"driver": {"name": "agent-security-audit", "version": __version__,
+                               "semanticVersion": __version__, "informationUri": REPO, "rules": rules}},
+           "results": sarif_results}
+    if scope:
+        invocation = {"executionSuccessful": True, "properties": {"scope": scope}}
+        for key, field in (("startTimeUtc", "started"), ("endTimeUtc", "finished")):
+            if _sarif_time(scope.get(field)):
+                invocation[key] = _sarif_time(scope[field])
+        run["invocations"] = [invocation]
     return json.dumps({
-        "$schema": "https://json.schemastore.org/sarif-2.1.0.json", "version": "2.1.0",
-        "runs": [{"tool": {"driver": {"name": "agent-security-audit", "version": __version__,
-                                      "semanticVersion": __version__, "informationUri": REPO, "rules": rules}},
-                  "results": sarif_results}],
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json", "version": "2.1.0", "runs": [run],
     }, indent=2)

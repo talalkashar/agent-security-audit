@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlsplit
 
@@ -16,7 +17,10 @@ MAX_TAG = 4096
 MAX_TAGS = 4000
 SNIPPET = 120
 SUPPORT_DATE = "2026-11-07"
-# Verified release listings, used only to reject unknown future patch versions.
+# After this many days the support snapshot is too old to call a release line supported (only "ended" still counts).
+SUPPORT_MAX_AGE_DAYS = 90
+# Verified release listings: the newest patch of each line at SUPPORT_DATE. A higher patch is unknown; a lower one
+# is behind the latest security release.
 PATCH_LIMITS = {
     "WordPress": {(7, 0): 8, (7, 1): 4, (6, 9): 11},
     "Drupal": {(10, 6): 21, (11, 3): 21, (11, 4): 12},
@@ -220,11 +224,24 @@ def _judge(name, version):
         return "unknown", "patch version outside the verified release snapshot"
     for known_major, first, last, status, note in SUPPORT[name]:
         if major == known_major and first <= minor <= last:
+            latest = PATCH_LIMITS[name].get((major, minor))
+            patch = parts[2] if len(parts) == 3 else 0  # "7.1" is how a x.y.0 release reports itself
+            if status == "ok" and latest is not None and patch < latest:
+                return "old", f"supported line, but behind the latest known security release {major}.{minor}.{latest}"
             return status, note
     # WordPress publishes courtesy releases on older branches, without a general EOL declaration.
     if name == "WordPress" and ((major in (3, 4, 5, 6) and minor <= 9) or (major == 7 and minor == 0)):
         return "old", "behind the actively maintained WordPress 7.1 line"
     return "unknown", f"release line outside the verified {SUPPORT_DATE} snapshot"
+
+
+def _today():
+    return date.today()
+
+
+def support_data_stale():
+    """True once the support snapshot is older than SUPPORT_MAX_AGE_DAYS."""
+    return (_today() - date.fromisoformat(SUPPORT_DATE)).days > SUPPORT_MAX_AGE_DAYS
 
 
 @auto("CMS-02")
@@ -243,10 +260,14 @@ def outdated_core(ctx):
         verdicts.append((status, f"{name} {info['version']}: {note}"))
     statuses = {s for s, _ in verdicts}
     msgs = "; ".join(m for _, m in verdicts)
-    scope = (f"Vendor release-line snapshot {SUPPORT_DATE}; patch currency and the running installation are not "
-             "verified. ")
+    scope = (f"Vendor release snapshot {SUPPORT_DATE} (release line and latest patch); the running installation "
+             "is not verified. ")
     if "eol" in statuses:
         return failed("CMS-02", "A generator reports a vendor-ended release line. " + scope + msgs, ev)
+    if support_data_stale():
+        return Result("CMS-02", "manual", f"Support data stale: the release-line snapshot ({SUPPORT_DATE}) is older "
+                      f"than {SUPPORT_MAX_AGE_DAYS} days, so newer releases may exist. Update asa, or compare the "
+                      "version with the vendor's release page. " + msgs + ".", ev)
     if "unknown" in statuses or ctx.cache.get("cms-limited"):
         return Result("CMS-02", "manual", scope + msgs + ". Verify the installed version in the admin dashboard.", ev)
     if "old" in statuses:

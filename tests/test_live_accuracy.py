@@ -321,15 +321,16 @@ class CookieNameTest(unittest.TestCase):
     def status(self, *cookies):
         return browser.cookies(ctx({"/": html("x", *[("Set-Cookie", c) for c in cookies])})).status
 
+    # Exempt and non-session names are not failed; with no session cookie seen at all the result is manual.
     def test_double_submit_csrf_cookies_are_exempt(self):
         for name in ("csrftoken", "XSRF-TOKEN", "_csrf", "csrf_token", "__Host-csrf"):
             with self.subTest(name=name):
-                self.assertEqual(self.status(f"{name}=abc; Secure; SameSite=Lax"), "pass")
+                self.assertEqual(self.status(f"{name}=abc; Secure; SameSite=Lax"), "manual")
 
     def test_generic_substrings_are_not_sessions(self):
         for name in ("author", "consider_banner", "authorized_view", "tokenizer_pref"):
             with self.subTest(name=name):
-                self.assertEqual(self.status(f"{name}=1; Secure; SameSite=Lax"), "pass")
+                self.assertEqual(self.status(f"{name}=1; Secure; SameSite=Lax"), "manual")
 
     def test_real_session_names_still_fail(self):
         for name in ("connect.sid", "authToken", "PHPSESSID", "laravel_session", "next-auth.session-token",
@@ -354,10 +355,10 @@ class CookieNameTest(unittest.TestCase):
     def test_prefixed_csrf_cookies_stay_exempt(self):
         for name in ("__Host-XSRF-TOKEN", "__Secure-csrftoken"):
             with self.subTest(name=name):
-                self.assertEqual(self.status(f"{name}=abc; Secure; SameSite=Lax"), "pass")
+                self.assertEqual(self.status(f"{name}=abc; Secure; SameSite=Lax"), "manual")
 
     def test_home_page_is_counted_once(self):
-        r = browser.cookies(ctx({"/": html("x", ("Set-Cookie", "a=1; Secure; HttpOnly; SameSite=Lax"))}))
+        r = browser.cookies(ctx({"/": html("x", ("Set-Cookie", "sid=1; Secure; HttpOnly; SameSite=Lax"))}))
         self.assertEqual(r.status, "pass")
         self.assertIn("1 crawled page", r.summary)
 
@@ -539,8 +540,10 @@ class CorsVariantTest(unittest.TestCase):
                 headers = [("Access-Control-Allow-Origin", origin)]
                 if credentials:
                     headers.append(("Access-Control-Allow-Credentials", "true"))
+            if not origin:  # the crawl's request for the home page, which links an API route
+                return html('<a href="/api/user">me</a>')
             return resp(200, headers)
-        c = ctx({"/": route}, target="https://example.com")
+        c = ctx({"/": route, "/api/user": route}, target="https://example.com")
         return c, browser.cors(c)
 
     def test_ends_with_allowlist_fails(self):
@@ -563,8 +566,8 @@ class CorsVariantTest(unittest.TestCase):
 
     def test_probe_origins_are_inert(self):
         c, _ = self.run_check(lambda o: False)
-        origins = [h["Origin"] for _, _, h, _ in c.client.calls]
-        self.assertEqual(len(origins), 5)
+        origins = [h["Origin"] for _, _, h, _ in c.client.calls if "Origin" in h]
+        self.assertEqual(len(origins), 10)  # 5 origins on / and on the crawled API route
         for o in origins:
             self.assertTrue(o == "null" or "asa-origin-probe" in o, o)
         self.assertTrue(all(scope.same_origin("https://example.com", u) for _, u, _, _ in c.client.calls))
