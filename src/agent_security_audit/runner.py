@@ -11,8 +11,9 @@ from urllib.parse import urljoin, urlsplit
 from . import catalog, code_audit
 from .checks import Context, load_all
 from .code_audit import deps
-from .http import NETWORK_ERRORS, TIME_BUDGET_MESSAGE, Blocked, BudgetExceeded, Client, OffTarget
+from .http import NETWORK_ERRORS, TIME_BUDGET_MESSAGE, Blocked, BudgetExceeded, Client, Excluded, OffTarget
 from .model import Result, errored, skipped
+from .pacing import EXCLUDED_REASON
 from .report import _plain
 from .scope import ScopeError, check_private_allowed, check_target_allowed, normalize_target, owned, same_origin
 
@@ -157,6 +158,35 @@ class _Overran(Exception):
     pass
 
 
+def excluded_result(check_id, result, why, sent):
+    """A check that asked for a path --exclude-path keeps off (why says which) never passes: with nothing sent it
+    is skip, otherwise manual. result is None when the check stopped at the excluded path. fail, warn and error
+    stand: they rest on what was observed, or on nothing at all."""
+    if result is not None and result.status not in ("pass", "skip"):
+        return result
+    why = _plain(why, 160)
+    if not sent:
+        return skipped(check_id, f"Not run: {EXCLUDED_REASON} ({why}).")
+    return Result(check_id, "manual", f"Not proven: {EXCLUDED_REASON} ({why}), so part of what this check needs was "
+                  "not requested and it cannot pass. Prove it by hand or scan without that exclusion.",
+                  list(result.evidence) if result is not None else [])
+
+
+def _home_not_excluded(client):
+    """The home page cannot be excluded, and that includes where / redirects to: follow it as checks will."""
+    try:
+        client.home()
+    except Excluded as exc:
+        raise ScopeError(f"the home page redirects to {_plain(exc.path, 100)}, which an exclude-path pattern "
+                         "matches; every check starts from the home page, so it cannot be excluded") from None
+    except BudgetExceeded:  # no room to follow it now: the checks report the budget themselves
+        pass
+
+
+def _rate(delay):
+    return round(1 / delay, 3) if delay else None
+
+
 def _call(fn, ctx, deadline):
     """fn(ctx), but with a scan deadline the runner stops waiting GRACE seconds after it and raises _Overran, so a
     check busy in CPU (a regex, a parser) cannot hold the scan past its time budget. Python cannot stop a thread:
@@ -193,7 +223,7 @@ def _check_scope(target, client, authorized, private_needs_authorization):
 
 def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=None, insecure=False,
         budget=300, delay=0.05, timeout=10.0, include_manual=True, progress=None, max_time=None, record=None,
-        private_needs_authorization=False):
+        private_needs_authorization=False, rate=None, exclude=None):
     """Return (normalized_target, [Result]) for the selected checks. progress, when given, is called as
     progress(done, total, check_id, status) after each check. max_time, in seconds, is the scan's time budget:
     once it is used up no new request starts, and checks that still need one report an error. record, when given,
@@ -201,15 +231,18 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
     A check still running GRACE seconds after the deadline is abandoned as an error and no later check runs. A
     firewall challenge stops the scan: finished results are kept, and the remaining automated checks report an error
     starting with BLOCKED_PREFIX. private_needs_authorization (for callers a scanned page could steer, such as the MCP
-    server) also refuses a private network target unless authorized."""
+    server) also refuses a private network target unless authorized. rate (requests per second) replaces delay;
+    exclude (pacing.Exclusions) names paths no request may go to: a check that asked for one does not pass."""
     started = utc_now()
+    if rate:
+        delay = 1 / rate
     hosts = set()
     target = normalize_target(target)
     registry = load_all()
     deadline = time.monotonic() + max_time if max_time else None
     client = RecordingClient(target, timeout=timeout, budget=budget, delay=delay, insecure=insecure,
-                             deadline=deadline, hosts=hosts)
-    sent = 0
+                             deadline=deadline, hosts=hosts, exclude=exclude)
+    sent = slowed = 0
     addresses = None
     if check_ids_need_network(ids, areas, stacks):
         try:
@@ -217,10 +250,14 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
             final = canonical_target(target, client)
             if final != target:
                 target = final
-                sent = client.sent
-                client = RecordingClient(target, timeout=timeout, budget=budget - client.sent, delay=delay,
-                                         insecure=insecure, deadline=deadline, hosts=hosts)
+                sent, slowed = client.sent, client.slowed
+                halved = client.halved
+                client = RecordingClient(target, timeout=timeout, budget=budget - client.sent, delay=client.delay,
+                                         insecure=insecure, deadline=deadline, hosts=hosts, exclude=exclude)
+                client.halved = halved
                 _check_scope(target, client, authorized, private_needs_authorization)
+            if exclude:
+                _home_not_excluded(client)
             addresses = client.addresses()
         except Blocked as exc:
             raise ScopeError(_plain(str(exc), 300)) from exc
@@ -250,8 +287,15 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
                 progress(done, len(chosen), check.id, "error")
             continue
         ctx.cache.pop("data_cut", None)
+        ctx.cache.pop("excluded", None)
+        asked, sent_before, throttled = client.excluded, client.sent, client.throttled
         try:
             result = _call(fn, ctx, deadline)
+        except Excluded as exc:  # it stopped at the excluded path
+            # It saw something when it sent a request or read a crawl (which flags "excluded" only if it left links out).
+            saw = client.sent > sent_before or ctx.cache.pop("excluded", None) is not None
+            result = excluded_result(check.id, None, f"{exc.path} was not requested", saw)
+            asked = client.excluded
         except _Overran:
             # The abandoned check may still write to ctx, so no later check may read it: stop here.
             result = errored(check.id, OVERRAN_MESSAGE)
@@ -274,6 +318,16 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
             # It read a crawl or script set a budget (or a page too slow to read) cut short: "nothing found" is not
             # proven.
             result = errored(check.id, f"{cut}; it saw only part of the site, so it cannot pass")
+        elif client.throttled > throttled and result.status in ("pass", "skip"):
+            # A 429 that outlasted the retry is no answer about the path asked for: "not served" is not proven.
+            n = client.throttled - throttled
+            result = errored(check.id, f"the target answered 429 (or 503 with Retry-After) to {n} request"
+                             f"{'s' if n != 1 else ''} even after waiting and retrying, so it cannot pass. Scan again "
+                             "later, with a lower --rate, or with this machine allowed in the firewall.")
+        mark = ctx.cache.pop("excluded", None)  # it read a crawl that left excluded links out
+        if mark or client.excluded > asked:
+            result = excluded_result(check.id, result, mark or "a path it requested",
+                                     bool(mark) or client.sent > sent_before)
         if result.status in ("fail", "warn") and not result.fix:
             result.fix = check.build
         results.append(result)
@@ -281,5 +335,7 @@ def run(target, *, authorized=False, ids=None, areas=None, stacks=None, options=
             progress(done, len(chosen), check.id, result.status)
     if record is not None:
         record.update(started=started, finished=utc_now(), hosts_contacted=sorted(hosts),
-                      requests_sent=sent + client.sent)
+                      requests_sent=sent + client.sent,
+                      pacing={"rate": _rate(delay), "final_rate": _rate(client.delay), "slowed": slowed + client.slowed,
+                              "excluded_not_sent": len(client.excluded_paths)})
     return target, results

@@ -10,7 +10,7 @@ import shutil
 import sys
 from urllib.parse import urlsplit
 
-from . import __version__, catalog, code_audit, diff, install, report, runner
+from . import __version__, catalog, code_audit, diff, install, pacing, report, runner
 from .checks.dns_email import DEFAULT_RESOLVER
 from .checks.ratelimit import ALLOWED_METHODS as ALLOWED_RATE_LIMIT_METHODS
 from .scope import ScopeError, check_dns_resolver, is_local_host
@@ -73,7 +73,7 @@ exit codes:
 
 def scan_flags(*, authorized, allow_supabase, auto_only, no_dns, dns_resolver, no_ports, rate_limit_path,
                rate_limit_method, budget, max_time, max_pages, code, osv, insecure=False, checks=None, areas=None,
-               stacks=None):
+               stacks=None, rate=None, exclude_path=None):
     """The settings of a scan, as recorded in the report's scope block (CLI and MCP alike)."""
     return {"authorized": bool(authorized), "allow_supabase": bool(allow_supabase), "auto_only": bool(auto_only),
             "insecure": bool(insecure), "no_dns": bool(no_dns),
@@ -81,7 +81,16 @@ def scan_flags(*, authorized, allow_supabase, auto_only, no_dns, dns_resolver, n
             "rate_limit_path": rate_limit_path, "rate_limit_method": rate_limit_method, "budget": budget,
             "max_time": max_time, "max_pages": max_pages, "checks": list(checks or []),
             "areas": list(areas or []), "stacks": list(stacks or []), "code": code,
-            "osv": bool(osv)}
+            "osv": bool(osv), "rate": rate or pacing.DEFAULT_RATE,
+            "exclude_path": list(exclude_path or [])}
+
+
+def rate_arg(value):
+    """--rate: requests per second, checked before any request (argparse exits 2 on a bad value)."""
+    try:
+        return pacing.parse_rate(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
 
 
 def rate_limit_method(value):
@@ -250,6 +259,14 @@ def build_parser():
                     help="most same-origin pages the crawl visits (default 25); it never uses more than half the budget")
     sc.add_argument("--max-depth", type=int, default=3, help="most link hops from the home page the crawl follows")
     sc.add_argument("--budget", type=int, default=300, help="maximum requests to the target")
+    sc.add_argument("--rate", type=rate_arg, metavar="R",
+                    help=f"requests per second, {pacing.MIN_RATE:g} to {pacing.MAX_RATE:g} (default "
+                         f"{pacing.DEFAULT_RATE:g}); paces HTTP requests, TLS handshakes and port probes. A 429 or "
+                         "Retry-After from the target halves it for the rest of the run")
+    sc.add_argument("--exclude-path", action="append", metavar="REGEX",
+                    help=f"never request a path that fully matches this regular expression, e.g. '/admin/.*' (repeat, "
+                         f"at most {pacing.MAX_PATTERNS}, {pacing.MAX_PATTERN_LEN} characters each). Checks that "
+                         "needed such a path report manual or skip, never pass")
     sc.add_argument("--timeout", type=float, default=10.0,
                     help="seconds for one full response (default 10); a server that trickles bytes is cut off")
     sc.add_argument("--max-time", type=float, default=MAX_TIME,
@@ -406,6 +423,7 @@ def _main(argv=None):
         }
         if args.max_time < 0:
             raise ValueError("--max-time must be 0 (no limit) or more seconds")
+        exclude = pacing.Exclusions(args.exclude_path or ())
         stacks = _stacks(args.stack)
         hint = _code_hint(args)
         if hint:
@@ -418,7 +436,7 @@ def _main(argv=None):
                 args.target, authorized=authorized, ids=_csv(args.check), areas=_csv(args.area),
                 stacks=stacks, options=options, insecure=args.insecure, budget=args.budget,
                 timeout=args.timeout, include_manual=not args.auto_only, max_time=args.max_time or None,
-                progress=_progress if show_progress else None, record=record)
+                progress=_progress if show_progress else None, record=record, rate=args.rate, exclude=exclude)
         finally:
             if show_progress:
                 sys.stderr.write("\r\x1b[K")
@@ -433,10 +451,10 @@ def _main(argv=None):
                            rate_limit_path=args.rate_limit_path, rate_limit_method=options["rate_limit_method"],
                            budget=args.budget, max_time=args.max_time, max_pages=args.max_pages, code=args.code,
                            osv=not args.no_osv, insecure=args.insecure, checks=_csv(args.check),
-                           areas=_csv(args.area), stacks=stacks)
+                           areas=_csv(args.area), stacks=stacks, rate=args.rate, exclude_path=exclude.texts)
         scope = report.run_scope(interface="cli", mode="scan+code" if args.code else "scan", flags=flags,
                                  started=record.get("started", started), finished=runner.utc_now(), hosts=hosts,
-                                 requests_sent=record.get("requests_sent"))
+                                 requests_sent=record.get("requests_sent"), pacing=record.get("pacing"))
     except (ScopeError, catalog.CatalogError, ValueError) as exc:
         _say(exc)
         return 2

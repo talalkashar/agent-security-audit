@@ -147,6 +147,7 @@ def _tags(ctx, page):
 def detect(ctx):
     """Collect CMS hints; only unambiguous generator versions establish a release line."""
     if "cms" in ctx.cache:
+        crawl(ctx)  # carries the crawl's cut and exclusion marks to this reader too
         return ctx.cache["cms"]
     found = {}
 

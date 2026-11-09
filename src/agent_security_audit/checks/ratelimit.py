@@ -7,6 +7,7 @@ from urllib.parse import urlencode, urlsplit
 
 from ..crawl import crawl
 from ..model import Result, passed, warned
+from ..pacing import DEFAULT_RATE
 from ..scope import same_origin
 from . import auto, count
 
@@ -88,7 +89,7 @@ def login_rate_limit(ctx):
     source = f"endpoint from {target['source']}"
     statuses, base_status, base_words = [], None, set()
     for i in range(1, attempts + 1):
-        resp = ctx.client.request(method, path, headers=headers, body=body)
+        resp = ctx.client.request(method, path, headers=headers, body=body, backoff=False)  # it wants the 429
         statuses.append(resp.status)
         if i == 1:
             if resp.status in (404, 405):
@@ -128,6 +129,13 @@ def login_rate_limit(ctx):
     if attempts < MIN_VERDICT:
         return warned("API-01", f"No limit seen within {count(attempts, 'attempt')}, which is too few to judge; use at least "
                       f"{MIN_VERDICT} (default 30).", ev)
+    if getattr(ctx.client, "delay", 0) > 1 / DEFAULT_RATE + 1e-9:
+        # A limiter that counts per time window may never trip at a slow pace, so "no limit" is not shown here.
+        rate = f"{1 / ctx.client.delay:.3g}"
+        return Result("API-01", "manual", f"No limit observed up to {attempts} login attempts, but they went out at "
+                      f"{rate} requests/s (--rate, or the target asked the scan to slow down), and a limiter with a "
+                      "time window may not trigger at that pace. Scan this check at the default rate or confirm the "
+                      "limit in code.", ev + [f"attempts sent at {rate} requests/s"])
     same = "every answer was the same" if len(set(statuses)) == 1 else "no answer changed in a way that shows a limit"
     return warned("API-01", f"No limit observed up to {attempts} login attempts from one client: {same}. A limit may "
                   f"sit higher; confirm it in code, or raise --rate-limit-attempts (max "

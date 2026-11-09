@@ -47,7 +47,7 @@ class Stub:
     def url(self, path):
         return path if path.startswith(("http://", "https://")) else self.target + "/" + path.lstrip("/")
 
-    def request(self, method, path="/", *, headers=None, body=None, cache=False):
+    def request(self, method, path="/", *, headers=None, body=None, cache=False, backoff=True):
         url = self.url(path)
         if not scope.same_origin(self.target, url):
             raise AssertionError(f"off-origin request {url}")

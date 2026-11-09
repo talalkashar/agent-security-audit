@@ -18,7 +18,15 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, quote, urldefrag, urljoin, urlsplit
 
-from .http import NETWORK_ERRORS, TIME_BUDGET_MESSAGE, BudgetExceeded, ResponseTooSlow, TimeBudgetExceeded
+from .http import (
+    NETWORK_ERRORS,
+    TIME_BUDGET_MESSAGE,
+    BudgetExceeded,
+    Excluded,
+    ResponseTooSlow,
+    TimeBudgetExceeded,
+    busy,
+)
 from .scope import same_origin
 
 DEFAULT_MAX_PAGES = 25
@@ -74,6 +82,7 @@ class Site:
     notes: list = field(default_factory=list)       # limits reached, errors
     timed_out: bool = False                         # the scan's time budget cut the crawl short
     cut: str = ""  # why the crawl is incomplete (time or request budget, a page too slow to read or unreachable)
+    excluded: int = 0  # URLs not requested because --exclude-path matches their path
 
     def params(self):
         """{(path, name): example_url} for query parameters on same-origin links."""
@@ -260,7 +269,13 @@ class _Crawler:
             self.stop("stopped early to keep request budget for the checks")
             return None
         try:
-            return self.client.get(url, cache=True)
+            resp = self.client.get(url, cache=True)
+            if busy(resp):  # still 429 after the client's retry: that page was never seen
+                self.site.cut = self.site.cut or (f"{urlsplit(url).path or '/'} kept answering {resp.status} "
+                                                  "(the target asked the scan to slow down)")
+            return resp
+        except Excluded:  # never sent and cost no budget; checks that read this crawl cannot pass (see crawl())
+            self.site.excluded += 1
         except TimeBudgetExceeded:
             self.site.timed_out = True
             self.site.cut = self.site.cut or TIME_BUDGET_MESSAGE
@@ -341,17 +356,21 @@ class _Crawler:
                                    "not visited (raise it with --max-pages)")
         if self.site.skipped:
             self.site.notes.append(f"{_count(len(self.site.skipped), 'logout or state-changing link')} not requested")
+        if self.site.excluded:
+            self.site.notes.append(f"{_count(self.site.excluded, 'link')} not requested (--exclude-path)")
         return self.site
 
 
 def crawl(ctx):
     """The shared Site for this run. Crawls on first use. A check that reads a crawl the time or request budget cut
     short (or with a page too slow or failing to read) is flagged (ctx.cache["data_cut"]) so the runner never reports
-    a pass built on part of the site."""
+    a pass built on part of the site. One that skipped excluded links flags ctx.cache["excluded"] the same way."""
     if "crawl" not in ctx.cache:
         ctx.cache["crawl"] = _Crawler(ctx).run()
     if ctx.cache["crawl"].cut:
         ctx.cache["data_cut"] = ctx.cache["crawl"].cut
+    if getattr(ctx.cache["crawl"], "excluded", 0):
+        ctx.cache["excluded"] = f"the crawl left out {_count(ctx.cache['crawl'].excluded, 'link')}"
     return ctx.cache["crawl"]
 
 

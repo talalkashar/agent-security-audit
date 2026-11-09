@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
 from . import __version__
+from .pacing import EXCLUDED_REASON, MAX_DELAY, Exclusions, retry_after
 from .scope import is_local_host, same_origin
 
 USER_AGENT = f"agent-security-audit/{__version__} (+https://github.com/talalkashar/agent-security-audit)"
@@ -69,6 +70,27 @@ def challenge_of(resp):
 
 class OffTarget(RuntimeError):
     pass
+
+
+MAX_EXCLUDED_PATHS = 10000  # distinct excluded paths remembered for the report
+
+
+class Excluded(RuntimeError):
+    """The path is excluded by --exclude-path: the request was not sent and cost no budget."""
+
+    def __init__(self, path):
+        super().__init__(f"{path} not requested: {EXCLUDED_REASON}")
+        self.path = path
+
+
+def _pause(seconds):
+    """time.sleep, named so tests can count waits instead of waiting."""
+    time.sleep(seconds)
+
+
+def busy(resp):
+    """The target asked the client to slow down: 429, or 503 with Retry-After (RFC 9110 15.6.4)."""
+    return resp.status == 429 or (resp.status == 503 and resp.get("retry-after") is not None)
 
 
 class ResponseTooSlow(OSError):
@@ -125,7 +147,7 @@ class Response:
 
 
 class Client:
-    def __init__(self, target, *, timeout=10.0, budget=300, delay=0.05, insecure=False, deadline=None):
+    def __init__(self, target, *, timeout=10.0, budget=300, delay=0.05, insecure=False, deadline=None, exclude=None):
         if insecure and not is_local_host(urlsplit(target).hostname or ""):
             raise ValueError("insecure TLS is only allowed for local development hosts")
         self.target = target
@@ -135,6 +157,12 @@ class Client:
         self.insecure = insecure
         self.deadline = deadline  # time.monotonic() value after which no new request starts; None: no limit
         self.sent = 0
+        self.exclude = exclude or Exclusions()
+        self.excluded = 0  # attempts to request an excluded path (none was sent)
+        self.excluded_paths = set()  # the distinct excluded paths asked for, for the report (capped)
+        self.slowed = 0  # times the target answered 429 (or 503 with Retry-After)
+        self.throttled = 0  # answers still 429 (or 503 with Retry-After) after the one retry: nothing was seen
+        self.halved = False
         self._last = 0.0
         self._cache = {}
         self._cache_bytes = 0
@@ -150,18 +178,42 @@ class Client:
             return ctx
         return ssl.create_default_context()
 
-    def request(self, method, path="/", *, headers=None, body=None, cache=False):
-        """Request a path on the target origin. Anything else raises OffTarget."""
+    def request(self, method, path="/", *, headers=None, body=None, cache=False, backoff=True):
+        """Request a path on the target origin. Anything else raises OffTarget; an excluded path raises Excluded.
+        backoff=False keeps a 429 as the answer (the rate-limit probe wants to see it)."""
         url = self.url(path)
         if not same_origin(self.target, url):
             raise OffTarget(f"refusing to request {url}: outside the target origin {self.target}")
-        return self._send(method, url, headers, body, cache)
+        return self._polite(method, url, headers, body, cache, backoff)
 
     def same_host(self, method, url, *, headers=None, body=None):
         """Request the target's own hostname on another scheme or port (used for the HTTP->HTTPS check)."""
         if (urlsplit(url).hostname or "").lower() != (urlsplit(self.target).hostname or "").lower():
             raise OffTarget(f"refusing to request {url}: different host from {self.target}")
-        return self._send(method, url, headers, body, False)
+        return self._polite(method, url, headers, body, False, True)
+
+    def _polite(self, method, url, headers, body, cache, backoff):
+        """_send for the target, minus excluded paths, with one retry after a 429 or Retry-After."""
+        if self.exclude.match(url):
+            self.excluded += 1
+            if len(self.excluded_paths) < MAX_EXCLUDED_PATHS:
+                self.excluded_paths.add(urlsplit(url).path or "/")
+            raise Excluded(urlsplit(url).path or "/")
+        resp = self._send(method, url, headers, body, cache)
+        if not backoff or not busy(resp):
+            return resp
+        wait = retry_after(resp.get("retry-after"))
+        self.slowed += 1
+        if not self.halved:  # once per run: a firewall that throttles every probe path must not compound it
+            self.halved = True
+            self.delay = max(self.delay, min(self.delay * 2, MAX_DELAY))
+        if self.deadline is not None and time.monotonic() + wait >= self.deadline:
+            raise TimeBudgetExceeded(TIME_BUDGET_MESSAGE)
+        _pause(wait)
+        resp = self._send(method, url, headers, body, cache)
+        if busy(resp):  # still refused: this answer says nothing about the path (the runner keeps it from a pass)
+            self.throttled += 1
+        return resp
 
     def external(self, method, url, *, headers=None, body=None):
         """Request another https host. Only opt-in checks (DNS resolver, the site's own Supabase project) use this."""
@@ -177,7 +229,7 @@ class Client:
             raise BudgetExceeded(f"request budget of {self.budget} used up")
         wait = self.delay - (time.monotonic() - self._last)
         if wait > 0:
-            time.sleep(wait)
+            _pause(wait)
         self.sent += 1
         self._last = time.monotonic()
 
@@ -301,7 +353,7 @@ class Client:
                 raise Blocked(f"{urlsplit(url).netloc} answered {resp.status} with a bot challenge ({why}). Its firewall "
                               "is blocking the scanner, so results would describe the challenge page, not the site. "
                               "Allow this machine's IP in the firewall (or pause challenge mode) and scan again.")
-        if cache and self._cache_bytes + len(resp.body) <= MAX_CACHE_BYTES:
+        if cache and not busy(resp) and self._cache_bytes + len(resp.body) <= MAX_CACHE_BYTES:
             self._cache[key] = resp
             self._cache_bytes += len(resp.body)
         return resp

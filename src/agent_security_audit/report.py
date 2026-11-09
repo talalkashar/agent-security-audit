@@ -82,13 +82,40 @@ def status_legend():
     return " · ".join(f"{s}: {why}" for s, why in STATUS_HELP)
 
 
-def run_scope(*, interface, mode, flags, started=None, finished=None, hosts=(), requests_sent=None):
+def run_scope(*, interface, mode, flags, started=None, finished=None, hosts=(), requests_sent=None, pacing=None):
     """What a run did, for the report's audit trail: tool version, where it was started from (cli or mcp), mode
     (scan, code, or scan+code), the flags in effect, the hosts contacted, the requests sent and the start and end
-    times (UTC)."""
-    return {"tool": "agent-security-audit", "version": __version__, "interface": interface, "mode": mode,
-            "flags": dict(flags), "hosts_contacted": sorted(set(hosts)), "requests_sent": requests_sent,
-            "started": started, "finished": finished}
+    times (UTC). pacing, for a scan: the rate it started and ended at, how often the target slowed it (429 or
+    Retry-After) and how many requests --exclude-path kept back."""
+    out = {"tool": "agent-security-audit", "version": __version__, "interface": interface, "mode": mode,
+           "flags": dict(flags), "hosts_contacted": sorted(set(hosts)), "requests_sent": requests_sent,
+           "started": started, "finished": finished}
+    if pacing:
+        out["pacing"] = dict(pacing)
+    return out
+
+
+def _rate_text(value):
+    return f"{value:g}" if isinstance(value, (int, float)) and not isinstance(value, bool) else _flag(value)
+
+
+def _pacing_lines(scope):
+    """The rate and the --exclude-path patterns, as scope lines. Patterns are shown cleaned and capped."""
+    flags, pace = scope.get("flags", {}), scope.get("pacing") or {}
+    lines = []
+    if "rate" in flags or pace:
+        text = f"{_rate_text(pace.get('rate') or flags.get('rate'))} requests/s"
+        if pace.get("slowed"):
+            text += (f"; the target asked to slow down {pace['slowed']} time{'s' if pace['slowed'] != 1 else ''} "
+                     f"(429 or Retry-After), so it ended at {_rate_text(pace.get('final_rate'))} requests/s")
+        lines.append(("Rate", text))
+    if flags.get("exclude_path"):
+        text = ", ".join(f'"{_plain(p, 200)}"' for p in flags["exclude_path"])  # as given: repr() doubles backslashes
+        if pace.get("excluded_not_sent"):
+            n = pace["excluded_not_sent"]
+            text += f"; {n} path{'s' if n != 1 else ''} not requested"
+        lines.append(("Excluded paths", text))
+    return lines
 
 
 def _flag(value):
@@ -105,13 +132,15 @@ def _flag(value):
 
 def scope_lines(scope):
     """(label, text) pairs describing a run's scope, shared by the Markdown and HTML reports."""
-    flags = ", ".join(f"{k}={_flag(v)}" for k, v in scope.get("flags", {}).items())
+    flags = ", ".join(f"{k}={_flag(v)}" for k, v in scope.get("flags", {}).items()
+                      if k not in ("rate", "exclude_path"))  # each has its own line below
     hosts = ", ".join(scope.get("hosts_contacted") or []) or "none"
     tool = (f"{scope.get('tool', 'agent-security-audit')} {scope.get('version', __version__)}, "
             f"run from {scope.get('interface', '-')}, mode {scope.get('mode', '-')}")
     lines = [("Tool", tool), ("Flags", flags or "-"), ("Hosts contacted", hosts)]
     if scope.get("requests_sent") is not None:
         lines.append(("Requests to the target", str(scope["requests_sent"])))
+    lines += _pacing_lines(scope)
     lines.append(("Time (UTC)", f"started {scope.get('started') or '-'}, finished {scope.get('finished') or '-'}"))
     return lines
 

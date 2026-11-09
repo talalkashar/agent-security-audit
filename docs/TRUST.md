@@ -30,6 +30,30 @@ response body at 2 MiB (`MAX_BODY`), and cuts any exchange that runs past `--tim
 carries `User-Agent: agent-security-audit/<version> (+https://github.com/talalkashar/agent-security-audit)`
 (`USER_AGENT` in `http.py`). The URL in that header is text; it is never requested.
 
+How to slow the scan or keep it off paths (`pacing.py`, `Client._polite` in `http.py`):
+
+- `--rate R` (MCP `rate`): requests per second, 0.1 to 20, default 20 (a 0.05 s minimum delay). It sets the delay
+  between connections, so it paces HTTP requests, TLS handshakes and port probes alike.
+- Backoff: when the target answers `429`, or `503` with `Retry-After`, the client waits the time `Retry-After` gives
+  (delay-seconds or an HTTP date; missing or unreadable means 1 s; never more than 30 s and never past `--max-time`),
+  sends that request once more, and halves its rate for the rest of the run. The rate is halved once per run, not on
+  every `429`. A check that runs out of time during the wait reports `error` "not run: time budget". If the retry is
+  refused again, that answer says nothing about the path, so the check cannot pass: its `pass` or `skip` becomes
+  `error`, and a crawl page or script that stayed refused marks the crawl as incomplete. The login rate-limit probe
+  (API-01) is the exception: it needs to see the `429`, so it is not retried; when its attempts went out slower than
+  the default rate and no limit showed, it reports `manual`, since a limiter with a time window may not trip.
+- `--exclude-path REGEX` (repeat, at most 20 patterns of at most 200 characters): a request to the target whose path
+  fully matches (`re.fullmatch`, tested on the path as sent and percent-decoded) is never sent and costs no budget;
+  the crawl skips such links. Paths longer than 256 characters (2048 for MCP globs) count as excluded while patterns
+  are set, so a pattern never runs on a long path the site chose. A regular expression is still the operator's own
+  code: nested repeats such as `(a+)+` can be slow even on short paths. A pattern that matches `/`, or the page `/`
+  redirects to, is refused (exit 2): every check starts from the home page. A script set or CMS scan built from a
+  crawl that left links out carries that mark to every check that reads it. Over MCP, `exclude_path` takes only literal paths with `*` wildcards (no regular expressions), matched without
+  a regex engine, because an agent a scanned page may have steered picks them.
+- Excluded evidence never makes a pass. The runner (`excluded_result` in `runner.py`) turns the `pass` or `skip` of a
+  check that asked for an excluded path, or read a crawl that skipped one, into `manual`, or into `skip` when the check
+  sent nothing else. `fail`, `warn` and `error` stand.
+
 The client has four ways to open a connection:
 
 | Method in `http.py` | Allowed destination | Used by |
@@ -66,7 +90,9 @@ confirm they point at a loopback or private address (`_resolves_off_machine`).
 ### Scope record in every report
 
 Each report (Markdown, HTML, JSON, MCP) has a `scope` section: tool version, interface (CLI or MCP), mode, the flags in
-effect (`--authorized`, `--allow-supabase`, `--no-dns`, `--no-ports`, `--no-osv` and the rest), the hosts contacted
+effect (`--authorized`, `--allow-supabase`, `--no-dns`, `--no-ports`, `--no-osv` and the rest), the request rate and
+the `--exclude-path` patterns (with `pacing`: the rate the run ended at, how often the target slowed it, and how many
+distinct paths exclusions kept back), the hosts contacted
 besides the target (the DNS resolver, the Supabase project and `api.osv.dev`, each listed only when it was
 contacted), the number of requests sent, and the start and end time in UTC. SARIF carries the same data in
 `invocations` (`run_scope` in `report.py`).

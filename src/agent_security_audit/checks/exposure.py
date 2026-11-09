@@ -10,7 +10,15 @@ from datetime import UTC, datetime
 from urllib.parse import urljoin, urlsplit
 
 from ..crawl import crawl, next_chunks
-from ..http import TIME_BUDGET_MESSAGE, BudgetExceeded, ResponseTooSlow, TimeBudgetExceeded, challenge_of
+from ..http import (
+    TIME_BUDGET_MESSAGE,
+    BudgetExceeded,
+    Excluded,
+    ResponseTooSlow,
+    TimeBudgetExceeded,
+    busy,
+    challenge_of,
+)
 from ..model import Result, failed, passed, skipped, warned
 from ..scope import same_origin
 from . import are, auto, count
@@ -125,8 +133,11 @@ def scripts(ctx):
     if "scripts" in ctx.cache:
         if ctx.cache.get("scripts_cut"):  # built from a crawl or fetches a budget cut short
             ctx.cache["data_cut"] = ctx.cache["scripts_cut"]
+        if ctx.cache.get("scripts_excluded"):  # built without excluded pages or files: no reader may pass on it
+            ctx.cache["excluded"] = ctx.cache["scripts_excluded"]
         return ctx.cache["scripts"]
     site = crawl(ctx)
+    crawl_mark, left_out = ctx.cache.get("excluded"), 0
     if site.cut:
         ctx.cache["scripts_cut"] = site.cut
     home = site.pages[0].url if site.pages else None
@@ -159,6 +170,13 @@ def scripts(ctx):
             ctx.cache["scripts_cut"] = ctx.cache["data_cut"] = (f"{urlsplit(url).path} answered too slowly to read "
                                                                 f"({exc})")
             continue
+        except Excluded:  # never requested; the other scripts are still read, so a finding in them stands
+            left_out += 1
+            continue
+        if busy(resp):  # still 429 after the client's retry: this script was never seen
+            ctx.cache["scripts_cut"] = ctx.cache["data_cut"] = (f"{urlsplit(url).path} kept answering {resp.status} "
+                                                                "(the target asked the scan to slow down)")
+            continue
         if resp.status == 200:
             out.append((urlsplit(url).path, resp.text))
             queue += [ctx.client.url(p) for p in next_chunks(resp.text)]
@@ -166,6 +184,9 @@ def scripts(ctx):
             u not in seen and same_origin(ctx.target, u) for u in queue[i:]):
         ctx.cache["scripts_cut"] = ctx.cache["data_cut"] = (f"not run: more than {MAX_SCRIPTS} script files; only "
                                                             f"the first {MAX_SCRIPTS} were read")
+    if crawl_mark or left_out:
+        ctx.cache["scripts_excluded"] = ctx.cache["excluded"] = "; ".join(
+            filter(None, [crawl_mark, left_out and f"{left_out} script file{'s' if left_out != 1 else ''} not read"]))
     ctx.cache["scripts"] = out
     return out
 
@@ -337,10 +358,12 @@ def error_leaks(ctx):
     ]
     extra = login_endpoint(ctx)
     if extra and not extra["refused"]:
-        probes.append(("POST", extra["path"], "{", {"Content-Type": "application/json"}))
+        # API-01 may just have tripped this endpoint's limiter: take its 429 as an answer (NOT_A_HANDLER below)
+        # instead of waiting it out.
+        probes.append(("POST", extra["path"], "{", {"Content-Type": "application/json"}, False))
     leaks, handled, ev = [], [], []
-    for method, path, body, headers in probes:
-        resp = ctx.client.request(method, path, body=body, headers=headers)
+    for method, path, body, headers, *backoff in probes:
+        resp = ctx.client.request(method, path, body=body, headers=headers, backoff=all(backoff))
         hit = find_leaks(resp.text)
         ev.append(f"{method} {path} -> {resp.status}" + (f": shows {', '.join(hit)}" if hit else ""))
         leaks += hit

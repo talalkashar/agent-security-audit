@@ -13,7 +13,7 @@ import math
 import re
 import sys
 
-from . import __version__, catalog, code_audit, report, runner
+from . import __version__, catalog, code_audit, pacing, report, runner
 from .checks.dns_email import DEFAULT_RESOLVER
 from .cli import ALLOWED_RATE_LIMIT_METHODS, MAX_TIME, rules_markdown, scan_flags, show_markdown
 from .cli import rate_limit_method as checked_method
@@ -169,6 +169,16 @@ TOOLS = [
                              "description": "skip the TCP connect checks on database and admin ports"},
                 "max_pages": {"type": "integer", "minimum": 1, "maximum": 200, "default": 25,
                               "description": "most same-origin pages the crawl visits"},
+                "rate": {"type": "number", "minimum": pacing.MIN_RATE, "maximum": pacing.MAX_RATE,
+                         "default": pacing.DEFAULT_RATE,
+                         "description": "requests per second to the target (HTTP, TLS handshakes and port probes). "
+                                        "A 429 or Retry-After from the target halves it for the rest of the run"},
+                "exclude_path": {**_str_list, "maxItems": pacing.MAX_PATTERNS,
+                                 "description": "paths never to request, as literal paths with * wildcards (* "
+                                                "matches anything, / included), e.g. /admin/*; no regular "
+                                                f"expressions; at most {pacing.MAX_PATTERNS}, "
+                                                f"{pacing.MAX_PATTERN_LEN} characters each; / cannot be excluded. "
+                                                "A check that needed such a path reports manual or skip, never pass"},
                 "format": {"type": "string", "enum": ["json", "md", "html"], "default": "json",
                            "description": "the report format of the second text block; the first is always a "
                                           "short summary with the failed checks to fix first"},
@@ -337,7 +347,7 @@ def _report(target, results, fmt, renderers, scope=None):
     return Report(summary, text, data)
 
 
-_JSON_TYPES = {"string": str, "boolean": bool, "integer": int, "array": list, "object": dict}
+_JSON_TYPES = {"string": str, "boolean": bool, "integer": int, "number": (int, float), "array": list, "object": dict}
 
 
 class ToolError(Exception):
@@ -368,7 +378,7 @@ def _validate(schema, args):
         if value is None:
             continue
         typ = _JSON_TYPES[spec["type"]]
-        if not isinstance(value, typ) or (typ is int and isinstance(value, bool)):
+        if not isinstance(value, typ) or (spec["type"] in ("integer", "number") and isinstance(value, bool)):
             raise ToolError(f"{key} must be {spec['type']}")
         if spec["type"] == "array":
             item = spec.get("items", {})
@@ -379,7 +389,10 @@ def _validate(schema, args):
                 raise ToolError(f"{key}: unknown value(s) {', '.join(bad)}; allowed: {', '.join(item['enum'])}")
         if "enum" in spec and value not in spec["enum"]:
             raise ToolError(f"{key} must be one of {', '.join(spec['enum'])}")
-        if spec["type"] == "integer" and not spec.get("minimum", value) <= value <= spec.get("maximum", value):
+        if spec["type"] == "array" and len(value) > spec.get("maxItems", len(value)):
+            raise ToolError(f"{key} takes at most {spec['maxItems']} items")
+        bounds = spec.get("minimum", value), spec.get("maximum", value)
+        if spec["type"] in ("integer", "number") and not bounds[0] <= value <= bounds[1]:
             raise ToolError(f"{key} must be between {spec['minimum']} and {spec['maximum']}")
 
 
@@ -405,8 +418,12 @@ def tool_build_rules(stack=None, area=None):
 def tool_run_scan(target, authorized=False, checks=None, areas=None, stacks=None, auto_only=False,
                   rate_limit_path=None, rate_limit_method=None, rate_limit_body=None, rate_limit_attempts=None,
                   allow_supabase=False, supabase_tables=None, no_dns=False, dns_resolver=None, no_ports=False,
-                  max_pages=None, code_path=None, no_osv=False, max_time=None, format="json"):
+                  max_pages=None, code_path=None, no_osv=False, max_time=None, format="json", rate=None,
+                  exclude_path=None):
     method = checked_method(rate_limit_method)
+    rate = None if rate is None else pacing.parse_rate(rate)
+    # An agent picks these, and a scanned page may have steered it: literal paths and * only, matched without regex.
+    exclude = pacing.Exclusions(exclude_path or (), glob=True)
     if dns_resolver:
         check_dns_resolver(dns_resolver)
     options = {
@@ -421,7 +438,8 @@ def tool_run_scan(target, authorized=False, checks=None, areas=None, stacks=None
     record, started = {}, runner.utc_now()
     final, results = runner.run(target, authorized=bool(authorized), ids=checks or None, areas=areas or None,
                                 stacks=stacks or None, options=options, include_manual=not auto_only,
-                                max_time=max_time, record=record, private_needs_authorization=True)
+                                max_time=max_time, record=record, private_needs_authorization=True, rate=rate,
+                                exclude=exclude)
     hosts = set(record.get("hosts_contacted", []))
     if code_path:
         selected = {c.id for c in runner.select(checks or None, areas or None, stacks or None)}
@@ -430,12 +448,13 @@ def tool_run_scan(target, authorized=False, checks=None, areas=None, stacks=None
     flags = scan_flags(authorized=authorized, allow_supabase=allow_supabase, auto_only=auto_only, no_dns=no_dns,
                        dns_resolver=dns_resolver, no_ports=no_ports, rate_limit_path=rate_limit_path,
                        rate_limit_method=method, budget=300, max_time=max_time, max_pages=max_pages,
-                       code=code_path, osv=not no_osv, checks=checks, areas=areas, stacks=stacks)
+                       code=code_path, osv=not no_osv, checks=checks, areas=areas, stacks=stacks, rate=rate,
+                       exclude_path=exclude.texts)
     if authorized:  # self-attested: the agent set it, the user was not asked by this tool
         flags["authorized_by"] = "the agent (MCP authorized=true)"
     scope = report.run_scope(interface="mcp", mode="scan+code" if code_path else "scan", flags=flags,
                              started=record.get("started", started), finished=runner.utc_now(), hosts=hosts,
-                             requests_sent=record.get("requests_sent"))
+                             requests_sent=record.get("requests_sent"), pacing=record.get("pacing"))
     return _report(final, results, format, {"md": report.to_markdown, "html": report.to_html}, scope)
 
 
