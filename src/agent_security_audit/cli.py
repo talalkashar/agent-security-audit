@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import sys
 from urllib.parse import urlsplit
@@ -87,7 +88,7 @@ def rules_markdown(checks):
     for c in checks:
         if c.area != area:
             area = c.area
-            lines += [f"## {area}", ""]
+            lines += ([""] if lines[-1] else []) + [f"## {area}", ""]  # a heading needs a blank line before it
         lines.append(f"- **{c.id} {c.title}** ({c.severity}): {c.build}")
     return "\n".join(lines) + "\n"
 
@@ -318,7 +319,10 @@ def _main(argv=None):
                     print(f"{c.id:<11} {c.severity:<8} L{c.layer} {c.mode:<8} {c.title}")
             return 0
         if args.cmd == "show":
-            c = catalog.find(args.id)
+            try:
+                c = catalog.find(args.id)
+            except catalog.CatalogError as exc:
+                raise catalog.CatalogError(f"{exc}; run `asa list` to see the check ids") from exc
             print(json.dumps(c.to_dict(), indent=2) if args.json else show_markdown(c), end="")
             return 0
         if args.cmd == "rules":
@@ -398,12 +402,12 @@ def _next_step(args, target, results):
         return ""
     checks = f"{n} manual check{'s' if n != 1 else ''}"
     if getattr(args, "cmd", "") == "code":
-        return (f"Next: {checks} need the running site or a logged-in test: asa scan <url> --code {target} "
-                "(asa show <ID> gives each one's proof steps).")
+        return (f"Next: {checks} need the running site or a logged-in test: "
+                f"asa scan <url> --code {shlex.quote(target)} (asa show <ID> gives each one's proof steps).")
     if getattr(args, "code", None):
         return (f"Next: {checks} need a logged-in test or a config review: asa show <ID> gives each one's proof "
                 "steps.")
-    return (f"Next: {checks} need the code or a logged-in test: asa scan {target} --code . "
+    return (f"Next: {checks} need the code or a logged-in test: asa scan {shlex.quote(target)} --code . "
             "(run it from the project folder; asa show <ID> gives each one's proof steps).")
 
 
@@ -430,7 +434,8 @@ def exit_code(args, results):
 def _emit(args, target, results, scope=None):
     fmt = _output_format(args)
     if fmt == "summary":
-        again = f"asa code {target}" if getattr(args, "cmd", "") == "code" else f"asa scan {target}"
+        # Quoted, so a folder with spaces or shell characters gives a command that can be pasted as is.
+        again = f"asa {'code' if getattr(args, 'cmd', '') == 'code' else 'scan'} {shlex.quote(target)}"
         hint = f"Full report with evidence: {again} --out asa-report.html"
         text = report.summary_text(target, results, hint, width=_width(),
                                    next_step=_next_step(args, target, results))

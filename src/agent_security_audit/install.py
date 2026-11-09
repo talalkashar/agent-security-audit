@@ -2,8 +2,9 @@
 to one agent's config.
 
 Every path and file shape here comes from the agent's own documentation (see docs/INSTALL.md for the links).
-The default is a dry run that prints what would change. With --yes it writes, after copying an existing file to
-<file>.bak next to the real file. It never removes or rewrites another server: JSON configs get one key merged in,
+The default is a dry run that prints what would change. With --yes it writes, after copying an existing file to a
+private (0600) <file>.bak next to the real file (<file>.bak.1, .bak.2 ... when earlier backups exist; none is ever
+overwritten). It never removes or rewrites another server: JSON configs get one key merged in,
 and Codex's TOML gets one table appended to the end of the file.
 
 Project configs (.mcp.json, .vscode/mcp.json, .cursor/mcp.json under the current directory) are not written through
@@ -52,11 +53,20 @@ class Change:
     note: str = ""
     root: Path | None = None  # home or cwd; the real parent must stay under this directory
     strict: bool = False  # cwd project config: refuse a symlink in any component
+    backup: str = ""  # the backup file name apply() actually used, beside the real file
 
 
 # Relative to the current directory. ~/.cursor/mcp.json is a home file, not one of these, when it is the home path.
 _PROJECT_CONFIGS = (".mcp.json", ".vscode/mcp.json", ".cursor/mcp.json")
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_MAX_BACKUPS = 1000  # name.bak, name.bak.1 ... name.bak.999
+
+
+def _backup_names(name):
+    """Backup names in the order they are tried: an earlier backup is never overwritten."""
+    yield name + ".bak"
+    for i in range(1, _MAX_BACKUPS):
+        yield f"{name}.bak.{i}"
 
 
 def server_command(uvx=False):
@@ -108,7 +118,10 @@ def _ephemeral(path):
     real = Path(path).resolve()
     if any(part.startswith("archive-v") for part in real.parts):  # uv's cached tool environments
         return True
-    return Path(tempfile.gettempdir()).resolve() in real.parents
+    temps = {Path(tempfile.gettempdir()).resolve()}
+    if os.name != "nt":  # macOS points gettempdir() at /var/folders, but /tmp is just as throwaway
+        temps |= {Path("/tmp").resolve(), Path("/var/tmp").resolve()}
+    return any(t in real.parents for t in temps)
 
 
 def _appdata(home):
@@ -168,6 +181,8 @@ def _read(path):
         return path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
+    except UnicodeDecodeError as exc:
+        raise InstallError(f"{path} is not UTF-8 text; it was left as is") from exc
     except OSError as exc:
         raise InstallError(f"cannot read {path}: {exc.strerror or exc}") from exc
 
@@ -375,8 +390,11 @@ def _remove_owned(parent, name, owned):
 
 
 def _replace_config(parent, name, text):
-    """All reads, backups, permissions and rename use the held parent or open file descriptors."""
-    backup, tmp = name + ".bak", None
+    """All reads, backups, permissions and rename use the held parent or open file descriptors.
+
+    Returns the backup name used, or None for a new file. The backup is private (0600) whatever the original's mode,
+    and takes the first free name (name.bak, name.bak.1, ...), so an earlier backup is never overwritten."""
+    backup, tmp = None, None
     backup_owned = tmp_owned = None
     mode = None
     try:
@@ -391,14 +409,18 @@ def _replace_config(parent, name, text):
                     raise InstallError(f"refusing to replace {name}: not a regular file")
                 mode = stat.S_IMODE(st.st_mode)
                 flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
-                try:
-                    fd = os.open(backup, flags, 0o600, dir_fd=parent)
-                except FileExistsError as exc:
-                    raise InstallError(f"refusing to replace existing backup {backup}") from exc
+                for candidate in _backup_names(name):
+                    try:  # O_EXCL with O_NOFOLLOW: an existing file or symlink is skipped, never written through
+                        fd = os.open(candidate, flags, 0o600, dir_fd=parent)
+                    except FileExistsError:
+                        continue
+                    backup = candidate
+                    break
+                else:
+                    raise InstallError(f"{name} already has {_MAX_BACKUPS} backups; remove old ones and try again")
                 with os.fdopen(fd, "wb") as saved:
                     backup_owned = os.fstat(saved.fileno())
                     shutil.copyfileobj(original, saved)
-                    os.fchmod(saved.fileno(), mode)
         # Unpredictable, exclusive names in the anchored directory. No user temp name is removed.
         for _ in range(16):
             tmp = f".{name}.{secrets.token_hex(12)}"
@@ -417,6 +439,7 @@ def _replace_config(parent, name, text):
         # rename replaces the directory entry itself; it never follows a newly planted target symlink.
         os.rename(tmp, name, src_dir_fd=parent, dst_dir_fd=parent)
         tmp = None
+        return backup
     except Exception:
         if backup_owned is not None:
             _remove_owned(parent, backup, backup_owned)
@@ -427,20 +450,39 @@ def _replace_config(parent, name, text):
 
 
 def apply(changes):
+    """Write each change. On a failure, the error names every file already written, so nothing is left unknown."""
+    written = []
     for c in changes:
         if c.new_text is None or c.action not in ("create", "update"):
             continue
-        if c.root is None:
-            raise InstallError(f"refusing to write {c.path} without an anchor directory")
-        if not _anchored_writes_available():
-            raise InstallError("secure automatic config writes are unavailable on this platform; "
-                               "run without --yes to see the configuration and add it manually")
         try:
-            target = _destination(c)
-            with _parent_directory(c, target) as (parent, name):
-                _replace_config(parent, name, c.new_text)
-        except OSError as exc:
-            raise InstallError(f"refusing to write {c.path}: {exc.strerror or exc}") from exc
+            if c.root is None:
+                raise InstallError(f"refusing to write {c.path} without an anchor directory")
+            if not _anchored_writes_available():
+                raise InstallError("secure automatic config writes are unavailable on this platform; "
+                                   "run without --yes to see the configuration and add it manually")
+            try:
+                target = _destination(c)
+                with _parent_directory(c, target) as (parent, name):
+                    used = _replace_config(parent, name, c.new_text)
+            except OSError as exc:
+                raise InstallError(f"refusing to write {c.path}: {exc.strerror or exc}") from exc
+        except InstallError as exc:
+            if not written:
+                raise
+            done = "; ".join(f"{p}" + (f" (backup: {b})" if b else "") for p, b in written)
+            raise InstallError(f"{exc}. Already written before this failure: {done}") from exc
+        c.backup = str(target.parent / used) if used else ""
+        written.append((c.path, c.backup))
+
+
+def _next_backup(path):
+    """The backup name apply() would use now, for the dry run."""
+    real = Path(os.path.realpath(path))
+    for candidate in _backup_names(real.name):
+        if not os.path.lexists(real.parent / candidate):
+            return candidate
+    return f"{real.name}.bak"
 
 
 def describe(changes, wrote):
@@ -449,8 +491,14 @@ def describe(changes, wrote):
         verb = {"create": "created" if wrote else "would create", "update": "updated" if wrote else "would update",
                 "unchanged": "already set up", "conflict": "left as is"}[c.action]
         # The backup sits beside the real file, so a symlinked config names the resolved backup path.
-        bak = f"{os.path.realpath(c.path)}.bak" if c.path.is_symlink() else f"{c.path.name}.bak"
-        note = c.note or (f"backup: {bak}" if c.action == "update" and c.path.exists() else "")
+        if c.backup:
+            bak = c.backup if c.path.is_symlink() else Path(c.backup).name
+        elif c.action == "update" and c.path.exists():
+            bak = _next_backup(c.path)
+            bak = str(Path(os.path.realpath(c.path)).parent / bak) if c.path.is_symlink() else bak
+        else:
+            bak = ""
+        note = c.note or (f"backup: {bak}" if bak else "")
         out.append(f"{verb}: {c.path}" + (f" ({note})" if note else ""))
         if c.action in ("create", "update", "conflict"):
             out += ["    " + line for line in c.added.splitlines()]
@@ -468,7 +516,7 @@ def run(agent, yes=False, uvx=False, home=None, cwd=None, out=None):
     print(describe(changes, wrote=yes), file=out)
     if pending and not yes:
         print(f"Dry run: nothing was written. Run `asa install {agent} --yes` to write it "
-              "(an existing file is copied to <file>.bak first).", file=out)
+              "(an existing file is copied to a private <file>.bak first; an earlier backup is kept).", file=out)
     elif pending:
         print(f"Done. Restart {agent} so it loads the server.", file=out)
     else:

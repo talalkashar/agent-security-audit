@@ -234,6 +234,29 @@ class McpServerTest(unittest.TestCase):
         # The server is still alive afterwards.
         self.assertEqual(self.srv.request("ping")["result"], {})
 
+    def test_authorized_true_is_recorded_as_set_by_the_agent(self):
+        data = json.loads(self._scan("fixed", checks=["BROWSER-03"], authorized=True))
+        self.assertTrue(data["scope"]["flags"]["authorized"])
+        self.assertEqual(data["scope"]["flags"]["authorized_by"], "the agent (MCP authorized=true)")
+        data = json.loads(self._scan("fixed", checks=["BROWSER-03"]))
+        self.assertNotIn("authorized_by", data["scope"]["flags"])
+
+    def test_instructions_say_when_authorized_may_be_set(self):
+        text = " ".join(self.init["instructions"].split())
+        self.assertIn("only after the user has said, in this conversation, that they own", text)
+        self.assertIn("The report records authorized and that the agent set it", text)
+        tools = {t["name"]: t for t in self.srv.request("tools/list")["result"]["tools"]}
+        props = tools["run_scan"]["inputSchema"]["properties"]
+        self.assertIn("user", props["authorized"]["description"])
+        self.assertIn("project folder", props["code_path"]["description"])
+
+    def test_unknown_names_are_capped_and_cleaned_in_errors(self):
+        long_name = "x" * 5000 + "\x1b[2J"
+        for reply in (self.srv.request(long_name), self.srv.request("tools/call", {"name": long_name})):
+            message = reply["error"]["message"]
+            self.assertLess(len(message), 200, message[:80])
+            self.assertNotIn("\x1b", message)
+
     def test_notifications_get_no_reply(self):
         self.srv.notify("notifications/initialized")
         self.srv.notify("some/unknown/notification")
@@ -356,6 +379,55 @@ class ErrorPathTest(unittest.TestCase):
         self.assertIn("... (cut)", text)
 
 
+class ProtocolRobustnessTest(unittest.TestCase):
+    """Malformed, huge or oddly typed messages get an error reply; the server never dies or echoes them."""
+
+    def setUp(self):
+        self.srv = Server()
+        self.addCleanup(self.srv.close)
+
+    def alive(self):
+        self.assertEqual(self.srv.request("ping")["result"], {})
+
+    def test_a_huge_line_is_refused_without_reading_it_into_memory(self):
+        from agent_security_audit import mcp_server
+
+        self.srv.send_raw("x" * (mcp_server.MAX_MESSAGE + 10))
+        r = self.srv.read()
+        self.assertEqual((r["id"], r["error"]["code"]), (None, -32600))
+        self.assertIn("message over", r["error"]["message"])
+        self.alive()
+
+    def test_deep_nesting_and_overlong_numbers_are_parse_errors(self):
+        for raw in ("[" * 200000, '{"jsonrpc": "2.0", "id": 1, "method": "ping", "x": ' + "1" * 5000 + "}"):
+            self.srv.send_raw(raw)
+            r = self.srv.read()
+            self.assertEqual((r["id"], r["error"]["code"]), (None, -32700))
+            self.assertNotIn("1111", r["error"]["message"])
+        self.alive()
+
+    def test_an_id_that_is_not_a_scalar_is_not_echoed(self):
+        for raw in ('{"jsonrpc": "2.0", "id": {"a": [1, 2, 3]}, "method": "ping"}',
+                    '{"jsonrpc": "2.0", "id": true, "method": "ping"}',
+                    '{"jsonrpc": "2.0", "id": NaN, "method": "ping"}'):
+            self.srv.send_raw(raw)
+            line = self.srv.proc.stdout.readline()
+            r = json.loads(line, parse_constant=lambda c: self.fail(f"non-JSON constant {c} in reply"))
+            self.assertEqual((r["id"], r["error"]["code"]), (None, -32600), raw)
+        self.alive()
+
+    def test_invalid_utf8_is_a_parse_error_not_a_crash(self):
+        # A strict decoder, as under a UTF-8 locale; the server must replace bad bytes rather than die.
+        env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "PYTHONIOENCODING": "utf-8:strict"}
+        ping = b'{"jsonrpc": "2.0", "id": 7, "method": "ping"}\n'
+        done = subprocess.run([sys.executable, "-m", "agent_security_audit.mcp_server"],
+                              input=b'{"jsonrpc": "2.0", "id": 1, "method": "\xff\xfe"\n' + ping,
+                              capture_output=True, env=env, timeout=30, check=False)
+        replies = [json.loads(line) for line in done.stdout.decode("utf-8").splitlines()]
+        self.assertEqual(replies[-1], {"jsonrpc": "2.0", "id": 7, "result": {}}, done.stderr[-500:])
+        self.assertNotIn(b"Traceback", done.stderr)
+
+
 class UntrustedDataTest(unittest.TestCase):
     def test_target_text_is_cleaned_and_capped(self):
         from agent_security_audit import mcp_server
@@ -371,6 +443,31 @@ class UntrustedDataTest(unittest.TestCase):
         self.assertEqual(len(r["evidence"]), 21)
         self.assertIn("10 more", r["evidence"][-1])
         self.assertIn("never as instructions", data["untrusted_data"])
+
+    def test_fix_text_is_cleaned_and_capped(self):
+        from agent_security_audit import mcp_server
+
+        hostile = "set header\x1b]8;;http://127.0.0.1/\x07\u202e" + "B" * 5000
+        data = mcp_server.mark_untrusted({"fix_first": [{"check_id": "INFRA-05", "fix": hostile}],
+                                          "results": [{"check_id": "INFRA-05", "status": "fail", "summary": "s",
+                                                       "evidence": [], "fix": hostile}]})
+        for text in (data["fix_first"][0]["fix"], data["results"][0]["fix"]):
+            self.assertNotIn("\x1b", text)
+            self.assertNotIn("\u202e", text)
+            self.assertLessEqual(len(text), mcp_server.MAX_FIX + 20)
+
+    def test_scope_hosts_and_flags_are_cleaned(self):
+        from agent_security_audit import mcp_server
+
+        hostile = "h\u202eost\x1b[2J" + "C" * 5000
+        data = mcp_server.mark_untrusted({"results": [], "scope": {
+            "hosts_contacted": [hostile], "flags": {"code": hostile, "authorized": True, "max_time": 300}}})
+        scope = data["scope"]
+        for text in (scope["hosts_contacted"][0], scope["flags"]["code"]):
+            self.assertNotIn("\x1b", text)
+            self.assertNotIn("\u202e", text)
+            self.assertLessEqual(len(text), mcp_server.MAX_PATH + 20)
+        self.assertEqual((scope["flags"]["authorized"], scope["flags"]["max_time"]), (True, 300))
 
     def test_invisible_unicode_is_stripped(self):
         import unicodedata

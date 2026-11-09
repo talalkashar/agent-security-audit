@@ -194,7 +194,7 @@ def _md_code(text):
 def to_markdown(target, results, scope=None):
     checks = catalog.by_id()
     lines = [
-        f"# Security proof report: {target}",
+        f"# Security proof report: {_md_escape(target)}",  # a code target is a folder name, which can hold Markdown
         "",
         f"Generated {_now()} by agent-security-audit {__version__}.",
         "",
@@ -289,10 +289,11 @@ def summary_text(target, results, hint="", width=100, next_step=""):
             lines.append(f"    ...and {more} more failed checks in the full report.")
     else:
         lines.append("Nothing failed.")
+    # Both can name the target (a URL, or a folder name that can hold escape sequences): plain text only.
     if hint:
-        lines += ["", *_wrap(hint, width, "")]
+        lines += ["", *_wrap(_plain(hint, 600), width, "")]
     if next_step:  # last, so the next step is what the reader sees at the prompt
-        lines += ["", *_wrap(next_step, width, "")]
+        lines += ["", *_wrap(_plain(next_step, 600), width, "")]
     return "\n".join(lines) + "\n"
 
 

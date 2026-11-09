@@ -157,7 +157,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(merged["mcp_servers"]["agent-security-audit"]["command"], FAKE_MCP)
         backup = dotfiles / "config.toml.bak"
         self.assertEqual(backup.read_text(), 'model = "x"\n')
-        self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o640)
+        self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)  # a backup is private whatever the original
         self.assertEqual(stat.S_IMODE(real.stat().st_mode), 0o640)
         self.assertTrue(logical_bak.is_symlink())
         self.assertEqual(secret.read_text(), "secret")
@@ -287,7 +287,7 @@ class InstallTest(unittest.TestCase):
         self.assertFalse((dotfiles / "project.json.bak").exists())
         self.assertTrue(project_link.is_symlink())
 
-    def test_backup_symlink_and_existing_backup_are_refused(self):
+    def test_backup_symlink_and_existing_backup_are_kept_and_the_next_free_name_is_used(self):
         outside = self.home.parent / "outside"
         outside.mkdir()
         secret = outside / "secret"
@@ -298,23 +298,32 @@ class InstallTest(unittest.TestCase):
         path.write_text(original)
         bak = path.with_name("mcp.json.bak")
         self.link(bak, secret)
-        code, _, err = self.asa_err("cursor", "--yes")
-        self.assertEqual(code, 2, err)
-        self.assertIn("backup", err)
-        self.assertEqual(path.read_text(), original)
+        code, out = self.asa("cursor")  # the dry run names the backup it would use, and writes nothing
+        self.assertEqual(code, 0)
+        self.assertIn("backup: mcp.json.bak.1", out)
+        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["mcp.json", "mcp.json.bak"])
+        code, out = self.asa("cursor", "--yes")
+        self.assertEqual(code, 0)
+        self.assertIn("backup: mcp.json.bak.1", out)
+        # The symlinked .bak is skipped, never written through: the file it points at is untouched.
         self.assertTrue(bak.is_symlink())
         self.assertEqual(os.readlink(bak), str(secret))
         self.assertEqual(secret.read_text(), "secret")
-        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["mcp.json", "mcp.json.bak"])
+        self.assertEqual((path.parent / "mcp.json.bak.1").read_text(), original)
+        self.assertIn("agent-security-audit", json.loads(path.read_text())["mcpServers"])
 
+        # A second upgrade keeps both earlier backups and takes the next name.
         bak.unlink()
         bak.write_text("keep")
-        code, _, err = self.asa_err("cursor", "--yes")
-        self.assertEqual(code, 2, err)
-        self.assertIn("backup", err)
+        path.write_text('{"mcpServers": {"other": {"command": "y"}}}\n')
+        code, out = self.asa("cursor", "--yes")
+        self.assertEqual(code, 0)
+        self.assertIn("backup: mcp.json.bak.2", out)
         self.assertEqual(bak.read_text(), "keep")
-        self.assertEqual(path.read_text(), original)
-        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["mcp.json", "mcp.json.bak"])
+        self.assertEqual((path.parent / "mcp.json.bak.1").read_text(), original)
+        self.assertEqual((path.parent / "mcp.json.bak.2").read_text(), '{"mcpServers": {"other": {"command": "y"}}}\n')
+        self.assertEqual(sorted(p.name for p in path.parent.iterdir()),
+                         ["mcp.json", "mcp.json.bak", "mcp.json.bak.1", "mcp.json.bak.2"])
 
     @unittest.skipIf(os.name == "nt", "POSIX file modes")
     def test_new_file_is_private_and_user_temp_name_is_kept(self):
@@ -335,7 +344,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["mcp.json", "mcp.json.asa-tmp"])
 
     @unittest.skipIf(os.name == "nt", "POSIX file modes")
-    def test_update_keeps_existing_mode_on_file_and_backup(self):
+    def test_update_keeps_the_file_mode_and_the_backup_is_private(self):
         path = self.home / ".cursor" / "mcp.json"
         path.parent.mkdir()
         path.write_text('{"mcpServers": {"other": {"command": "x"}}}')
@@ -343,7 +352,8 @@ class InstallTest(unittest.TestCase):
         code, _ = self.asa("cursor", "--yes")
         self.assertEqual(code, 0)
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
-        self.assertEqual(stat.S_IMODE((path.parent / "mcp.json.bak").stat().st_mode), 0o640)
+        # The backup holds the same config, so it is 0600 even when the original was group-readable.
+        self.assertEqual(stat.S_IMODE((path.parent / "mcp.json.bak").stat().st_mode), 0o600)
         self.assertIn("agent-security-audit", json.loads(path.read_text())["mcpServers"])
 
     def test_parent_swap_cannot_redirect_a_config_write(self):
@@ -378,6 +388,55 @@ class InstallTest(unittest.TestCase):
               self.assertRaisesRegex(install.InstallError, "run without --yes")):
             install.apply(changes)
         self.assertEqual(self.files(), [])
+
+    def test_non_utf8_config_is_left_as_is_without_a_traceback(self):
+        path = self.home / ".cursor" / "mcp.json"
+        path.parent.mkdir()
+        raw = b'{"mcpServers": {"other": {"command": "\xff"}}}'
+        path.write_bytes(raw)
+        code, _, err = self.asa_err("cursor", "--yes")
+        self.assertEqual(code, 2, err)
+        self.assertIn("is not UTF-8 text; it was left as is", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["mcp.json"])
+
+    def test_a_failed_multi_file_install_names_the_files_already_written(self):
+        if not install._anchored_writes_available():
+            self.skipTest("secure automatic writes require directory-descriptor support")
+        (self.cwd / ".mcp.json").write_text("{}\n")
+        changes = install.plan("claude-code", home=self.home, cwd=self.cwd)
+        self.assertEqual(len([c for c in changes if c.action in ("create", "update")]), 2)
+        real = install._replace_config
+        calls = []
+
+        def second_fails(parent, name, text):
+            calls.append(name)
+            if len(calls) == 2:
+                raise PermissionError(13, "Permission denied")
+            return real(parent, name, text)
+
+        with mock.patch.object(install, "_replace_config", second_fails), \
+                self.assertRaises(install.InstallError) as caught:
+            install.apply(changes)
+        message = str(caught.exception)
+        self.assertIn("refusing to write", message)
+        self.assertIn("Already written before this failure", message)
+        self.assertIn(str(self.cwd / ".mcp.json"), message)
+        self.assertIn("backup:", message)
+        self.assertIn("agent-security-audit", json.loads((self.cwd / ".mcp.json").read_text())["mcpServers"])
+
+    @unittest.skipIf(os.name == "nt", "POSIX temp folders")
+    def test_tmp_and_var_tmp_count_as_throwaway_on_posix(self):
+        # macOS points gettempdir() at /var/folders; an asa-mcp under /tmp vanishes on reboot just the same.
+        for folder in ("/tmp", "/var/tmp"):
+            self.assertTrue(install._ephemeral(f"{folder}/venv-x/bin/asa-mcp"), folder)
+        self.assertFalse(install._ephemeral(FAKE_MCP))
+
+    def test_no_unpinned_git_install_is_written_by_the_package(self):
+        for path in (ROOT / "src" / "agent_security_audit").rglob("*"):
+            if path.is_file() and path.suffix in (".py", ".md", ".json", ".toml"):
+                self.assertNotIn("git+https", path.read_text(encoding="utf-8"), path)
 
     def test_vscode_uses_servers_with_type(self):
         self.asa("vscode", "--yes")

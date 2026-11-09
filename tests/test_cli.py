@@ -4,8 +4,10 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from agent_security_audit import cli, lab
@@ -44,6 +46,36 @@ class CatalogCommandsTest(unittest.TestCase):
         code, _, err = call("show", "NOPE-01")
         self.assertEqual(code, 2)
         self.assertIn("NOPE-01", err)
+
+    def test_show_unknown_points_at_list(self):
+        code, _, err = call("show", "NOPE-01")
+        self.assertEqual(code, 2)
+        self.assertIn("run `asa list` to see the check ids", err)
+
+    def test_rules_headings_have_a_blank_line_before_them(self):
+        _, out, _ = call("rules")
+        lines = out.splitlines()
+        headings = [i for i, line in enumerate(lines) if line.startswith("## ")]
+        self.assertGreater(len(headings), 1)
+        for i in headings:
+            self.assertEqual(lines[i - 1], "", lines[i])
+
+    def test_paste_ready_commands_quote_the_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "my app; x"
+            folder.mkdir()
+            (folder / "package.json").write_text("{}")
+            old = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with mock.patch.object(cli, "_width", lambda: 1000), mock.patch.object(cli, "_is_tty", lambda s: True):
+                    _, out, _ = call("code", "my app; x", "--no-osv")
+            finally:
+                os.chdir(old)
+            quoted = shlex.quote(str(folder.resolve()))
+        self.assertTrue(quoted.startswith("'"), quoted)
+        self.assertIn(f"asa code {quoted} --out asa-report.html", out)
+        self.assertIn(f"asa scan <url> --code {quoted} ", out)
 
     def test_rules_stack(self):
         code, out, _ = call("rules", "--stack", "supabase")

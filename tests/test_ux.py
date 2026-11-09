@@ -169,6 +169,23 @@ class FixFirstAndLayersTest(unittest.TestCase):
         text = report.summary_text("http://127.0.0.1", [failed("NEXT-03", "a\x1b[2Jb\x9b31mc", fix="f\x07")])
         self.assertIsNone(re.search(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]", text))
 
+    def test_summary_hint_and_next_step_strip_terminal_escapes(self):
+        # Both name the scanned folder, and a folder name can hold escape sequences.
+        folder = "proj\x1b]8;;http://127.0.0.1/\x07x\x1b[2J\x9b31m\u202e"
+        text = report.summary_text("http://127.0.0.1", [failed("NEXT-03", "s", fix="f")],
+                                   hint=f"Full report: asa code {folder}",
+                                   next_step=f"Next: asa scan <url> --code {folder}")
+        self.assertIsNone(re.search(r"[\x00-\x09\x0b-\x1f\x7f-\x9f\u202e]", text), repr(text))
+        self.assertIn("asa scan <url> --code proj", text)
+
+    def test_markdown_title_escapes_a_folder_name(self):
+        md = report.to_markdown("proj](http://127.0.0.1/x)<img src=x>\n# Injected", [failed("NEXT-03", "s", fix="f")])
+        title = md.splitlines()[0]
+        self.assertTrue(title.startswith("# Security proof report: "))
+        self.assertIsNone(re.search(r"(?<!\\)\]\(", title), title)
+        self.assertIsNone(re.search(r"(?<!\\)<img", title), title)
+        self.assertNotIn("\n# Injected", md)
+
 
 class HtmlReportTest(unittest.TestCase):
     def test_target_text_is_escaped(self):
