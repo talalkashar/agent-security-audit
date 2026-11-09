@@ -13,7 +13,11 @@ DSIH = re.compile(r"dangerouslySetInnerHTML\s*=\s*\{\s*\{\s*__html\s*:\s*")
 INNER = re.compile(r"\.(?:innerHTML|outerHTML)\s*\+?=(?!=)\s*|\binsertAdjacentHTML\(\s*['\"]\w+['\"]\s*,\s*|"
                    r"\bdocument\.write(?:ln)?\(\s*")
 # Template sinks of the other frameworks code_files() reads: Vue v-html, Svelte {@html}, Astro set:html.
-TEMPLATE_HTML = re.compile(r"""\bv-html\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)')|\{@html\s+|\bset:html\s*=\s*\{""")
+# Template raw HTML: v-html and a bound innerHTML (Vue), {@html} (Svelte), set:html (Astro). An attribute value may be
+# quoted over several lines or unquoted; an opening quote with no closing one matches with no value (groups 1-3 None).
+# Linear: a quoted value stops at the next quote of its kind, and every sink that opens one holds that quote too.
+TEMPLATE_HTML = re.compile(r"""(?<![\w:.-])(v-html|(?:v-bind)?:(?:innerHTML|inner-html)(?:\.prop)?)\s*=\s*"""
+                           r"""(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)|)|\{@html\s+|\bset:html\s*=\s*\{""")
 LITERAL = re.compile(r"""^\s*(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\$]|\\.|\$(?!\{))*`)\s*$""")
 # Calls that return HTML-safe text. The whole value must be one such call, and the name (or the receiver of a method
 # call) must be bound by an import or require of a sanitizer package to one of its sanitizing exports: a local helper
@@ -234,8 +238,11 @@ def raw_html(project):
                 else:
                     risky.append(_at(project, rel, code, m.start(), f"{what}: {reason}"))
         for m in TEMPLATE_HTML.finditer(code) if rel.endswith((".vue", ".svelte", ".astro")) else ():
-            quoted = m.group(1) if m.group(1) is not None else m.group(2)
-            reason = _html_risk(code, m.start(), quoted if quoted is not None else _arg(code, m.end(), stops=""))
+            value = next((g for g in m.group(2, 3, 4) if g is not None), None)
+            if m.group(1) and value is None:
+                reason = "has a value this reader cannot delimit"
+            else:
+                reason = _html_risk(code, m.start(), value if value is not None else _arg(code, m.end(), stops=""))
             if reason is None:
                 safe += 1
             else:

@@ -17,12 +17,13 @@ from .project import Project
 MODULES = (secrets, sql, nextjs, patterns, request_input, ci)
 # Every catalog check the code audit can settle. Docs and `asa scan` hints read this.
 CHECKS = tuple(dict.fromkeys(cid for mod in (*MODULES, deps) for cid in mod.CHECKS))
-# The only checks the code audit may pass: each pass rests on a literal setting, a header value on a catch-all route
-# or a locked version that the read sees in full. Every other check is at most manual from code: an auth call, an RLS
-# statement in a migration or a search for known bad patterns is not proof about the running system. An allowlist,
-# so a new check starts out unable to pass. run() and merge() enforce it; a test keeps it a subset of CHECKS.
+# The only checks the code audit may pass: each pass rests on a literal setting, a header value on a route that
+# matches every path or a locked version that the read sees in full. Every other check is at most manual from code:
+# an auth call, an RLS statement in a migration or a search for known bad patterns (raw HTML sinks, eval) is not
+# proof, since a missed sink or an obfuscated call reads clean. An allowlist, so a new check starts out unable to
+# pass. run() and merge() enforce it; a test keeps it a subset of CHECKS.
 STATIC_PROOF = frozenset({"NEXT-02", "NEXT-03", "NEXT-04", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02",
-                          "BROWSER-03", "BROWSER-04", "BROWSER-05", "BROWSER-08", "BROWSER-09", "API-30"})
+                          "BROWSER-03", "BROWSER-04", "BROWSER-05", "BROWSER-08"})
 NO_STATIC_PASS = frozenset(CHECKS) - STATIC_PROOF
 
 

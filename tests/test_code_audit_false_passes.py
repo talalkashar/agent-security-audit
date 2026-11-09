@@ -198,11 +198,30 @@ class CronSecretTest(unittest.TestCase):
 class StructuralTest(unittest.TestCase):
     def test_run_downgrades_a_static_pass_on_heuristic_checks(self):
         def guess(project):
-            return [make("NEXT-05", "pass", "guessed"), make("API-30", "pass", "no eval")]
+            return [make("NEXT-05", "pass", "guessed"), make("NEXT-03", "pass", "poweredByHeader: false")]
         with mock.patch.object(nextjs, "ANALYZERS", (guess,)):
             r = audit({"package.json": "{}"})
         self.assertEqual(r["NEXT-05"].status, "manual")
-        self.assertEqual(r["API-30"].status, "pass")
+        self.assertEqual(r["NEXT-03"].status, "pass")
+
+    def test_pattern_searches_never_pass(self):
+        # A clean read for raw HTML sinks or eval used to pass: a missed sink or an obfuscated eval also reads clean.
+        self.assertTrue({"BROWSER-09", "API-30"} <= code_audit.NO_STATIC_PASS)
+        r = audit({"app/page.tsx": "export default function P() { return <p>{'hi'}</p>; }\n"})
+        for cid in ("BROWSER-09", "API-30"):
+            self.assertEqual(r[cid].status, "manual", r[cid].summary)
+            self.assertTrue(r[cid].summary.startswith("Not proven:"), r[cid].summary)
+        self.assertEqual(code_audit.merge([], [make("API-30", "pass", "no eval")])[0].status, "manual")
+        # Findings are unchanged: a dynamic sink still warns and eval on a dynamic string still fails.
+        r = audit({"app/page.tsx": "export const P = (p) => <div dangerouslySetInnerHTML={{ __html: p.x }} />;\n",
+                   "lib/run.js": "export const run = (s) => eval(s);\n"})
+        self.assertEqual(r["BROWSER-09"].status, "warn")
+        self.assertEqual(r["API-30"].status, "fail")
+
+    def test_readme_lists_the_checks_that_can_pass(self):
+        readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+        ids = sorted(code_audit.STATIC_PROOF)
+        self.assertIn(f"Only {', '.join(ids[:-1])} and {ids[-1]} can pass from code", readme)
 
     def test_no_static_pass_covers_the_heuristic_checks(self):
         self.assertTrue({"NEXT-05", "NEXT-06", "ACCESS-11", "AUTH-01", "ACCESS-01", "ACCESS-02", "ACCESS-06",

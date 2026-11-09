@@ -14,6 +14,7 @@ import re
 from ..checks import browser as live
 from ..checks.dns_email import SHARED_PLATFORMS
 from ..http import Response
+from ..model import Result
 from .base import SUSPECTED, make, plural
 from .patterns import _arg
 from .project import Finding, line_of, line_text, redact, strip_js_comments
@@ -179,10 +180,9 @@ TEXT_HEADER = re.compile(r"""^[ \t]*["']?(""" + "|".join(re.escape(n) for n in H
 CHAIN = re.compile(r"\.(?:trim|replace|replaceAll)\((?:[^()]|\([^()]*\))*\)\s*$")
 JOINED = re.compile(r"""^\[([\s\S]*)\]\s*\.join\(\s*(['"])((?:(?!\2).)*)\2\s*\)$""")
 STRING = re.compile(r"""'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)\"""")
-# Where one route's header block starts: headers after it land on the same responses.
-ROUTE_START = {"js": re.compile(r"\bsource\s*:"), "toml": re.compile(r"^[ \t]*\[\[headers\]\]", re.MULTILINE),
-               "_headers": re.compile(r"^(?![#\s])\S", re.MULTILINE)}
+ROUTE_START = {"js": re.compile(r"\bsource\s*:")}  # one per route object in next.config
 MAX_COMBOS = 256
+MAX_CONFIGS = 50  # next.config files judged; more make every next.config pass manual
 
 
 def _code(project, rel):
@@ -542,13 +542,29 @@ def _cron_check(code):
     return None
 
 
-def _shared_wildcard(origin):
-    """True when a wildcard origin matches every site on a shared hosting platform (*.vercel.app and the like)."""
+def _wildcard(origin):
+    """None for a host with no wildcard, "fail" for one that matches hosts nobody in particular controls (*, *.com,
+    **.io, a.*.b.com, *.vercel.app), else "manual". There is no public-suffix list in the standard library, so
+    *.example.com cannot be told from *.co.uk: it is never proven safe."""
     host = re.sub(r"^[a-z]+://", "", origin.strip().lower()).split("/")[0].split(":")[0]
+    if "*" not in host:
+        return None
     rest = re.sub(r"^\*{1,2}\.", "", host)
-    return rest != host and rest in SHARED_PLATFORMS
+    if rest == host or "*" in rest or "." not in rest.strip(".") or rest in SHARED_PLATFORMS:
+        return "fail"
+    return "manual"
 
 
+WILDCARD_NOTE = ("so a pass needs the owner to control every subdomain it matches (a taken-over subdomain would be "
+                 "trusted). Confirm that, or list the hosts one by one.")
+
+
+def _key(name):
+    """A config key however it is written: name: (quoted or not) or name = (an assignment), not == or ===."""
+    return r"(?<![\w$])['\"]?" + name + r"""['"]?\s*(?::|=(?!=))\s*"""
+
+
+SET_TO = re.compile(_key(r"(productionBrowserSourceMaps|poweredByHeader)") + r"(true|false)\b")
 LITERAL_LIST = re.compile(r"""\s*(?:(?:'[^'\n]*'|"[^"\n]*"|`[^`$\n]*`)\s*(?:,\s*)?)*""")  # one way to split blanks
 
 
@@ -557,16 +573,27 @@ def _judge_config(project, rel):
     build time, so it is manual, never a pass."""
     code = _code(project, rel)
     out = []
-    if m := re.search(r"productionBrowserSourceMaps\s*:\s*true\b", code):
+    # Every mention of a key counts (quoted, assigned or shorthand): one that is not a literal true/false is unknown.
+    literal = {(m.start(1), m.group(1), m.group(2)) for m in SET_TO.finditer(code)}
+    known, odd = {s for s, _, _ in literal}, {}
+    for name in ("productionBrowserSourceMaps", "poweredByHeader"):
+        mentions = re.finditer(r"(?<![\w$])" + name + r"(?![\w$])", code)
+        if m := next((m for m in mentions if m.start() not in known), None):
+            odd[name] = m
+    if m := next((x for x in sorted(literal) if x[1:] == ("productionBrowserSourceMaps", "true")), None):
         out.append(make("NEXT-02", "fail", "next.config turns on productionBrowserSourceMaps, so the original "
-                        "source is public.", [_at(project, rel, code, m.start(), "source maps on in production")]))
-    elif m := re.search(r"productionBrowserSourceMaps\s*:(?!\s*false\b)", code):
+                        "source is public.", [_at(project, rel, code, m[0], "source maps on in production")]))
+    elif m := odd.get("productionBrowserSourceMaps"):
         out.append(make("NEXT-02", "manual", f"Not proven: {rel} sets productionBrowserSourceMaps from a value only "
                         "known at build time.", [_at(project, rel, code, m.start(), "source maps set at build time")]))
     else:
         out.append(make("NEXT-02", "pass", f"{rel} does not turn on production browser source maps."))
-    if re.search(r"poweredByHeader\s*:\s*false\b", code):
+    powered = {v for _, n, v in literal if n == "poweredByHeader"}
+    if powered == {"false"} and "poweredByHeader" not in odd:
         out.append(make("NEXT-03", "pass", f"{rel} sets poweredByHeader: false."))
+    elif "true" not in powered and (m := odd.get("poweredByHeader")):
+        out.append(make("NEXT-03", "manual", f"Not proven: {rel} sets poweredByHeader from a value only known at "
+                        "build time.", [_at(project, rel, code, m.start(), "poweredByHeader set at build time")]))
     else:
         out.append(make("NEXT-03", "warn", f"{rel} does not set poweredByHeader: false, so Next.js sends X-Powered-By "
                         "unless a proxy strips it.", [Finding(rel, 1, "no poweredByHeader: false")]))
@@ -575,46 +602,82 @@ def _judge_config(project, rel):
     return out
 
 
+ORIGINS = re.compile(r"(?<![\w$])['\"]?allowedOrigins(?![\w$])['\"]?\s*(?:(?::|=(?!=))\s*)?")
+LIST_BODY = re.compile(r"\[([^\]]{0,20000})\]")
+MAX_KEYS = 20  # mentions of one key read per file; more cannot be a pass (keeps hostile files linear)
+
+
 def _origins_result(project, rel, code):
-    found = list(re.finditer(r"allowedOrigins\s*:\s*", code))
-    for m in found:
-        body = re.match(r"\[([^\]]*)\]", code[m.end():])
-        values = re.findall(r"""['"`]([^'"`\n]*)['"`]""", body.group(1)) if body else []
-        if any(v.strip() in ("*", "**") or _shared_wildcard(v) for v in values):
+    found = list(itertools.islice(ORIGINS.finditer(code), MAX_KEYS + 1))
+    bodies = [(m, LIST_BODY.match(code, m.end())) for m in found[:MAX_KEYS]]
+    values = [(m, re.findall(r"""['"`]([^'"`\n]*)['"`]""", body.group(1)) if body else []) for m, body in bodies]
+    for m, vals in values:
+        if any(_wildcard(v) == "fail" for v in vals):
             return make("NEXT-07", "fail", "serverActions.allowedOrigins accepts any origin (or every site on a shared "
                         "hosting platform), which turns off the Server Action CSRF check.",
                         [_at(project, rel, code, m.start(), "wildcard origin")])
-    for m in found:
-        body = re.match(r"\[([^\]]*)\]", code[m.end():])
+    for m, body in bodies + [(x, None) for x in found[MAX_KEYS:]]:
         if not body or not LITERAL_LIST.fullmatch(body.group(1)):  # a variable, a spread or a call: built at run time
             return make("NEXT-07", "manual", f"Not proven: {rel} builds serverActions.allowedOrigins from values only "
                         "known at build time.", [_at(project, rel, code, m.start(), "origins not literal")])
+    for m, vals in values:
+        if any(_wildcard(v) for v in vals):
+            return make("NEXT-07", "manual", f"Not proven: {rel} lists a wildcard in serverActions.allowedOrigins, "
+                        + WILDCARD_NOTE, [_at(project, rel, code, m.start(), "wildcard origin")])
     return make("NEXT-07", "pass", f"{rel} does not widen serverActions.allowedOrigins to any origin.")
 
 
 def _images_result(project, rel, code):
-    hosts = list(re.finditer(r"""hostname\s*:\s*['"`]([^'"`\n]*)['"`]""", code))
-    wild = next((m for m in hosts if m.group(1).strip() in ("*", "**") or _shared_wildcard(m.group(1))), None)
-    wild = wild or re.search(r"""new\s+URL\(\s*['"`]\w+://\*{1,2}[/:'"`]""", code)  # remotePatterns: [new URL(...)]
-    svg = re.search(r"dangerouslyAllowSVG\s*:\s*true\b", code)
+    hosts = list(re.finditer(r"""(?<![\w$])['"]?hostname['"]?\s*:\s*['"`]([^'"`\n]*)['"`]""", code))
+    hosts += re.finditer(r"""new\s+URL\(\s*['"`](\w+://[^'"`\n]*)['"`]""", code)  # remotePatterns: [new URL(...)]
+    wild = next((m for m in hosts if _wildcard(m.group(1)) == "fail"), None)
+    svg = re.search(_key("dangerouslyAllowSVG") + r"true\b", code)
     if wild:
         return make("NEXT-11", "fail", "images.remotePatterns allows any host, so the image optimizer fetches anything "
                     "for anyone.", [_at(project, rel, code, wild.start(), "wildcard image host")])
     if svg and not re.search(r"contentSecurityPolicy\s*:", code):
         return make("NEXT-11", "warn", "dangerouslyAllowSVG is on without an images.contentSecurityPolicy.",
                     [_at(project, rel, code, svg.start(), "SVG allowed without a CSP")])
-    if m := re.search(r"""hostname\s*:(?!\s*['"`])""", code):
+    if m := re.search(r"""(?<![\w$])['"]?hostname['"]?\s*:(?!\s*['"`])|[{,]\s*hostname\s*[,}]""", code) or \
+            _loose_patterns(code):
         return make("NEXT-11", "manual", f"Not proven: {rel} sets an image host from a value only known at build "
                     "time.", [_at(project, rel, code, m.start(), "image host not literal")])
+    if m := next((m for m in hosts if _wildcard(m.group(1))), None):
+        return make("NEXT-11", "manual", f"Not proven: {rel} allows a wildcard image host, " + WILDCARD_NOTE,
+                    [_at(project, rel, code, m.start(), "wildcard image host")])
     return make("NEXT-11", "pass", f"{rel} lists no wildcard image host.")
+
+
+PATTERN_ITEM = re.compile(r"""\{[^{}]*\}|new\s+URL\(\s*(['"`])[^'"`\n]*\1\s*\)""")
+
+
+def _loose_patterns(code):
+    """The first remotePatterns whose value is not an inline list of pattern objects and URL literals (a variable,
+    a spread or a call can hold any host), or None."""
+    rx = re.compile(r"(?<![\w$])['\"]?remotePatterns(?![\w$])['\"]?\s*(?:(?::|=(?!=))\s*)?")
+    for i, m in enumerate(rx.finditer(code)):
+        if i == MAX_KEYS:
+            return m
+        value = _arg(code, m.end(), 20000).strip()
+        if not (value.startswith("[") and value.endswith("]")) or "..." in value or \
+                PATTERN_ITEM.sub("", value[1:-1]).replace(",", "").strip():
+            return m
+    return None
 
 
 def next_config(project):
     out = []
     # A monorepo has one next.config per app: judge each and keep the worst result for every check.
-    judged = [_judge_config(project, rel) for rel in [f for f in project.files if NEXT_CONFIG.search(f)][:50]]
+    configs = [f for f in project.files if NEXT_CONFIG.search(f)]
+    judged = [_judge_config(project, rel) for rel in configs[:MAX_CONFIGS]]
+    skipped = len(configs) - len(judged)
     for results in zip(*judged):
-        out.append(min(results, key=lambda r: _RANK[r.status]))
+        r = min(results, key=lambda r: _RANK[r.status])
+        if skipped > 0 and r.status == "pass":  # an unread config may set what the read ones do not
+            r = Result(r.check_id, "manual", f"Not proven: {plural(skipped, 'more next.config file')} "
+                       f"{'was' if skipped == 1 else 'were'} not read (cap {MAX_CONFIGS}). {r.summary}",
+                       r.evidence, r.fix, r.locations)
+        out.append(r)
     header_files = [f for f in project.files if HEADER_FILES.search(f) and not f.endswith(".d.ts")]
     if not header_files:
         return out
@@ -712,7 +775,7 @@ def _headers_in(rel, text, project=None, loose=True):
             data = json.loads(text)
         except ValueError:
             data = None
-        stack, routes = [(data, 0)], 0
+        stack, routes = [(data, UNKNOWN_ROUTE)], 0  # a header outside any headers list belongs to no route
         while stack:
             node, route = stack.pop()
             if isinstance(node, list):
@@ -724,17 +787,20 @@ def _headers_in(rel, text, project=None, loose=True):
                     out.append((key.lower(), value if isinstance(value, str) else None, max(pos, 0), route))
                 if isinstance(node.get("headers"), list):
                     routes += 1
-                    route = (routes, node.get("source") if isinstance(node.get("source"), str) else "")
+                    route = ("json", routes, node.get("source") if isinstance(node.get("source"), str) else "",
+                             bool(node.get("has") or node.get("missing")))
                 stack.extend((n, route) for n in node.values())
         return out
     if not re.search(EXT, rel):  # netlify.toml, _headers
-        starts = ROUTE_START["toml" if rel.endswith(".toml") else "_headers"]
+        route = _toml_route(text) if rel.endswith(".toml") else _text_route(text)
         for m in TEXT_HEADER.finditer(text):
             value = m.group(2)
             if rel.endswith(".toml"):
                 sm = STRING.fullmatch(value)
                 value = _js_string(sm.group(1) if sm.group(1) is not None else sm.group(2)) if sm else None
-            out.append((m.group(1).lower(), value, m.start(1), _route(starts, text, m.start(1))))
+            out.append((m.group(1).lower(), value, m.start(1), route(m.start(0), m.start(1))))
+        for m in DETACH.finditer(text) if not rel.endswith(".toml") else ():  # "! Name" removes it on that path
+            out.append((m.group(1).lower(), None, m.start(1), route(m.start(0), m.start(1))))
         return out
     seen = set()
     imported = project and _importer(project, rel)
@@ -742,18 +808,18 @@ def _headers_in(rel, text, project=None, loose=True):
     # route's braces, so which responses get which value cannot be told: every value is then unknown.
     shared = len(ROUTE_START["js"].findall(text)) > 1 and _shared_headers(text)
     some = _some_requests(text) if MIDDLEWARE.search(rel) else lambda off: False
+    route = _js_route(text, bool(MIDDLEWARE.search(rel)))
     for m in JS_HEADER.finditer(text):
         name = next(g for g in (m.group(2), m.group(4), m.group(6)) if g)
         partial = some(m.start())
         for expr in _branches(_arg(text, m.end(), 4000)):  # cond ? a : b sends a or b: judge both
             value = _static(text, expr, imported=imported)
             out.append((name.lower(), None if value is None or shared or partial else " ".join(value.split()),
-                        m.start(),
-                        _route(ROUTE_START["js"], text, m.start())))
+                        m.start(), route(m.start())))
         seen.add(m.start(next(i for i in (2, 4, 6) if m.group(i))) - 1)
     for m in ANY_NAME.finditer(text) if loose else ():
         if m.start() not in seen:  # named, but not set in a way this reader follows
-            out.append((m.group(2).lower(), None, m.start(), _route(ROUTE_START["js"], text, m.start())))
+            out.append((m.group(2).lower(), None, m.start(), route(m.start())))
     return out
 
 
@@ -784,37 +850,131 @@ def _shared_headers(text):
     return False
 
 
-def _route(rx, text, offset):
-    """The offset of the route block a header at offset belongs to (-1 when the file has one block)."""
-    starts = _starts(rx, text)
-    k = bisect.bisect_left(starts, offset)  # one scan per file, not one per header
-    return starts[k - 1] if k else -1
+# A header's route: (kind, id, source path pattern or "" when unknown, has/missing condition), or None for a middleware
+# or proxy file, whose header sets run on every request it handles (_conditional and the matcher settle the rest).
+UNKNOWN_ROUTE = ("none", -1, "", False)
+MAX_SCOPE = 200_000  # brackets per file the route reader follows; more and every route is unknown
+ROUTE_KEY = re.compile(r"(?<![\w$.])(source|has|missing|headers)\s*:|[{,]\s*(headers)\s*(?=[,}])")
+NAMED = re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;{}]{0,200})?=\s*$")
+DETACH = re.compile(r"^[ \t]+!\s*(" + "|".join(re.escape(n) for n in HEADER_NAMES) + r")\b",
+                    re.IGNORECASE | re.MULTILINE)
 
 
-@functools.lru_cache(maxsize=16)
-def _starts(rx, text):
-    return [m.start() for m in rx.finditer(text)]
+def _js_route(text, middleware):
+    """A function offset -> route for the headers in a JS/TS file. A header belongs to the route object (the one with
+    a source key) that encloses it by balanced brackets, wherever the keys sit in that object; a header in a const
+    list belongs to the one route object whose headers value is that name. When neither holds, or the brackets do not
+    balance, the route is unknown (never a catch-all). One linear pass per file; climbs are capped."""
+    clean = _blank_strings(text)
+    marks = [(m.start(), m.group()) for m in re.finditer(r"[{}()\[\]]", clean)]
+    if len(marks) > MAX_SCOPE:
+        return lambda off: UNKNOWN_ROUTE
+    parent, inner, stack, broken = {}, [], [], False
+    for pos, c in marks:
+        if c in "{[(":
+            parent[pos] = stack[-1] if stack else -1
+            stack.append(pos)
+            inner.append((pos, pos))
+        elif stack and clean[stack[-1]] == {"}": "{", "]": "[", ")": "("}[c]:
+            stack.pop()
+            inner.append((pos, stack[-1] if stack else -1))
+        else:
+            broken = True
+    broken = broken or bool(stack)
+    starts = [p for p, _ in inner]
+
+    def owner(off):  # the innermost open bracket at off, or -1
+        k = bisect.bisect_right(starts, off)
+        return inner[k - 1][1] if k else -1
+
+    routes = {}  # object offset -> {"source": .., "cond": .., "headers": ..}
+    for m in ROUTE_KEY.finditer(clean):
+        obj = owner(m.start(1) if m.group(1) else m.start(2))
+        if obj < 0 or clean[obj] != "{":
+            continue
+        info = routes.setdefault(obj, {"source": None, "cond": False, "headers": None})
+        key = m.group(1) or m.group(2)
+        if key == "source":
+            sm = re.match(r"""\s*(['"`])([^'"`\n]*)\1""", text[m.end():m.end() + 600])
+            info["source"] = sm.group(2) if sm and "${" not in sm.group(2) else ""
+        elif key in ("has", "missing"):
+            info["cond"] = True
+        else:
+            info["headers"] = "headers" if m.group(2) else _arg(text, m.end(), 400).strip()
+    routes = {o: i for o, i in routes.items() if i["source"] is not None}
+    if broken:
+        return lambda off: UNKNOWN_ROUTE
+    if not routes and middleware:
+        return lambda off: None
+
+    def route(off):
+        o = owner(off)
+        for _ in range(8):  # header object -> headers array -> route object, with room for wrappers
+            if o < 0:
+                break
+            if o in routes:
+                i = routes[o]
+                return ("js", o, i["source"], i["cond"])
+            if clean[o] == "[" and (n := NAMED.search(clean, max(0, o - 300), o)):  # const securityHeaders = [...]
+                users = [u for u, i in routes.items() if i["headers"] == n.group(1)]
+                if len(users) == 1:
+                    i = routes[users[0]]
+                    return ("js", users[0], i["source"], i["cond"])
+                break
+            o = parent.get(o, -1)
+        return UNKNOWN_ROUTE
+    return route
+
+
+TABLE = re.compile(r"^[ \t]*(\[\[?)[ \t]*([^\]\n]*?)[ \t]*\]", re.MULTILINE)
+
+
+def _toml_route(text):
+    """A function (line start, offset) -> route for netlify.toml. A header counts only on a line of the
+    [headers.values] table of a [[headers]] block; that block's own `for` is its path, and [headers.conditions]
+    makes it conditional."""
+    tables = [(m.start(), m.group(1) == "[[", tuple(p.strip() for p in m.group(2).split("."))) for m in
+              TABLE.finditer(text)]
+    starts = [t[0] for t in tables]
+
+    def route(line, off):
+        k = bisect.bisect_right(starts, line) - 1
+        if k < 0 or tables[k][1] or tables[k][2] != ("headers", "values") or tables[k][0] == line:
+            return UNKNOWN_ROUTE
+        cond, j = False, k
+        while j >= 0 and not tables[j][1] and k - j < 20:
+            cond = cond or tables[j][2] == ("headers", "conditions")
+            j -= 1
+        if j < 0 or not tables[j][1] or tables[j][2] != ("headers",):
+            return UNKNOWN_ROUTE
+        end = starts[j + 1] if j + 1 < len(starts) else len(text)
+        m = re.search(r"""^[ \t]*for[ \t]*=[ \t]*["']([^"'\n]*)["']""", text[starts[j]:end], re.MULTILINE)
+        cond = cond or bool(re.search(r"^[ \t]*conditions[ \t]*=", text[starts[j]:end], re.MULTILINE))
+        return ("toml", starts[j], m.group(1) if m else "", cond)
+    return route
+
+
+def _text_route(text):
+    """A function (line start, offset) -> route for a _headers file: an indented header line belongs to the path line
+    above it. A header line that is not indented, or has no path above it, belongs to no route."""
+    paths = [m.start() for m in re.finditer(r"^(?![#\s])\S", text, re.MULTILINE)]
+
+    def route(line, off):
+        k = bisect.bisect_right(paths, line) - 1
+        if off == line or k < 0:
+            return UNKNOWN_ROUTE
+        m = re.match(r"(\S+)", text[paths[k]:paths[k] + 600])
+        return ("_headers", paths[k], m.group(1) if m else "", False)
+    return route
 
 
 # A route pattern that matches every path. Headers on a narrower route (/api/:path*) miss the pages browsers load.
 CATCH_ALL = re.compile(r"/(?:\(\.\*\)\??|:\w+(?:\*|\(\.\*\)\??)|\*{1,2})")
 
 
-def _route_source(rel, text, route):
-    """The path pattern of a route block, "" when it cannot be read, or None for a file with one unnamed block."""
-    if isinstance(route, tuple):  # vercel.json
-        return route[1]
-    if route == -1:
-        return None
-    if rel.endswith(".toml"):
-        block = re.match(r"[^\n]*\n((?:(?!\s*\[)[^\n]*\n?){0,40})", text[route:])
-        m = block and re.search(r"""^\s*for\s*=\s*["']([^"'\n]*)["']""", block.group(1), re.MULTILINE)
-    elif re.search(EXT, rel):
-        m = re.match(r"""source\s*:\s*(['"`])([^'"`\n]*)\1""", text[route:route + 600])
-        return m.group(2) if m else ""
-    else:  # _headers: the path is the first word of the line
-        m = re.match(r"(\S+)", text[route:route + 600])
-    return m.group(1) if m else ""
+def _route_source(route):
+    """The path pattern of a route, "" when it cannot be read, or None for a middleware file (every request)."""
+    return None if route is None else route[2]
 
 
 _RANK = {"fail": 0, "warn": 1, "manual": 2, "pass": 3}
@@ -912,11 +1072,15 @@ def _header_result(project, cid, label, names, check, files, texts, found):
                                                  "site.")
             judged.append((status, f"{f}: {summary}"))
         status, summary = min(judged, key=lambda x: _RANK[x[0]])
-        sources = [_route_source(f, texts[f], r) for r in routes]
-        if status == "pass" and not any(src is None or CATCH_ALL.fullmatch(src.strip()) for src in sources):
-            paths = ", ".join(redact(x, 40) for x in sorted(set(sources))[:3])
-            status, summary = "manual", (f"{f} sets {label} only on some paths ({paths}), so the code does not show "
-                                         "that every page carries it. Confirm it on the live site.")
+        sources = [_route_source(r) for r in routes]
+        every = [r for r in routes if r is None or (CATCH_ALL.fullmatch(r[2].strip()) and not r[3])]
+        if status == "pass" and not every:  # a pass needs a route that matches every path, with no condition
+            paths = ", ".join(redact(x, 40) for x in sorted(set(sources))[:3] if x)
+            where = (f"only on some paths ({paths})" if paths else "on a route whose path the code does not show")
+            if any(r[3] for r in routes):
+                where = "only on some paths or behind a has or missing condition"
+            status, summary = "manual", (f"{f} sets {label} {where}, so the code does not show that every page "
+                                         "carries it. Confirm it on the live site.")
         if status != "fail" and MIDDLEWARE.search(f) and _conditional(texts[f], [off for _, _, off, _ in hits]):
             status, summary = "manual", (f"{f} sets {label} only in some branches (if/else, switch or after an early "
                                          "return), so the code does not show that every response carries it. Confirm "

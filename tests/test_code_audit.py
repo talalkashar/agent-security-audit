@@ -92,11 +92,11 @@ class FixtureTest(unittest.TestCase):
         bad = {cid: r.summary for cid, r in results.items() if r.status in ("fail", "warn", "error")}
         self.assertEqual(bad, {})
         for cid in ("NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11", "BROWSER-01", "BROWSER-02", "BROWSER-03",
-                    "BROWSER-04", "BROWSER-05", "BROWSER-08", "BROWSER-09", "API-30", "NEXT-04"):
+                    "BROWSER-04", "BROWSER-05", "BROWSER-08", "NEXT-04"):
             with self.subTest(check=cid):
                 self.assertEqual(results[cid].status, "pass", results[cid].summary)
         # A search for known bad patterns finds none: that is not proof, so these are manual on a clean project.
-        for cid in ("NEXT-01", "API-31", "API-32", "API-05", "INFRA-13", "INFRA-15"):
+        for cid in ("NEXT-01", "BROWSER-09", "API-30", "API-31", "API-32", "API-05", "INFRA-13", "INFRA-15"):
             with self.subTest(check=cid):
                 self.assertEqual(results[cid].status, "manual", results[cid].summary)
                 self.assertTrue(results[cid].summary.startswith("Not proven:"), results[cid].summary)
@@ -244,13 +244,13 @@ class MergeTest(unittest.TestCase):
         # Used to merge to pass: a static guess beat the live "not proven".
         live = [Result("AUTH-01", "manual", "Not visible from outside", ["proof steps"])]
         code = [Result("AUTH-01", "pass", "verified", ["middleware.ts:3: getClaims"]),
-                Result("API-30", "pass", "no eval")]
+                Result("NEXT-03", "pass", "poweredByHeader: false")]
         merged = by_id(code_audit.merge(live, code))
         self.assertEqual(merged["AUTH-01"].status, "manual")
         self.assertEqual(merged["AUTH-01"].summary, "Not visible from outside")
         self.assertIn("code (pass): verified", merged["AUTH-01"].evidence)
         self.assertIn("code: middleware.ts:3: getClaims", merged["AUTH-01"].evidence)
-        self.assertEqual(merged["API-30"].status, "pass")  # no live result: the code result is added as is
+        self.assertEqual(merged["NEXT-03"].status, "pass")  # no live result: a provable code result is added as is
 
     def test_code_pass_never_replaces_live_error(self):
         merged = code_audit.merge([Result("NEXT-02", "error", "timeout")], [Result("NEXT-02", "pass", "off")])
@@ -649,6 +649,7 @@ class AccuracyTest(unittest.TestCase):
         self.assertEqual(r["API-31"].status, "fail")
 
     def test_sanitizer_must_wrap_the_whole_value_and_be_real(self):
+        # A sanitized value is no finding, so the read is clean: manual (a pattern search proves nothing), not warn.
         def html(value, head=""):
             return audit_files({"a.jsx": head + "export const A = () => "
                                 f"<div dangerouslySetInnerHTML={{{{ __html: {value} }}}} />;\n"})["BROWSER-09"].status
@@ -657,18 +658,18 @@ class AccuracyTest(unittest.TestCase):
         self.assertEqual(html("renderToString(x)"), "warn")
         # A receiver that is not imported from a sanitizer package proves nothing (a global or local object).
         self.assertEqual(html("DOMPurify.sanitize(x)"), "warn")
-        self.assertEqual(html("DOMPurify.sanitize(x)", "import DOMPurify from 'dompurify';\n"), "pass")
+        self.assertEqual(html("DOMPurify.sanitize(x)", "import DOMPurify from 'dompurify';\n"), "manual")
         self.assertEqual(html("he.decode(x)", "import he from 'he';\n"), "warn")
-        self.assertEqual(html("he.encode(x)", "import he from 'he';\n"), "pass")
-        self.assertEqual(html("escape(x)", "const { escape } = require('html-escaper');\n"), "pass")
+        self.assertEqual(html("he.encode(x)", "import he from 'he';\n"), "manual")
+        self.assertEqual(html("escape(x)", "const { escape } = require('html-escaper');\n"), "manual")
         self.assertEqual(html("decode(x)", "import { decode as escape2, decode } from 'he';\n"), "warn")
         self.assertEqual(html("sanitize(x)", "import sanitize from 'sanitize-html';\nfunction sanitize(s) { return s; }\n"),
                          "warn")
-        self.assertEqual(html("xss(x)", "import { sanitize } from 'other';\nimport xss from 'xss';\n"), "pass")
+        self.assertEqual(html("xss(x)", "import { sanitize } from 'other';\nimport xss from 'xss';\n"), "manual")
         # The old cross-statement regex let a name in one statement pair with a package in a later one.
         self.assertEqual(html("sanitize(x)", "import { sanitize } from './local';\nimport x from 'dompurify';\n"), "warn")
-        self.assertEqual(html("sanitize(x, { allowedTags: [] })", "import sanitize from 'sanitize-html';\n"), "pass")
-        self.assertEqual(html("renderToString(x)", "import { renderToString } from 'react-dom/server';\n"), "pass")
+        self.assertEqual(html("sanitize(x, { allowedTags: [] })", "import sanitize from 'sanitize-html';\n"), "manual")
+        self.assertEqual(html("renderToString(x)", "import { renderToString } from 'react-dom/server';\n"), "manual")
 
     def test_shared_header_list_across_routes_is_manual(self):
         cfg = ("const common = [{ key: 'X-Content-Type-Options', value: 'nosniff' }];\n"
@@ -736,7 +737,7 @@ class AccuracyTest(unittest.TestCase):
         start = time.monotonic()
         r = audit_files({"app/page.tsx": code})
         self.assertLess(time.monotonic() - start, 10.0)
-        self.assertEqual(r["BROWSER-09"].status, "pass")
+        self.assertEqual(r["BROWSER-09"].status, "manual")  # every use sanitized: no warn
         self.assertIsNotNone(patterns._bindings.cache_info())
 
     def test_sanitizer_import_scan_is_linear(self):
@@ -809,22 +810,25 @@ class AccuracyTest(unittest.TestCase):
         self.assertEqual(audit_files({"app/api/notes/route.ts": code})["NEXT-05"].status, "manual")
 
     def test_file_cap_makes_passes_manual(self):
-        files = {f"lib/f{i}.ts": "export const x = 1;\n" for i in range(4)}
+        files = {"next.config.js": "module.exports = { poweredByHeader: false };\n",
+                 **{f"z/f{i}.ts": "export const x = 1;\n" for i in range(4)}}
+        self.assertEqual(audit_files(files)["NEXT-03"].status, "pass")
         with mock.patch.object(project, "MAX_FILES", 2):
             r = audit_files(files)
-        self.assertEqual(r["API-30"].status, "manual")
-        self.assertIn("only the first 2 of 4 files", r["API-30"].summary)
+        self.assertEqual(r["NEXT-03"].status, "manual")
+        self.assertIn("only the first 2 of 5 files", r["NEXT-03"].summary)
         self.assertFalse([cid for cid, x in r.items() if x.status == "pass"])
 
     def test_oversized_file_makes_pass_manual(self):
-        files = {"lib/small.ts": "export const x = 1;\n", "lib/big.ts": "export const y = 2;\n" + "//\n" * 400}
+        small = "module.exports = { poweredByHeader: false };\n"
+        files = {"apps/a/next.config.js": small, "apps/b/next.config.js": small + "//\n" * 400}
         with mock.patch.object(project, "MAX_BYTES", 200):
             r = audit_files(files)
-        self.assertEqual(r["API-30"].status, "manual")
-        self.assertIn("lib/big.ts", r["API-30"].summary)
+        self.assertEqual(r["NEXT-02"].status, "manual")  # the unread config may turn source maps on
+        self.assertIn("apps/b/next.config.js", r["NEXT-02"].summary)
         with mock.patch.object(project, "MAX_BYTES", 200):
-            r = audit_files({"lib/small.ts": "export const x = 1;\n", "img.png": "\0" * 400})
-        self.assertEqual(r["API-30"].status, "pass")  # a large binary file is not a coverage gap
+            r = audit_files({"apps/a/next.config.js": small, "img.png": "\0" * 400})
+        self.assertEqual(r["NEXT-02"].status, "pass")  # a large binary file is not a coverage gap
 
     @unittest.skipUnless(shutil.which("git"), "git not installed")
     def test_ignored_untracked_files_stay_out(self):
@@ -989,6 +993,22 @@ class HostileInputTest(unittest.TestCase):
         r = audit_files({"apps/a/next.config.js": clean, "apps/b/next.config.js": bad})
         self.assertEqual(r["NEXT-02"].status, "fail")
 
+    def test_next_config_cap_makes_passes_manual(self):
+        # Used to judge the first 50 next.config files and pass, though the rest were never read.
+        clean = "module.exports = { poweredByHeader: false };\n"
+        files = {f"apps/a{i:02}/next.config.js": clean for i in range(52)}
+        r = audit_files(files)
+        for cid in ("NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11"):
+            with self.subTest(check=cid):
+                self.assertEqual(r[cid].status, "manual", r[cid].summary)
+                self.assertIn("2 more next.config files were not read (cap 50)", r[cid].summary)
+        files = {f"apps/a{i:02}/next.config.js": clean for i in range(50)}
+        self.assertEqual(audit_files(files)["NEXT-03"].status, "pass")
+        files["apps/z/next.config.js"] = clean
+        r = audit_files(files)
+        self.assertEqual(r["NEXT-03"].status, "manual")
+        self.assertIn("1 more next.config file was not read", r["NEXT-03"].summary)
+
     def test_next_config_values_not_written_out_are_manual(self):
         cases = {
             "NEXT-02": "productionBrowserSourceMaps: process.env.MAPS === '1'",
@@ -1015,7 +1035,65 @@ class HostileInputTest(unittest.TestCase):
                 + "'a'      " * 3000 + "x] } } };\n")
         self.assertEqual(self.quick(lambda: audit_files({"next.config.js": many}), 3.0)["NEXT-07"].status, "manual")
         own = "module.exports = { images: { remotePatterns: [{ hostname: '*.example.com' }] } };\n"
-        self.assertEqual(audit_files({"next.config.js": own})["NEXT-11"].status, "pass")
+        self.assertEqual(audit_files({"next.config.js": own})["NEXT-11"].status, "manual")
+
+    def test_next_config_keys_in_any_shape(self):
+        # Each used to pass: the reader only knew `key: value` with an unquoted key and an inline literal.
+        cases = [
+            ("NEXT-02", '"productionBrowserSourceMaps": true', "fail"),
+            ("NEXT-02", "productionBrowserSourceMaps", "manual"),  # shorthand: a variable
+            ("NEXT-03", "poweredByHeader: false, ...(dev ? { poweredByHeader: true } : {})", "warn"),
+            ("NEXT-03", "poweredByHeader: false, poweredByHeader", "manual"),
+            ("NEXT-07", "experimental: { serverActions: { 'allowedOrigins': ['*'] } }", "fail"),
+            ("NEXT-07", "experimental: { serverActions: { allowedOrigins } }", "manual"),
+            ("NEXT-11", 'images: { remotePatterns: [{ "hostname": "**" }] }', "fail"),
+            ("NEXT-11", "images: { remotePatterns: [{ hostname }] }", "manual"),
+            ("NEXT-11", "images: { remotePatterns: patterns }", "manual"),
+            ("NEXT-11", "images: { remotePatterns: [...extra, { hostname: 'a.example.com' }] }", "manual"),
+            ("NEXT-11", 'images: { "dangerouslyAllowSVG": true }', "warn"),
+        ]
+        for cid, setting, want in cases:
+            with self.subTest(setting=setting):
+                r = audit_files({"next.config.js": f"module.exports = {{ {setting} }};\n"})
+                self.assertEqual(r[cid].status, want, r[cid].summary)
+        assigned = ("const c = { poweredByHeader: false, experimental: { serverActions: {} } };\n"
+                    "c.productionBrowserSourceMaps = true;\nc.experimental.serverActions.allowedOrigins = ['*'];\n"
+                    "module.exports = c;\n")
+        r = audit_files({"next.config.js": assigned})
+        self.assertEqual((r["NEXT-02"].status, r["NEXT-07"].status), ("fail", "fail"))
+        ok = ("module.exports = { 'poweredByHeader': false, productionBrowserSourceMaps: false, images: { "
+              "remotePatterns: [{ protocol: 'https', hostname: 'img.example.com' }, "
+              "new URL('https://cdn.example.com/**')] } };\n")
+        r = audit_files({"next.config.js": ok})
+        for cid in ("NEXT-02", "NEXT-03", "NEXT-07", "NEXT-11"):
+            self.assertEqual(r[cid].status, "pass", r[cid].summary)
+        many = "module.exports = { " + "allowedOrigins: [" * 30000 + "remotePatterns: [" * 30000 + " };\n"
+        r = self.quick(lambda: audit_files({"next.config.js": many}), 4.0)
+        self.assertEqual((r["NEXT-07"].status, r["NEXT-11"].status), ("manual", "manual"))
+
+    def test_wildcard_hosts_are_never_a_pass(self):
+        # These used to pass: only a wildcard on a known shared platform was judged unsafe.
+        def judge(host):
+            origins = f"experimental: {{ serverActions: {{ allowedOrigins: ['my.app.com', '{host}'] }} }}"
+            images = f"images: {{ remotePatterns: [{{ hostname: '{host}' }}, new URL('https://{host}/**')] }}"
+            cfg = f"module.exports = {{ poweredByHeader: false, {origins}, {images} }};\n"
+            r = audit_files({"next.config.js": cfg})
+            return r["NEXT-07"], r["NEXT-11"]
+        for host in ("*.com", "**.io", "*.", "foo.*.example.com", "*.*.example.com", "img-*.example.com",
+                     "https://*.vercel.app", "*.com:443"):
+            for r in judge(host):
+                with self.subTest(host=host, check=r.check_id):
+                    self.assertEqual(r.status, "fail", r.summary)
+        for host in ("*.example.com", "**.co.uk", "https://*.example.com:8443"):
+            for r in judge(host):
+                with self.subTest(host=host, check=r.check_id):
+                    self.assertEqual(r.status, "manual", r.summary)
+                    self.assertIn("control every subdomain", r.summary)
+        url = "module.exports = { images: { remotePatterns: [new URL('https://*.com/**')] } };\n"
+        self.assertEqual(audit_files({"next.config.js": url})["NEXT-11"].status, "fail")
+        for r in judge("cdn.example.com"):
+            with self.subTest(host="literal", check=r.check_id):
+                self.assertEqual(r.status, "pass", r.summary)
 
     def test_headers_on_one_path_only_are_not_a_pass(self):
         rule = "{ key: 'X-Content-Type-Options', value: 'nosniff' }"
@@ -1027,6 +1105,69 @@ class HostileInputTest(unittest.TestCase):
         self.assertEqual(audit_files({"vercel.json": json.dumps(vercel)})["BROWSER-03"].status, "manual")
         vercel["headers"][0]["source"] = "/(.*)"
         self.assertEqual(audit_files({"vercel.json": json.dumps(vercel)})["BROWSER-03"].status, "pass")
+
+    def test_header_route_is_the_enclosing_object(self):
+        # These used to pass: the route was the nearest source: above the header, and none above meant catch-all.
+        n = "{ key: 'X-Content-Type-Options', value: 'nosniff' }"
+        r = "{ key: 'Referrer-Policy', value: 'no-referrer' }"
+
+        def cfg(routes, head=""):
+            return audit_files({"next.config.js": head + "module.exports = { async headers() { return ["
+                                + routes + "]; } };\n"})["BROWSER-03"].status
+        self.assertEqual(cfg(f"{{ headers: [{n}], source: '/api/:path*' }}"), "manual")
+        self.assertEqual(cfg(f"{{ source: '/(.*)', headers: [{r}] }}, {{ headers: [{n}], source: '/api/:path*' }}"),
+                         "manual")
+        self.assertEqual(cfg(f"{{ headers: [{n}] }}"), "manual")  # no source: the path is unknown
+        for cond in ("has: [{ type: 'host', value: 'a.example' }]", "missing: [{ type: 'header', key: 'x' }]"):
+            self.assertEqual(cfg(f"{{ source: '/(.*)', {cond}, headers: [{n}] }}"), "manual")
+            self.assertEqual(cfg(f"{{ source: '/(.*)', {cond}, headers: [{n}] }}, {{ source: '/a', headers: [{n}] }}"),
+                             "manual")
+        self.assertEqual(cfg(f"{{ source: '/(.*)', headers: [{n}] }}, {{ source: '/a', headers: [{r}] }}"), "pass")
+        self.assertEqual(cfg(f"{{ source: `${{base}}/(.*)`, headers: [{n}] }}"), "manual")
+        self.assertEqual(cfg("{ source: '/(.*)', headers: [" + n + "] }, { source: '/[}', headers: [] }"), "pass")
+        self.assertEqual(cfg("{ source: '/(.*)', headers: [" + n + "] }]}; const re = /[/; ({"), "manual")
+        # Keys in any order, and a const list on the one route that uses it, still pass.
+        self.assertEqual(cfg(f"{{ headers: [{n}], source: '/(.*)' }}"), "pass")
+        self.assertEqual(cfg("{ headers: sec, source: '/:path*' }", f"const sec = [{n}];\n"), "pass")
+        self.assertEqual(cfg("{ source: '/api/:path*', headers: sec }", f"const sec = [{n}];\n"), "manual")
+        self.assertEqual(cfg("{ source: '/(.*)', headers: [] }", f"const sec = [{n}];\n"), "manual")
+        vercel = {"headers": [{"headers": [{"key": "X-Content-Type-Options", "value": "nosniff"}], "source": "/(.*)"}]}
+        self.assertEqual(audit_files({"vercel.json": json.dumps(vercel)})["BROWSER-03"].status, "pass")
+        for cond in ("has", "missing"):
+            vercel["headers"][0][cond] = [{"type": "header", "key": "x"}]
+            self.assertEqual(audit_files({"vercel.json": json.dumps(vercel)})["BROWSER-03"].status, "manual")
+            del vercel["headers"][0][cond]
+        loose = {"routes": [{"src": "/(.*)", "key": "X-Content-Type-Options", "value": "nosniff"}]}
+        self.assertEqual(audit_files({"vercel.json": json.dumps(loose)})["BROWSER-03"].status, "manual")
+
+    def test_text_header_files_need_their_block(self):
+        def status(rel, text):
+            return audit_files({rel: text})["BROWSER-03"].status
+        ok = '[[headers]]\n  for = "/*"\n  [headers.values]\n    X-Content-Type-Options = "nosniff"\n'
+        self.assertEqual(status("netlify.toml", ok), "pass")
+        # These used to pass: a header line outside any [[headers]] values table, or a conditional block.
+        self.assertEqual(status("netlify.toml", 'X-Content-Type-Options = "nosniff"\n'), "manual")
+        self.assertEqual(status("netlify.toml", ok.replace("  [headers.values]", "  [headers.conditions]\n"
+                                                           "    Language = [\"en\"]\n  [headers.values]")), "manual")
+        self.assertEqual(status("netlify.toml", ok + '[build.environment]\n  X-Frame-Options = "x"\n'), "pass")
+        self.assertEqual(status("netlify.toml", ok.replace("[headers.values]", "[build.environment]")), "manual")
+        self.assertEqual(status("public/_headers", "/*\n  X-Content-Type-Options: nosniff\n"), "pass")
+        self.assertEqual(status("public/_headers", "X-Content-Type-Options: nosniff\n"), "manual")
+        self.assertEqual(status("public/_headers", "# all\nX-Content-Type-Options: nosniff\n/*\n"), "manual")
+        self.assertEqual(status("public/_headers", "/*\n  X-Content-Type-Options: nosniff\n/admin/*\n"
+                                                   "  ! X-Content-Type-Options\n"), "manual")
+
+    def test_header_route_reader_is_linear(self):
+        from agent_security_audit.code_audit import nextjs
+        n = "{ key: 'X-Content-Type-Options', value: 'nosniff' }"
+        for code in ("{" * 200000, "[" * 200000 + n * 2000, "{ source: '/(.*)', headers: [" * 20000 + n * 1000,
+                     ("const a = [" + n + "];\n") * 20000, "{ headers: a, source: '/' }," * 30000,
+                     "(" * 100000 + n * 1000 + ")" * 100000):
+            self.quick(lambda code=code: nextjs._headers_in("next.config.js", code), 3.0)
+        for text in ("[[headers]]\n" * 100000, "[headers.values]\nX-Frame-Options = 'DENY'\n" * 50000,
+                     "/*\n" + "  X-Frame-Options: DENY\n" * 100000):
+            self.quick(lambda text=text: nextjs._headers_in("netlify.toml", text), 3.0)
+            self.quick(lambda text=text: nextjs._headers_in("_headers", text), 3.0)
 
     def test_hostile_sql_does_not_stall(self):
         text = ("create function public.f() returns int language sql as $$ select 1 $$;\n"
@@ -1080,7 +1221,29 @@ class HostileInputTest(unittest.TestCase):
                          ("c.astro", "<div set:html={post.body} />\n")):
             with self.subTest(file=rel):
                 self.assertEqual(audit_files({rel: src})["BROWSER-09"].status, "warn")
-        self.assertEqual(audit_files({"d.vue": "<div v-html=\"'<b>hi</b>'\"></div>\n"})["BROWSER-09"].status, "pass")
+        # A literal is no finding: the read is clean, which is manual for a pattern search.
+        self.assertEqual(audit_files({"d.vue": "<div v-html=\"'<b>hi</b>'\"></div>\n"})["BROWSER-09"].status,
+                         "manual")
+
+    def test_template_raw_html_sink_shapes(self):
+        # These used to read clean: a quoted value over two lines, an unquoted value and a bound innerHTML.
+        for src in ('<div v-html="\n  post.body"></div>\n', "<div v-html='post.body\n'></div>\n",
+                    "<div v-html=post.body></div>\n", '<div :innerHTML="post.body"></div>\n',
+                    '<div v-bind:innerHTML="post.body"></div>\n', '<div :inner-html.prop="post.body"></div>\n',
+                    '<div v-html="post.body></div>\n'):
+            with self.subTest(src=src):
+                self.assertEqual(audit_files({"a.vue": src})["BROWSER-09"].status, "warn")
+        self.assertEqual(audit_files({"b.vue": "<div :innerHTML=\"'<b>hi</b>'\"></div>\n"})["BROWSER-09"].status,
+                         "manual")
+        self.assertEqual(audit_files({"c.vue": '<div :title="post.body"></div>\n'})["BROWSER-09"].status, "manual")
+
+    def test_template_raw_html_scan_is_linear(self):
+        from agent_security_audit.code_audit import patterns
+        for code in ('v-html="' * 100000, "v-html='" * 100000, ":innerHTML=" * 100000, 'v-html="' + "a" * 500000,
+                     "v-html" + " " * 500000, ':innerHTML="' + "'" * 500000):
+            start = time.monotonic()
+            list(patterns.TEMPLATE_HTML.finditer(code))
+            self.assertLess(time.monotonic() - start, 1.0)
 
     def test_next_versions_unproven_when_a_lockfile_is_not_read(self):
         lock = json.dumps({"lockfileVersion": 3, "packages": {"node_modules/next": {"version": "15.5.9"}}})
