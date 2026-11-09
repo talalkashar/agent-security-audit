@@ -273,7 +273,7 @@ def source_maps(ctx):
              if label.startswith("/") and not label.endswith(INLINE_LABEL)]
     if not found:
         return skipped("NEXT-02", "No same-origin script files found on the crawled pages.")
-    exposed, ev, tried, probed, covered = [], [], 0, 0, 0
+    exposed, ev, tried, probed, covered, unread = [], [], 0, 0, 0, []
     for label, text in found:
         m = SOURCEMAP.search(text[-2000:])
         candidates = []
@@ -292,9 +292,14 @@ def source_maps(ctx):
         for url in candidates:
             resp = ctx.client.get(url)
             probed += 1
-            if resp.status == 200 and b'"mappings"' in resp.body[:500000]:
+            # The client keeps the whole body up to its cap. A long sources list can put "mappings" past
+            # the first 500 KB, and a body cut off at the cap must not pass: the key may be in the unread tail.
+            if resp.status == 200 and b'"mappings"' in resp.body:
                 exposed.append(urlsplit(url).path)
                 ev.append(f"GET {urlsplit(url).path} -> 200 (source map)")
+            elif resp.status == 200 and resp.truncated:
+                unread.append(urlsplit(url).path)
+                ev.append(f"GET {urlsplit(url).path} -> 200, body cut off before a source map could be ruled out")
     if exposed:
         return failed("NEXT-02", f"{count(len(exposed), 'source map')} {are(len(exposed))} public, so anyone can read the original source "
                       "code, comments and internal paths.", ev)
@@ -305,6 +310,9 @@ def source_maps(ctx):
         return Result("NEXT-02", "manual", f"No source map served for the {count(covered, 'script')} probed, but "
                       f"{len(found) - covered} of {count(len(found), 'same-origin script')} were not probed. Open the "
                       "others with .map appended.", ev)
+    if unread:
+        return Result("NEXT-02", "manual", f"{count(len(unread), 'map URL')} returned more than this scan keeps, so a "
+                      "source map in the unread bytes was not ruled out.", ev)
     return passed("NEXT-02", f"No source map served: {count(probed, 'map URL')} probed for {covered} of "
                   f"{count(len(found), 'same-origin script')} (each script that names a map, plus .map guesses for "
                   f"{count(tried, 'script')}).", ev)

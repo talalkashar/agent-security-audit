@@ -63,7 +63,7 @@ Keep `productionBrowserSourceMaps` unset or false in `next.config.*`. If error t
 
 1. The tool fetches the same-origin scripts found on the crawled pages (as in NEXT-01).
 2. For each script it checks for a `sourceMappingURL` reference and requests the `.map` file.
-3. Pass: no reference, and no `.map` file returns 200. Fail: a `.map` file is served with status 200.
+3. Pass: no saved response contains a `"mappings"` key. Fail: the bytes kept for a `.map` response contain `"mappings"` (an inline `data:` URL fails too). A 200 cut off before that key is manual, not a pass. A complete 200 page with no `"mappings"` key is not a finding.
 
 ### Sources
 

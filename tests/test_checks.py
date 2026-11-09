@@ -610,6 +610,51 @@ class SourceMapTest(unittest.TestCase):
         ctx.cache["scripts"] = [("home page inline scripts", "var a")]
         self.assertEqual(exposure.source_maps(ctx).status, "skip")
 
+    def test_mappings_key_past_the_first_500kb_fails(self):
+        body = b'{"version":3,"sources":["' + b"x" * 520000 + b'"],"mappings":"AAAA"}'
+        self.assertNotIn(b'"mappings"', body[:500000])
+
+        def route(m, u, h, b):
+            if u.endswith(".map"):
+                return Response(u, 200, "", [], body, False)
+            return resp(404)
+
+        ctx = ctx_for(route)
+        ctx.cache["scripts"] = [("/_next/app.js", "var a=1")]
+        self.assertEqual(exposure.source_maps(ctx).status, "fail")
+
+    def test_truncated_map_without_the_key_is_manual(self):
+        def route(m, u, h, b):
+            if u.endswith(".map"):
+                return Response(u, 200, "", [], b"{" + b"a" * 64, True)
+            return resp(404)
+
+        ctx = ctx_for(route)
+        ctx.cache["scripts"] = [("/_next/app.js", "var a=1")]
+        result = exposure.source_maps(ctx)
+        self.assertEqual(result.status, "manual")
+        self.assertIn("unread", result.summary)
+
+    def test_truncated_map_with_the_key_still_fails(self):
+        def route(m, u, h, b):
+            if u.endswith(".map"):
+                return Response(u, 200, "", [], b'{"version":3,"mappings":"AAAA"}', True)
+            return resp(404)
+
+        ctx = ctx_for(route)
+        ctx.cache["scripts"] = [("/_next/app.js", "var a=1")]
+        self.assertEqual(exposure.source_maps(ctx).status, "fail")
+
+    def test_complete_page_without_a_mappings_key_passes(self):
+        def route(m, u, h, b):
+            if u.endswith(".map"):
+                return Response(u, 200, "", [], b"<!doctype html><html>not a map</html>", False)
+            return resp(404)
+
+        ctx = ctx_for(route)
+        ctx.cache["scripts"] = [("/_next/app.js", "var a=1")]
+        self.assertEqual(exposure.source_maps(ctx).status, "pass")
+
 
 NORMAL_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>404: This page could not be found
 </title><link rel="stylesheet" href="/_next/static/css/app.css"></head><body><main><h1>404</h1><p>This page could
