@@ -77,6 +77,14 @@ class ChunkScanTimeTest(unittest.TestCase):
         self.assertEqual(crawl_mod.next_chunks(text), ["/_next/static/chunks/app/page-abc.js",
                                                        "/_next/static/chunks/main-1.js"])
 
+    def test_distinct_chunk_paths_are_kept_once_and_capped(self):
+        many = " ".join(f'"static/chunks/c{i}.js"' for i in range(crawl_mod.MAX_CHUNKS_PER_TEXT + 500))
+        found = crawl_mod.next_chunks(many + ' "static/chunks/c0.js"' * 3)
+        self.assertEqual(len(found), crawl_mod.MAX_CHUNKS_PER_TEXT)
+        self.assertEqual(len(set(found)), len(found))
+        self.assertEqual(crawl_mod.next_chunks('"static/chunks/a.js" "static/chunks/a.js"'),
+                         ["/_next/static/chunks/a.js"])
+
     def test_a_chunk_named_late_in_a_large_bundle_is_found(self):
         late = "x" * 1_500_000 + ' "static/chunks/late.js"'
         self.assertEqual(crawl_mod.next_chunks(late), ["/_next/static/chunks/late.js"])

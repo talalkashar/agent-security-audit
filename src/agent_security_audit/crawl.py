@@ -363,13 +363,19 @@ def _count(n, one):
 # static/chunks/ is bounded (real chunk paths are far shorter), so a hostile script full of "static/chunks/" starts
 # costs linear time, not quadratic.
 NEXT_CHUNK = re.compile(r"(?<![\w/.-])(?:/_next/)?static/chunks/[\w\-.~%@\[\]/]{1,200}?\.js\b")
+# Distinct chunk paths kept from one page or script. A real build manifest names a few hundred; a hostile 2 MB body
+# can name a hundred thousand. Far above exposure.MAX_SCRIPTS, so reaching it is always reported as a cut there.
+MAX_CHUNKS_PER_TEXT = 2000
 
 
 def next_chunks(text):
-    """Same-origin paths of Next.js chunks referenced in a page or script. The whole text is searched: the pattern
-    is linear and bodies stop at http.MAX_BODY, so a chunk named late in a large bundle is still fetched."""
-    out = []
+    """Same-origin paths of Next.js chunks referenced in a page or script, each once, in order. The whole text is
+    searched (the pattern is linear and bodies stop at http.MAX_BODY), so a chunk named late in a large bundle is
+    still fetched; at most MAX_CHUNKS_PER_TEXT distinct paths are kept."""
+    out = {}
     for m in NEXT_CHUNK.finditer(text):
         path = m.group(0)
-        out.append(path if path.startswith("/_next/") else "/_next/" + path)
-    return out
+        out[path if path.startswith("/_next/") else "/_next/" + path] = None
+        if len(out) >= MAX_CHUNKS_PER_TEXT:
+            break
+    return list(out)
