@@ -72,14 +72,14 @@ exit codes:
 
 
 def scan_flags(*, authorized, allow_supabase, auto_only, no_dns, dns_resolver, no_ports, rate_limit_path,
-               rate_limit_method, budget, max_time, max_pages, code, osv, insecure=False, checks=None, areas=None,
-               stacks=None, rate=None, exclude_path=None):
+               rate_limit_method, budget, max_time, max_pages, code, osv, insecure=False, max_depth=3, checks=None,
+               areas=None, stacks=None, rate=None, exclude_path=None):
     """The settings of a scan, as recorded in the report's scope block (CLI and MCP alike)."""
     return {"authorized": bool(authorized), "allow_supabase": bool(allow_supabase), "auto_only": bool(auto_only),
             "insecure": bool(insecure), "no_dns": bool(no_dns),
             "dns_resolver": None if no_dns else (dns_resolver or DEFAULT_RESOLVER), "no_ports": bool(no_ports),
             "rate_limit_path": rate_limit_path, "rate_limit_method": rate_limit_method, "budget": budget,
-            "max_time": max_time, "max_pages": max_pages, "checks": list(checks or []),
+            "max_time": max_time, "max_pages": max_pages, "max_depth": max_depth, "checks": list(checks or []),
             "areas": list(areas or []), "stacks": list(stacks or []), "code": code,
             "osv": bool(osv), "rate": rate or pacing.DEFAULT_RATE,
             "exclude_path": list(exclude_path or [])}
@@ -449,7 +449,8 @@ def _main(argv=None):
         flags = scan_flags(authorized=authorized, allow_supabase=args.allow_supabase, auto_only=args.auto_only,
                            no_dns=args.no_dns, dns_resolver=args.dns_resolver, no_ports=args.no_ports,
                            rate_limit_path=args.rate_limit_path, rate_limit_method=options["rate_limit_method"],
-                           budget=args.budget, max_time=args.max_time, max_pages=args.max_pages, code=args.code,
+                           budget=args.budget, max_time=args.max_time, max_pages=args.max_pages,
+                           max_depth=args.max_depth, code=args.code,
                            osv=not args.no_osv, insecure=args.insecure, checks=_csv(args.check),
                            areas=_csv(args.area), stacks=stacks, rate=args.rate, exclude_path=exclude.texts)
         scope = report.run_scope(interface="cli", mode="scan+code" if args.code else "scan", flags=flags,

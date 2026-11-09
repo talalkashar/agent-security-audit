@@ -368,6 +368,7 @@ class CliTest(StubCase):
         self.assertEqual(code, 0)
         data = json.loads(out)
         self.assertEqual(data["scope"]["flags"]["rate"], 5)
+        self.assertEqual(data["scope"]["flags"]["max_depth"], 3)
         self.assertEqual(data["scope"]["flags"]["exclude_path"], [r"/\.well-known/.*"])
         self.assertEqual(data["scope"]["pacing"]["excluded_not_sent"], 1)
         self.assertEqual(data["results"][0]["status"], "skip")
@@ -375,6 +376,9 @@ class CliTest(StubCase):
                          "--format", "md", "-q")
         self.assertIn("Rate: 20 requests/s", out)
         self.assertIn("Excluded paths:", out)
+        code, out, _ = call("scan", self.stub.url, "--check", "INFRA-05", "--max-depth", "0", "--format", "json", "-q")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["scope"]["flags"]["max_depth"], 0)
 
 
 class McpTest(StubCase):
@@ -385,7 +389,13 @@ class McpTest(StubCase):
     def test_bounds(self):
         for args in ({"rate": 0.05}, {"rate": 21}, {"rate": "2"}, {"rate": True}, {"exclude_path": ["/x"] * 21},
                      {"exclude_path": ["/admin/(a+)+"]}, {"exclude_path": ["*"]}, {"exclude_path": ["/" + "a" * 201]},
-                     {"exclude_path": "/admin/*"}, {"exclude_path": [r"/\.well-known/.*"]}):
+                     {"exclude_path": "/admin/*"}, {"exclude_path": [r"/\.well-known/.*"]},
+                     {"budget": 0}, {"budget": 2001}, {"budget": True},
+                     {"timeout": 0}, {"timeout": 61}, {"timeout": "10"},
+                     {"max_depth": -1}, {"max_depth": 21}, {"max_depth": True},
+                     {"insecure": "yes"}, {"target": self.stub.url + "\n"},
+                     {"rate_limit_body": "a" * 4097}, {"rate_limit_body": "ok\x00"},
+                     {"rate_limit_content_type": "a" * 129}, {"checks": ["X" * 33]}):
             with self.subTest(args=str(args)[:60]):
                 out = self.call(**args)
                 self.assertTrue(out["isError"], out)
@@ -404,6 +414,51 @@ class McpTest(StubCase):
         props = mcp_server.TOOLS_BY_NAME["run_scan"]["inputSchema"]["properties"]
         self.assertEqual((props["rate"]["minimum"], props["rate"]["maximum"]), (0.1, 20))
         self.assertEqual(props["exclude_path"]["maxItems"], 20)
+        self.assertEqual((props["max_depth"]["minimum"], props["max_depth"]["maximum"], props["max_depth"]["default"]),
+                         (0, 20, 3))
+        self.assertEqual((props["budget"]["minimum"], props["budget"]["maximum"], props["budget"]["default"]),
+                         (1, 2000, 300))
+        self.assertEqual((props["timeout"]["minimum"], props["timeout"]["maximum"], props["timeout"]["default"]),
+                         (1, 60, 10))
+        self.assertIs(props["insecure"]["default"], False)
+        self.assertEqual(props["rate_limit_content_type"]["maxLength"], 128)
+        self.assertEqual(props["rate_limit_content_type"]["default"], "application/json")
+        self.assertEqual(props["rate_limit_body"]["maxLength"], 4096)
+        self.assertEqual(props["target"]["maxLength"], 2048)
+
+    def test_rate_limit_body_may_contain_newlines(self):
+        out = self.call(rate_limit_body='{"password":"x"}\n')
+        self.assertFalse(out["isError"], out)
+
+    def test_depth_zero_and_budget_are_recorded(self):
+        out = self.call(max_depth=0, budget=50, timeout=10, insecure=True)
+        self.assertFalse(out["isError"], out)
+        flags = json.loads(out["content"][1]["text"])["scope"]["flags"]
+        self.assertEqual(flags["max_depth"], 0)
+        self.assertEqual(flags["budget"], 50)
+        self.assertIs(flags["insecure"], True)
+
+    def test_knobs_reach_the_runner(self):
+        mcp_server.session["protocol"] = mcp_server.LATEST
+        with mock.patch.object(runner, "run", return_value=("http://127.0.0.1:9", [])) as run:
+            res = mcp_server.call_tool({"name": "run_scan", "arguments": {
+                "target": "http://127.0.0.1:9", "max_depth": 0, "budget": 50, "timeout": 10, "insecure": True,
+                "rate_limit_content_type": "text/plain"}})
+        self.assertFalse(res["isError"], res)
+        kw = run.call_args.kwargs
+        self.assertEqual((kw["budget"], kw["timeout"], kw["insecure"]), (50, 10, True))
+        self.assertEqual(kw["options"]["max_depth"], 0)
+        self.assertEqual(kw["options"]["rate_limit_content_type"], "text/plain")
+        flags = res["structuredContent"]["scope"]["flags"]
+        self.assertEqual((flags["max_depth"], flags["budget"], flags["insecure"]), (0, 50, True))
+        run.assert_called_once()
+
+    def test_insecure_public_host_is_refused_before_a_request(self):
+        res = mcp_server.call_tool({"name": "run_scan", "arguments": {
+            "target": "https://example.com", "insecure": True, "no_dns": True, "checks": ["INFRA-05"]}})
+        self.assertTrue(res["isError"], res)
+        self.assertIn("local", res["content"][0]["text"])
+        self.assertEqual(self.stub.total(), 0)
 
 
 class ProbePortPacedTest(unittest.TestCase):

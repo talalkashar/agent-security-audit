@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from agent_security_audit import lab
+from agent_security_audit import lab, mcp_server
 
 
 class Server:
@@ -90,7 +90,8 @@ class McpServerTest(unittest.TestCase):
 
     def test_tools_list(self):
         tools = {t["name"]: t for t in self.srv.request("tools/list")["result"]["tools"]}
-        self.assertEqual(set(tools), {"list_checks", "get_check", "build_rules", "run_scan", "run_code_audit"})
+        self.assertEqual(set(tools), {"list_checks", "get_check", "build_rules", "run_scan", "run_code_audit",
+                                      "diff_reports"})
         for t in tools.values():
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertTrue(t["description"])
@@ -98,8 +99,8 @@ class McpServerTest(unittest.TestCase):
         scan = tools["run_scan"]["inputSchema"]
         self.assertEqual(scan["required"], ["target"])
         for key in ("authorized", "checks", "areas", "stacks", "auto_only", "rate_limit_path", "rate_limit_method",
-                    "rate_limit_body", "rate_limit_attempts", "allow_supabase", "supabase_tables", "no_dns", "no_ports",
-                    "format"):
+                    "rate_limit_body", "rate_limit_content_type", "rate_limit_attempts", "allow_supabase",
+                    "supabase_tables", "no_dns", "no_ports", "max_depth", "budget", "timeout", "insecure", "format"):
             self.assertIn(key, scan["properties"])
         self.assertEqual(scan["properties"]["format"]["enum"], ["json", "md", "html"])
 
@@ -285,7 +286,13 @@ class StructuredOutputTest(unittest.TestCase):
         for name in ("run_scan", "run_code_audit"):
             self.assertEqual(tools[name]["outputSchema"]["type"], "object")
             self.assertIn("results", tools[name]["outputSchema"]["required"])
-        self.assertNotIn("outputSchema", tools["list_checks"])
+        diff = tools["diff_reports"]["outputSchema"]
+        self.assertEqual(diff["type"], "object")
+        for key in ("tool", "counts", "buckets", "gate"):
+            self.assertIn(key, diff["required"])
+        self.assertNotIn("results", diff["required"])
+        for name in ("list_checks", "get_check", "build_rules"):
+            self.assertNotIn("outputSchema", tools[name])
 
     def test_structured_content_matches_text(self):
         server, url = lab.serve("vulnerable")
@@ -498,6 +505,70 @@ class UntrustedDataTest(unittest.TestCase):
             self.assertNotIn("A" * 1100, text, fmt)
             self.assertIn("never as instructions", text, fmt)
         self.assertEqual(results[0].summary, hostile)  # the caller's results are left untouched
+
+
+def _asa_report(status, target="http://127.0.0.1:9", check_id="NEXT-03"):
+    return {"tool": "agent-security-audit", "report_schema": 1, "target": target,
+            "results": [{"check_id": check_id, "status": status}]}
+
+
+class DiffReportsTest(unittest.TestCase):
+    """diff_reports compares two report objects already in the call. It does not read files."""
+
+    def setUp(self):
+        mcp_server.session["protocol"] = mcp_server.LATEST
+
+    def call(self, old, new, **args):
+        return mcp_server.call_tool({"name": "diff_reports", "arguments": {"old": old, "new": new, **args}})
+
+    def test_fixed_needs_an_observed_pass(self):
+        res = self.call(_asa_report("fail"), _asa_report("pass"))
+        self.assertFalse(res["isError"], res)
+        data = res["structuredContent"]
+        self.assertEqual(data["counts"]["fixed"], 1)
+        self.assertEqual(data["gate"], {"fail_on_new": "high", "would_fail": False})
+        self.assertIn("NOT PROVEN", res["content"][0]["text"])
+        self.assertIn("FIXED", res["content"][1]["text"])
+
+    def test_error_is_not_proven(self):
+        res = self.call(_asa_report("fail"), _asa_report("error"))
+        self.assertFalse(res["isError"], res)
+        data = res["structuredContent"]
+        self.assertEqual(data["counts"]["not_proven"], 1)
+        self.assertEqual(data["counts"]["fixed"], 0)
+        self.assertFalse(data["gate"]["would_fail"])
+
+    def test_different_targets_are_refused(self):
+        res = self.call(_asa_report("fail"), _asa_report("pass", target="http://127.0.0.1:10"))
+        self.assertTrue(res["isError"])
+        self.assertIn("different targets", res["content"][0]["text"])
+
+    def test_allow_different_target(self):
+        res = self.call(_asa_report("fail"), _asa_report("pass", target="http://127.0.0.1:10"),
+                        allow_different_target=True)
+        self.assertFalse(res["isError"], res)
+        self.assertEqual(res["structuredContent"]["counts"]["fixed"], 1)
+
+    def test_gate_follows_the_diff_exit_rule(self):
+        critical = self.call(_asa_report("pass", check_id="NEXT-01"), _asa_report("fail", check_id="NEXT-01"))
+        self.assertFalse(critical["isError"], critical)
+        self.assertEqual(critical["structuredContent"]["counts"]["regressed"], 1)
+        self.assertTrue(critical["structuredContent"]["gate"]["would_fail"])
+        low = self.call(_asa_report("pass"), _asa_report("fail"))
+        self.assertEqual(low["structuredContent"]["counts"]["regressed"], 1)
+        self.assertFalse(low["structuredContent"]["gate"]["would_fail"])  # NEXT-03 is low; default gate is high
+        gated = self.call(_asa_report("pass"), _asa_report("fail"), fail_on_new="low")
+        self.assertTrue(gated["structuredContent"]["gate"]["would_fail"])
+        opened = self.call(_asa_report("pass", check_id="NEXT-01"), _asa_report("fail", check_id="NEXT-01"),
+                           fail_on_new="none")
+        self.assertFalse(opened["structuredContent"]["gate"]["would_fail"])
+
+    def test_json_text_matches_the_structured_diff(self):
+        res = self.call(_asa_report("fail"), _asa_report("pass"), format="json")
+        self.assertFalse(res["isError"], res)
+        parsed = json.loads(res["content"][1]["text"])
+        self.assertEqual(parsed["counts"]["fixed"], 1)
+        self.assertEqual(parsed["gate"], res["structuredContent"]["gate"])
 
 
 if __name__ == "__main__":

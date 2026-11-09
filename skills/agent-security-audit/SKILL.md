@@ -34,6 +34,7 @@ This skill works in any agent. Use whatever your agent offers to run a shell com
 | `asa rules --stack ...` | `build_rules` |
 | `asa scan <url> [--code .]` | `run_scan` (`target`, `code_path`) |
 | `asa code .` | `run_code_audit` (`path`) |
+| `asa diff OLD.json NEW.json` | `diff_reports` (`old`, `new` report objects) |
 
 To read files, use your agent's file reading tool, or `cat`/`grep` in a shell. For browser steps, any headless browser automation works (Playwright, Puppeteer, or the agent's built-in browser in headless mode).
 
@@ -112,6 +113,7 @@ For CI or GitHub code scanning, `asa scan <url> --format sarif --out asa.sarif`.
 
 1. For each `fail`, apply the check's build rule (`asa show <ID>`). Change only what the fix needs.
 2. Re-run the proof for that check: `asa scan <url> --check <ID>`, or repeat the assisted steps.
-3. Repeat until it passes, or until it is clear the fix needs the user (a dashboard setting, a DNS record, a key rotation). Then hand it over with exact steps.
-4. If a secret was exposed (NEXT-01, INFRA-04), tell the user to rotate it. Removing it from the code is not enough.
-5. Finish with a full `asa scan <url>` so the final report reflects the final code.
+3. Compare the two JSON reports with `asa diff before.json after.json` (MCP: `diff_reports`). FIXED needs an observed pass. error, manual, skip or missing is NOT PROVEN, never fixed.
+4. Repeat until it passes, or until it is clear the fix needs the user (a dashboard setting, a DNS record, a key rotation). Then hand it over with exact steps.
+5. If a secret was exposed (NEXT-01, INFRA-04), tell the user to rotate it. Removing it from the code is not enough.
+6. Finish with a full `asa scan <url>` so the final report reflects the final code.

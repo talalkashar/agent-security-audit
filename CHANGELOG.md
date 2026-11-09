@@ -4,7 +4,9 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 
 ## Unreleased
 
-Nothing yet.
+- MCP `run_scan` takes `max_depth` (0–20, default 3), `budget` (1–2000, default 300), `timeout` (1–60 seconds, default 10), `insecure` (local hosts only) and `rate_limit_content_type` (at most 128 characters, default `application/json`). Reports record `max_depth`. The budget cap is MCP-only: a scanned page can steer the agent; the CLI stays uncapped.
+- MCP tool `diff_reports` compares two in-memory asa JSON reports and does not read files. Different targets are refused unless `allow_different_target` is true. `gate.would_fail` follows `asa diff`'s exit rule. FIXED still needs an observed pass.
+- MCP string arguments are length-capped and reject control characters. `rate_limit_body` may contain newlines.
 
 ## 0.2.0 - unreleased draft (set the date when the release is tagged)
 

@@ -261,8 +261,13 @@ The tool runs where you point it; the scope gate limits what it sends, not wheth
   `instructions` say the same (`UNTRUSTED_NOTE`, `INSTRUCTIONS` in `mcp_server.py`).
 - The Markdown, HTML and SARIF renderers escape the same fields for their format (`_clean`, `_md_escape`, HTML escaping
   in `report.py`), so a value cannot start a new Markdown line, inject a link or add HTML.
-- The MCP `run_scan` tool takes the same `authorized`, `allow_supabase`, `no_dns`, `dns_resolver`, `no_ports` and
-  `no_osv` switches as the CLI, with the same refusals.
+- The MCP `run_scan` tool takes the same `authorized`, `allow_supabase`, `no_dns`, `dns_resolver`, `no_ports`,
+  `no_osv`, `max_depth`, `budget`, `timeout`, `insecure` and `rate_limit_content_type` switches as the CLI, with the
+  same refusals. `insecure` is still local hosts only. `budget` is capped at 2000 on MCP (the CLI is not) because a
+  scanned page can steer the agent. String arguments are length-capped and reject control characters;
+  `rate_limit_body` may contain newlines.
+- `diff_reports` compares two asa JSON reports passed in the call. It does not read files. Different targets are
+  refused unless `allow_different_target` is true. `gate.would_fail` follows the same rule as `asa diff`'s exit code.
 - Tool errors can quote target text too (a redirect address, a server's status line), so they are cleaned, capped at
   600 characters and labelled as untrusted in the same way (`_error_text` in `mcp_server.py`).
 - `authorized: true` is a statement by the caller. The server cannot check it; the tool description, the server
