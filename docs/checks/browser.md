@@ -148,7 +148,7 @@ Send `Referrer-Policy: strict-origin-when-cross-origin` site-wide (OWASP cheat s
 ### Proof test
 
 1. The tool fetches the home page, following same-origin redirects, and every HTML page the crawl reaches (up to `--max-pages`, default 25); the report names the worst page and how many pages share the result.
-2. Pass on every page: `Referrer-Policy` is `strict-origin-when-cross-origin`, `strict-origin`, `same-origin` or `no-referrer`. Repeated fields are one list: the last recognised token wins, and an unknown token is ignored.
+2. Pass on every page: the effective policy is `strict-origin-when-cross-origin`, `strict-origin`, `same-origin` or `no-referrer`. Repeated header fields are one list: the last recognised token wins, and an unknown token is ignored. A `<meta name="referrer">` replaces the header; the last meta whose content is a single policy keyword wins, and `never`, `always` and `origin-when-crossorigin` use their modern names. A comma-separated or padded content value is ignored.
 3. Fail: `unsafe-url` or `no-referrer-when-downgrade`. Warning: header missing (modern browsers default to `strict-origin-when-cross-origin`), `origin` or `origin-when-cross-origin`.
 
 ### Sources

@@ -242,6 +242,29 @@ class HeaderChecksTest(unittest.TestCase):
                 headers = tuple(("Referrer-Policy", value) for value in values)
                 self.assertEqual(browser.referrer(home_with(*headers)).status, want)
 
+    def test_referrer_meta_overrides_the_header(self):
+        # HTML applies the latest referrer meta after the header. One keyword; legacy names map; padding and lists do not.
+        def judge(header, metas, content_type="text/html"):
+            headers = [("Content-Type", content_type)]
+            if header is not None:
+                headers.append(("Referrer-Policy", header))
+            body = "<html><head>" + metas + "</head></html>"
+            return browser._referrer(resp(200, headers, body)).status
+
+        meta = '<meta name="referrer" content="{c}">'
+        self.assertEqual(judge("no-referrer", meta.format(c="unsafe-url")), "fail")
+        self.assertEqual(judge("unsafe-url", meta.format(c="no-referrer")), "pass")
+        self.assertEqual(judge("no-referrer", meta.format(c="ALWAYS")), "fail")
+        self.assertEqual(judge("unsafe-url", meta.format(c="never")), "pass")
+        self.assertEqual(judge("no-referrer", meta.format(c="origin-when-crossorigin")), "warn")
+        self.assertEqual(judge("no-referrer", meta.format(c="default")), "warn")
+        self.assertEqual(judge("unsafe-url", meta.format(c="unsafe-url, no-referrer")), "fail")
+        self.assertEqual(judge("no-referrer", meta.format(c=" unsafe-url")), "pass")
+        both = meta.format(c="unsafe-url") + meta.format(c="strict-origin")
+        self.assertEqual(judge("unsafe-url", both), "pass")
+        self.assertEqual(judge(None, meta.format(c="no-referrer")), "pass")
+        self.assertEqual(judge("no-referrer", meta.format(c="unsafe-url"), "application/json"), "pass")
+
     def test_nosniff_and_framing(self):
         self.assertEqual(browser.nosniff(home_with(("X-Content-Type-Options", "nosniff"))).status, "pass")
         self.assertEqual(browser.nosniff(home_with()).status, "fail")

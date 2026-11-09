@@ -31,6 +31,9 @@ SESSION_RUN_ON = re.compile(r"^s?sess|session|(auth|token)$")
 CSRF_WORDS = {"csrf", "xsrf", "csrftoken", "xsrftoken"}
 SAFE_REFERRER = {"no-referrer", "same-origin", "strict-origin", "strict-origin-when-cross-origin"}
 KNOWN_REFERRER = SAFE_REFERRER | {"no-referrer-when-downgrade", "origin", "origin-when-cross-origin", "unsafe-url"}
+# HTML's legacy referrer keywords. "default" is the browser's own default, handled separately.
+LEGACY_REFERRER = {"never": "no-referrer", "always": "unsafe-url",
+                   "origin-when-crossorigin": "origin-when-cross-origin"}
 NONCE_OR_HASH = ("'nonce-", "'sha256-", "'sha384-", "'sha512-")
 
 
@@ -45,17 +48,43 @@ META_ATTR = re.compile(r"""(?is)([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]
 META_IGNORED = ("frame-ancestors", "report-uri", "sandbox")
 
 
+def _meta_attrs(tag):
+    return {m.group(1).lower(): html.unescape(m.group(2) or m.group(3) or m.group(4) or "")
+            for m in META_ATTR.finditer(tag[5:])}
+
+
 def meta_csp(resp):
     """Policies delivered in <meta http-equiv="Content-Security-Policy" content="..."> on an HTML page."""
     if not is_html(resp):
         return []
     out = []
     for tag in META_TAG.findall(resp.text[:65536]):
-        attrs = {m.group(1).lower(): html.unescape(m.group(2) or m.group(3) or m.group(4) or "")
-                 for m in META_ATTR.finditer(tag[5:])}
+        attrs = _meta_attrs(tag)
         if attrs.get("http-equiv", "").strip().lower() == "content-security-policy" and attrs.get("content", "").strip():
             out.append(attrs["content"].strip())
     return out
+
+
+def _referrer_metas(resp):
+    """Referrer policies from <meta name=referrer>, in document order.
+
+    HTML applies the latest one after the header. The content must be one keyword, so a comma list or
+    surrounding spaces do not count. Legacy keywords are mapped to the modern names.
+    """
+    if not is_html(resp):
+        return []
+    found = []
+    for tag in META_TAG.findall(resp.text[:65536]):
+        attrs = _meta_attrs(tag)
+        if attrs.get("name", "").lower() != "referrer":
+            continue
+        raw = attrs.get("content", "")
+        if not raw:
+            continue
+        token = LEGACY_REFERRER.get(raw.lower(), raw.lower())
+        if token == "default" or token in KNOWN_REFERRER:
+            found.append(token)
+    return found
 
 
 def _csp_ev(resp):
@@ -306,26 +335,34 @@ def referrer(ctx):
 
 def _referrer(resp):
     # Fetch collects every Referrer-Policy field, in order. The last recognised token wins; unknown tokens are ignored.
+    # A later <meta name=referrer> replaces that policy. The last single-keyword meta wins.
     values = resp.get_all("referrer-policy")
     ev = [f"referrer-policy: {', '.join(values)}" if values else "referrer-policy: (not set)"]
-    if not any(value.strip() for value in values):
-        return warned("BROWSER-05", "No Referrer-Policy; modern browsers default to strict-origin-when-cross-origin, "
-                      "older ones may send full URLs.", ev)
+    metas = _referrer_metas(resp)
+    if metas:
+        ev.append('<meta name="referrer">: ' + ", ".join(metas))
     tokens = []
     for value in values:
         for token in value.split(","):
             token = token.strip().lower()
             if token in KNOWN_REFERRER:
                 tokens.append(token)
-    if not tokens:
+    effective = metas[-1] if metas else (tokens[-1] if tokens else None)
+    where = '<meta name="referrer">' if metas else "Referrer-Policy"
+    if effective is None:
+        if not any(value.strip() for value in values):
+            return warned("BROWSER-05", "No Referrer-Policy; modern browsers default to strict-origin-when-cross-origin, "
+                          "older ones may send full URLs.", ev)
         return warned("BROWSER-05", "Referrer-Policy has no value browsers recognise, so they use their default; set "
                       "strict-origin-when-cross-origin.", ev)
-    effective = tokens[-1]
+    if effective == "default":
+        return warned("BROWSER-05", f"{where} sets the browser default. Modern browsers use "
+                      "strict-origin-when-cross-origin; older ones may send full URLs.", ev)
     if effective in SAFE_REFERRER:
-        return passed("BROWSER-05", f"Referrer-Policy is {effective}.", ev)
+        return passed("BROWSER-05", f"{where} is {effective}.", ev)
     if effective in ("unsafe-url", "no-referrer-when-downgrade"):
-        return failed("BROWSER-05", f"Referrer-Policy {effective} sends full URLs (with tokens in them) to other sites.", ev)
-    return warned("BROWSER-05", f"Referrer-Policy {effective} sends the origin to other sites; "
+        return failed("BROWSER-05", f"{where} {effective} sends full URLs (with tokens in them) to other sites.", ev)
+    return warned("BROWSER-05", f"{where} {effective} sends the origin to other sites; "
                   "strict-origin-when-cross-origin is the usual choice.", ev)
 
 
