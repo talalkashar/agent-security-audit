@@ -7,6 +7,8 @@ Runs from a temporary folder so nothing is imported from src/. Only 127.0.0.1 is
 
 import json
 import os
+import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -16,7 +18,13 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PORT = 8642
+
+
+def free_port():
+    # A fixed port could already be taken; then a foreign server would answer the readiness probe and get scanned.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def tool(bindir, name):
@@ -28,7 +36,10 @@ def tool(bindir, name):
 
 def run(cmd, cwd, **kw):
     print("$", " ".join(cmd), flush=True)
-    return subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True, timeout=300, **kw)
+    # UTF-8 both ways, so Windows' legacy code page cannot garble or reject non-ASCII output (SKILL.md, check text).
+    env = dict(os.environ, PYTHONUTF8="1")
+    return subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8", timeout=300,
+                          env=env, **kw)
 
 
 def wait_ready(url, proc):
@@ -44,8 +55,9 @@ def wait_ready(url, proc):
 
 
 def scan_lab(asa, cwd, mode):
-    url = f"http://127.0.0.1:{PORT}"
-    lab = subprocess.Popen([asa, "lab", "--mode", mode, "--port", str(PORT)], cwd=cwd,
+    port = free_port()
+    url = f"http://127.0.0.1:{port}"
+    lab = subprocess.Popen([asa, "lab", "--mode", mode, "--port", str(port)], cwd=cwd,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         wait_ready(url + "/", lab)
@@ -68,11 +80,24 @@ def main(argv):
         shown = run([asa, "--version"], cwd).stdout.strip()
         if not shown.endswith(version):
             sys.exit(f"asa --version printed {shown!r}, expected version {version}")
-        if len(run([asa, "list"], cwd).stdout.splitlines()) < 50:
-            sys.exit("asa list returned too few checks: is the catalog missing from the wheel?")
+        catalog = set()
+        for toml in (ROOT / "src" / "agent_security_audit" / "catalog").glob("*.toml"):
+            catalog |= {c["id"] for c in tomllib.loads(toml.read_text(encoding="utf-8")).get("check", [])}
+        listed = set(re.findall(r"(?m)^([A-Z]+-\d+)\s", run([asa, "list"], cwd).stdout))
+        if listed != catalog:
+            sys.exit(f"asa list differs from the catalog (missing {sorted(catalog - listed)[:10]}): "
+                     "is a catalog .toml missing from the wheel?")
         if "AUTH-01" not in run([asa, "show", "AUTH-01"], cwd).stdout:
             sys.exit("asa show AUTH-01 did not print the check")
         run([mcp], cwd, stdin=subprocess.DEVNULL)
+        python = tool(bindir, "python")
+        where = run([python, "-c", "import agent_security_audit as m; print(m.__file__)"], cwd).stdout.strip()
+        if ROOT in Path(where).resolve().parents:
+            sys.exit(f"the package was imported from the source tree ({where}), not the wheel")
+        code = "import sys; from agent_security_audit import install; sys.stdout.write(install.skill_text())"
+        skill = run([python, "-c", code], cwd).stdout
+        if skill != (ROOT / "src" / "agent_security_audit" / "skill" / "SKILL.md").read_text(encoding="utf-8"):
+            sys.exit("the packaged skill/SKILL.md differs from the source (or is missing from the wheel)")
         vulnerable = scan_lab(asa, cwd, "vulnerable")
         fixed = scan_lab(asa, cwd, "fixed")
     print("vulnerable lab:", vulnerable, "\nfixed lab:", fixed)

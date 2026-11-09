@@ -7,3 +7,12 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+  # Hash-pinned tools the workflows install (ruff, build, setuptools, twine). Regenerate a file after editing its .in:
+  # uv pip compile <name>.in --generate-hashes --universal --python-version 3.11 -o <name>.txt
+  - package-ecosystem: pip
+    directory: /.github/requirements
+    schedule:
+      interval: weekly
+    groups:
+      ci-tools:
+        patterns: ["*"]

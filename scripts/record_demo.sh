@@ -51,7 +51,13 @@ type_cmd() {
 # scratch folder's absolute path back into the relative one that was typed.
 run() {
   type_cmd "$*"
-  script -q /dev/null "$@" | sed -e "s#$real/##g" -e "s#$real#.#g"
+  if script --version >/dev/null 2>&1; then
+    # util-linux script (Linux) takes the command as one string after -c.
+    script -q -e -c "$(printf '%q ' "$@")" /dev/null
+  else
+    # BSD script (macOS) takes the command as arguments after the output file.
+    script -q /dev/null "$@"
+  fi | sed -e "s#$real/##g" -e "s#$real#.#g"
   sleep 2.5
 }
 

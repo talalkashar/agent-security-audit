@@ -271,6 +271,10 @@ BLOCKS = (
 )
 
 
+class MarkerError(Exception):
+    """A generated block's start or end marker is gone from the file that should hold it."""
+
+
 def _replace_block(text, start, end, body):
     if start not in text or end not in text:
         return None
@@ -309,20 +313,22 @@ def outputs():
     skill_path = "skills/agent-security-audit/SKILL.md"
     skill = _replace_block((ROOT / skill_path).read_text(encoding="utf-8"), SKILL_START, SKILL_END,
                            skill_coverage(checks, automated))
-    if skill is not None:
-        files[skill_path] = skill
-        files["src/agent_security_audit/skill/SKILL.md"] = skill
+    # A lost marker must stop the run: skipping the file would leave stale counts and still say "up to date".
+    if skill is None:
+        raise MarkerError(f"{skill_path} is missing {SKILL_START} or {SKILL_END}")
+    files[skill_path] = skill
+    files["src/agent_security_audit/skill/SKILL.md"] = skill
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    if START in readme and END in readme:
-        head, rest = readme.split(START, 1)
-        tail = rest.split(END, 1)[1]
-        readme = head + readme_block(checks) + tail
-        for start, end, render in BLOCKS:
-            readme = _replace_block(readme, start, end, render(checks, automated))
-            if readme is None:
-                break
-        else:
-            files["README.md"] = readme
+    if START not in readme or END not in readme:
+        raise MarkerError(f"README.md is missing {START} or {END}")
+    head, rest = readme.split(START, 1)
+    readme = head + readme_block(checks) + rest.split(END, 1)[1]
+    for start, end, render in BLOCKS:
+        replaced = _replace_block(readme, start, end, render(checks, automated))
+        if replaced is None:
+            raise MarkerError(f"README.md is missing {start} or {end}")
+        readme = replaced
+    files["README.md"] = readme
     return files
 
 
@@ -330,7 +336,12 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     check_only = "--check" in argv
     stale = []
-    for rel, text in outputs().items():
+    try:
+        files = outputs()
+    except MarkerError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for rel, text in files.items():
         path = ROOT / rel
         current = path.read_text(encoding="utf-8") if path.exists() else None
         if current == text:

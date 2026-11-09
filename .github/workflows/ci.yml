@@ -18,15 +18,16 @@ jobs:
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - run: pip install ruff==0.17.4
-      # ruff is pinned so a new release with different defaults cannot break CI on its own.
+      # ruff is pinned (with hashes) so a new release with different defaults cannot break CI on its own.
+      - run: python -m pip install --require-hashes -r .github/requirements/lint.txt
       - run: ruff check .
 
   test:
@@ -45,7 +46,7 @@ jobs:
         # bash exists on all three runners (Git Bash on Windows), so one script works everywhere.
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -74,20 +75,30 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - run: python -m pip install build==1.6.1 twine==7.0.0
-      - run: python -m build
+      - name: Version files agree
+        run: python scripts/release_version.py
+      # The build backend comes from the hash-pinned file too (--no-isolation), not a fresh unpinned setuptools.
+      - run: python -m pip install --require-hashes -r .github/requirements/build.txt
+      - run: python -m build --no-isolation
       - run: python -m twine check --strict dist/*
       - name: Install the wheel into a clean venv
         run: |
           python -m venv "$RUNNER_TEMP/wheel-env"
           if [ -d "$RUNNER_TEMP/wheel-env/Scripts" ]; then bin="$RUNNER_TEMP/wheel-env/Scripts"; else bin="$RUNNER_TEMP/wheel-env/bin"; fi
-          "$bin/python" -m pip install dist/*.whl
+          # No index: the wheel alone must install (it has no dependencies) and nothing else can come in.
+          "$bin/python" -m pip install --no-index --no-deps dist/*.whl
           echo "WHEEL_BIN=$bin" >> "$GITHUB_ENV"
       - name: Smoke test the installed wheel (asa --version, asa lab scans)
         run: python scripts/smoke_wheel.py "$WHEEL_BIN"
+      - name: Lab end-to-end and catalog tests against the installed wheel, outside the source tree
+        run: |
+          mkdir "$RUNNER_TEMP/wheel-tests"
+          cp -R tests "$RUNNER_TEMP/wheel-tests/"
+          cd "$RUNNER_TEMP/wheel-tests"
+          "$WHEEL_BIN/python" -m unittest tests.test_lab_e2e tests.test_catalog
