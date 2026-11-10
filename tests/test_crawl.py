@@ -542,6 +542,22 @@ class EndpointChecksTest(unittest.TestCase):
 NEW = ("BROWSER-21", "BROWSER-22", "BROWSER-23", "API-19", "API-20", "API-21", "API-22", "API-23", "API-24")
 
 
+class HtmlTypeTest(unittest.TestCase):
+    def test_media_type_not_a_parameter_decides_html(self):
+        # "html" in a parameter (charset=html) used to mark the body as a page, so a meta policy in plain text
+        # was read as the page's Content-Security-Policy.
+        page = resp(200, [("Content-Type", "text/html; charset=utf-8")], "<html></html>")
+        self.assertTrue(crawl_mod.is_html(page))
+        xhtml = resp(200, [("Content-Type", "application/xhtml+xml")], "<html/>")
+        self.assertTrue(crawl_mod.is_html(xhtml))
+        plain = resp(200, [("Content-Type", "text/plain; charset=html")],
+                     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'">')
+        self.assertFalse(crawl_mod.is_html(plain))
+        self.assertEqual(browser.meta_csp(plain), [])
+        sniffed = resp(200, [], b"\n<!DOCTYPE html><html></html>")
+        self.assertTrue(crawl_mod.is_html(sniffed))
+
+
 class LabCrawlTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

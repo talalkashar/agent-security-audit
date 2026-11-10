@@ -180,7 +180,8 @@ class _PageParser(HTMLParser):
 
 
 def is_html(resp):
-    ctype = (resp.get("content-type") or "").lower()
+    """True when the media type is HTML. Parameters are ignored, so charset=html on text/plain is not a page."""
+    ctype = (resp.get("content-type") or "").split(";", 1)[0].strip().lower()
     if ctype:
         return "html" in ctype
     return resp.body[:200].lstrip().lower().startswith((b"<!doctype html", b"<html"))
