@@ -46,7 +46,7 @@ WRITES = (
 PRISMA = re.compile(r"\bprisma\.\w+\.(?:create|createMany|update|updateMany|upsert)\(\s*")
 DATA = re.compile(r"\b(?:data|create|update)\s*:\s*")
 # One fetch argument or one write payload may resolve this many names, total, across the whole recursion.
-# Spending the budget is "not proven", which the callers report as manual — never as a fixed URL or a safe write.
+# Spending the budget is "not proven", which the callers report as manual, never as a fixed URL or a safe write.
 _LOOKUP_BUDGET = 64
 # A destructuring pattern longer than this is left untraced. The old `[^}]*` scan backtracks over a long brace.
 _DESTRUCTURE = re.compile(r"\b(?:const|let|var)\s*\{([^{}]{0,400})\}\s*=\s*")
