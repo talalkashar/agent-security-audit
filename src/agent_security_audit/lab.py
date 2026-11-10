@@ -145,7 +145,8 @@ class LabHandler(BaseHTTPRequestHandler):
         for k, v in self._security_headers():
             self.send_header(k, v)
         for k, v in extra or []:
-            self.send_header(k, v)
+            # /redirect copies a decoded query value into Location; a CR or LF there would start a new header.
+            self.send_header(k, v.replace("\r", "").replace("\n", ""))
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)

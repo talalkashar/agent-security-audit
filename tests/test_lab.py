@@ -75,6 +75,25 @@ class LabTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_redirect_target_cannot_add_a_header(self):
+        import socket
+        for mode in lab.MODES:
+            server, _ = lab.serve(mode, 0)
+            try:
+                with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=3) as sock:
+                    sock.sendall(b"GET /redirect?url=/x%0d%0aX-Injected:%201 HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+                    head = b""
+                    while b"\r\n\r\n" not in head:
+                        chunk = sock.recv(4096)
+                        if not chunk:
+                            break
+                        head += chunk
+                self.assertIn(b"302", head.split(b"\r\n")[0], mode)
+                self.assertNotIn(b"\r\nX-Injected:", head, mode)
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def test_serve_rejects_unknown_mode(self):
         with self.assertRaises(ValueError):
             lab.serve("broken", 0)

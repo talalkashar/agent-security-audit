@@ -142,10 +142,10 @@ class WorkflowTest(unittest.TestCase):
         for wf in WORKFLOWS:
             for line in wf.read_text(encoding="utf-8").splitlines():
                 # The project itself (editable or the built wheel) is exempt: it has no dependencies to pin.
-                if "pip install" in line and "dist/*.whl" not in line and not line.endswith("install -e ."):
+                if "pip install" in line and "dist/*.whl" not in line and not line.endswith(" -e ."):
                     with self.subTest(workflow=wf.name, line=line.strip()):
                         self.assertIn("--require-hashes -r .github/requirements/", line)
-        for name in ("lint.txt", "build.txt"):
+        for name in ("lint.txt", "build.txt", "setuptools.txt"):
             text = (ROOT / ".github/requirements" / name).read_text(encoding="utf-8")
             pins = re.findall(r"(?m)^([\w.-]+)==\S+", text)
             with self.subTest(file=name):
