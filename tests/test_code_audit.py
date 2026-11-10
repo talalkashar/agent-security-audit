@@ -1141,6 +1141,20 @@ class HostileInputTest(unittest.TestCase):
         loose = {"routes": [{"src": "/(.*)", "key": "X-Content-Type-Options", "value": "nosniff"}]}
         self.assertEqual(audit_files({"vercel.json": json.dumps(loose)})["BROWSER-03"].status, "manual")
 
+    def test_crlf_files_read_like_lf_files(self):
+        # A project saved on Windows (or checked out with autocrlf) used to fail netlify.toml and misread _headers.
+        pp, coop = "Permissions-Policy: camera=()", "Cross-Origin-Opener-Policy: same-origin"
+        cases = {"netlify.toml": ('[[headers]]\n  for = "/*"\n  [headers.values]\n    X-Content-Type-Options = '
+                                  '"nosniff"\n', "BROWSER-03"),
+                 "_headers": (f"/a\n  {pp}\n/b\n  {coop}\n", "BROWSER-08")}
+        for rel, (text, cid) in cases.items():
+            got = []
+            for nl in ("\n", "\r\n"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    (Path(tmp) / rel).write_bytes(text.replace("\n", nl).encode())
+                    got.append(by_id(code_audit.run(tmp, osv=False)[1])[cid].status)
+            self.assertEqual(got[0], got[1], rel)
+
     def test_text_header_files_need_their_block(self):
         def status(rel, text):
             return audit_files({rel: text})["BROWSER-03"].status

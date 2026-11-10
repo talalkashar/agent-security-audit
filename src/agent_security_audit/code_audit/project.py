@@ -370,7 +370,9 @@ class Project:
                             self.oversized.add(rel)
                     raise OSError
                 data = full.read_bytes()
-                self._text[rel] = "" if b"\0" in data[:8192] else data.decode("utf-8", "replace")
+                # CRLF to LF: a file saved on Windows must parse like the same file saved anywhere else, and
+                # line numbers stay the same.
+                self._text[rel] = "" if b"\0" in data[:8192] else data.decode("utf-8", "replace").replace("\r\n", "\n")
             except OSError:
                 self._text[rel] = ""
         if rel in self.oversized:

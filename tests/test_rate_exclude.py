@@ -464,13 +464,16 @@ class McpTest(StubCase):
 class ProbePortPacedTest(unittest.TestCase):
     def test_closed_port_probe_is_paced(self):
         waits = []
-        with mock.patch.object(http, "_pause", waits.append):
+        # The refusal is instant here: Windows retries a refused connection for about 2 s, which already spends
+        # the 1 s delay before the second probe, so no pause would be needed.
+        refused = mock.patch.object(http.socket, "create_connection", side_effect=ConnectionRefusedError)
+        with mock.patch.object(http, "_pause", waits.append), refused:
             s = socket.socket()
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
             s.close()
             c = Client(f"http://127.0.0.1:{port}", delay=1)
-            c.probe_port(port)
+            self.assertEqual(c.probe_port(port), "closed")
             c.probe_port(port)
         self.assertEqual(len(waits), 1)
         self.assertGreater(waits[0], 0.9)

@@ -27,7 +27,9 @@ class InstallTest(unittest.TestCase):
         self.cwd = Path(tmp.name) / "project"
         self.home.mkdir()
         self.cwd.mkdir()
-        env = mock.patch.dict(os.environ, {"HOME": str(self.home), "APPDATA": str(self.home / "AppData")})
+        # Path.home() reads USERPROFILE on Windows and HOME elsewhere.
+        env = mock.patch.dict(os.environ, {"HOME": str(self.home), "USERPROFILE": str(self.home),
+                                           "APPDATA": str(self.home / "AppData")})
         env.start()
         self.addCleanup(env.stop)
         which = mock.patch.object(install.shutil, "which", lambda name: FAKE_MCP if name == "asa-mcp" else None)
