@@ -8,3 +8,11 @@ dist/
 .asa/
 research/
 .DS_Store
+
+# Local coding-tool files
+CLAUDE.md
+.claude/
+.cursor/
+.codex/
+.superset/
+.paradev/
