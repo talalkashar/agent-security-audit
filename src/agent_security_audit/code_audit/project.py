@@ -60,6 +60,9 @@ def read_git_index(data):
                 i += 1
                 c = data[i]
                 strip = ((strip + 1) << 7) | (c & 127)
+            # A strip past the previous name is a negative slice, which keeps a prefix and invents a path.
+            if strip > len(prev):
+                raise ValueError("git index path prefix is longer than the previous name")
             end = data.index(b"\0", i + 1)
             name = prev[:len(prev) - strip] + data[i + 1:end]
             pos = end + 1

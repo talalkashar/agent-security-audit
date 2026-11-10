@@ -11,6 +11,7 @@ import io
 import json
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
@@ -304,6 +305,29 @@ class GitIndexTest(unittest.TestCase):
         self.assertIn("untracked.ts:1:", results[0].evidence[0])
         self.assertIn("tracked in git", results[0].evidence[1])
         self.assertNotIn("hunter2", json.dumps(results[0].to_dict()))
+
+    def test_v4_strip_past_the_previous_name_is_not_trusted(self):
+        # A strip count longer than the previous path used to keep a tail of that path (a negative slice) and
+        # invent a filename. A malformed index is rejected, and the audit walks the tree instead.
+        def entry(name):
+            return struct.pack(">10I20sH", *([0] * 6), 0o100644, 0, 0, 0, b"\0" * 20, 0) + name
+
+        def index(second):
+            return b"DIRC" + struct.pack(">II", 4, 2) + entry(b"\x00abcdef\0") + entry(second)
+
+        self.assertEqual(project.read_git_index(index(bytes([3]) + b"xyz\0")), ["abcdef", "abcxyz"])
+        blob = index(bytes([8]) + b"x\0")  # strip 8 from the 6-byte name "abcdef" used to yield "abcdx"
+        with self.assertRaises(ValueError):
+            project.read_git_index(blob)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".git").mkdir()
+            (root / "abcdef").write_text("one\n")
+            (root / "abcdx").write_text("two\n")
+            (root / ".git" / "index").write_bytes(blob)
+            proj = project.Project(root)
+            self.assertNotIn("abcdx", proj.tracked)
+            self.assertEqual(proj.source, "file walk (.gitignore respected)")
 
 
 class UnitTest(unittest.TestCase):
