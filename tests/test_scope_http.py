@@ -6,8 +6,9 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
-from agent_security_audit import lab, runner, scope
-from agent_security_audit.http import Blocked, BudgetExceeded, Client, OffTarget, Response, challenge_of
+from agent_security_audit import catalog, lab, runner, scope
+from agent_security_audit.http import Blocked, BudgetExceeded, Client, OffTarget, Response, challenge_of, clean_header
+from agent_security_audit.model import errored, failed, passed, warned
 
 
 def resp(status=200, headers=()):
@@ -221,6 +222,14 @@ class ResponseTest(unittest.TestCase):
         latin = Response("http://x/", 200, "", [("Content-Type", "text/html; charset=latin-1")], b"caf\xe9")
         self.assertEqual(latin.text, "caf\u00e9")
 
+    def test_controls_in_a_header_become_one_space(self):
+        self.assertEqual(clean_header("a\r\nb\x00c"), "a b c")
+        self.assertEqual(clean_header("  a\r\n\tb  "), "a b")
+        response = Response("http://x/", 200, "", [("Set-Cookie", "a\r\nb"), ("Set-Cookie", "c\x00d")], b"")
+        self.assertEqual(response.get("set-cookie"), "a b")
+        self.assertEqual(response.get_all("Set-Cookie"), ["a b", "c d"])
+        self.assertEqual(response.get_all("missing"), [])
+
 
 class ClientTest(unittest.TestCase):
     def test_refuses_off_origin(self):
@@ -375,6 +384,57 @@ class RunnerTest(unittest.TestCase):
             runner.select(ids=["NOPE-01"])
         _, results = runner.run("http://localhost:9", ids=["AUTH-01"])
         self.assertEqual([r.status for r in results], ["manual"])
+
+    def test_utc_now_is_a_whole_second(self):
+        self.assertRegex(runner.utc_now(), r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_network_is_needed_only_for_an_auto_check(self):
+        self.assertTrue(runner.check_ids_need_network(None, None, None))
+        self.assertTrue(runner.check_ids_need_network(["NEXT-01"], None, None))
+        self.assertTrue(runner.check_ids_need_network(["AUTH-01", "NEXT-01"], None, None))
+        self.assertFalse(runner.check_ids_need_network(["AUTH-01"], None, None))
+        self.assertFalse(runner.check_ids_need_network(None, ["auth"], None))
+        self.assertTrue(runner.check_ids_need_network(None, ["cms"], None))
+        with self.assertRaises(catalog.CatalogError):
+            runner.check_ids_need_network(["NOPE-99"], None, None)
+
+    def test_unrun_checks_say_manual_or_skip(self):
+        assisted = runner.manual_result(catalog.find("AUTH-01"))
+        self.assertEqual(assisted.status, "manual")
+        self.assertIn("logged-in test", assisted.summary)
+        self.assertIn("`asa code <path>`", assisted.summary)
+        self.assertIn("Proof steps: AUTH-01.", assisted.summary)
+        self.assertEqual(assisted.evidence, [catalog.find("AUTH-01").proof])
+        review = runner.manual_result(catalog.find("NEXT-12"))
+        self.assertEqual(review.status, "manual")
+        self.assertIn("check the code and config", review.summary)
+        self.assertNotIn("asa code", review.summary)
+        skipped = runner.probe_skipped(catalog.find("NEXT-01"))
+        self.assertEqual(skipped.status, "skip")
+        self.assertTrue(skipped.summary.startswith(runner.ACTIVE_SKIP))
+        self.assertIn("--authorized", skipped.summary)
+
+    def test_an_excluded_path_never_passes(self):
+        seen = failed("NEXT-01", "seen", ["e"])
+        self.assertIs(runner.excluded_result("NEXT-01", seen, "/secret", True), seen)
+        self.assertIs(runner.excluded_result("NEXT-01", seen, "/secret", False), seen)
+        weak = warned("NEXT-01", "weak")
+        self.assertIs(runner.excluded_result("NEXT-01", weak, "/secret", True), weak)
+        boom = errored("NEXT-01", "boom")
+        self.assertIs(runner.excluded_result("NEXT-01", boom, "/secret", False), boom)
+        held = runner.excluded_result("NEXT-01", None, "a\r\nb", False)
+        self.assertEqual(held.status, "skip")
+        self.assertIn("excluded by --exclude-path", held.summary)
+        self.assertIn("a b", held.summary)
+        self.assertNotIn("\n", held.summary)
+        asked = runner.excluded_result("NEXT-01", None, "/secret", True)
+        self.assertEqual(asked.status, "manual")
+        self.assertIn("cannot pass", asked.summary)
+        downgraded = runner.excluded_result("NEXT-01", passed("NEXT-01", "looked fine", ["hdr"]), "/secret", True)
+        self.assertEqual(downgraded.status, "manual")
+        self.assertEqual(downgraded.evidence, ["hdr"])
+        self.assertEqual(runner.excluded_result("NEXT-01", passed("NEXT-01", "looked fine"), "/secret", False).status,
+                         "skip")
 
 
 def serve_raw(answer):

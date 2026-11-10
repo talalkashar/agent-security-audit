@@ -173,5 +173,17 @@ class SarifTest(unittest.TestCase):
         self.assertEqual([r["partialFingerprints"] for r in a], [r["partialFingerprints"] for r in b])
 
 
+class CountLineTest(unittest.TestCase):
+    def test_counts_follow_the_status_words(self):
+        from agent_security_audit.model import Result
+        results = [Result("NEXT-01", "fail", "x"), Result("NEXT-01", "pass", "y"), Result("NEXT-01", "pass", "z")]
+        self.assertEqual(report.count_line(results), "1 fail · 0 warn · 0 error · 0 manual · 2 pass · 0 skip")
+        self.assertEqual(report.count_line([]), "0 fail · 0 warn · 0 error · 0 manual · 0 pass · 0 skip")
+        legend = report.status_legend()
+        self.assertIn("fail: a defense is missing; fix it", legend)
+        self.assertIn("pass: observed working", legend)
+        self.assertEqual(legend.count(" · "), 5)
+
+
 if __name__ == "__main__":
     unittest.main()

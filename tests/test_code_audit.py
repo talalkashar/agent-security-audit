@@ -346,6 +346,15 @@ class UnitTest(unittest.TestCase):
         self.assertTrue(ig.ignored("pkg/local.txt", False))
         self.assertFalse(ig.ignored("local.txt", False))
 
+    def test_test_paths_are_the_test_tree_and_the_suffix(self):
+        self.assertTrue(project.is_test_path("app.test.ts"))
+        self.assertTrue(project.is_test_path("tests/a.ts"))
+        self.assertTrue(project.is_test_path("src/__tests__/a.ts"))
+        self.assertTrue(project.is_test_path("e2e/login.spec.ts"))
+        self.assertFalse(project.is_test_path("src/testing/a.ts"))
+        self.assertFalse(project.is_test_path("src/latest.ts"))
+        self.assertFalse(project.is_test_path("src/contest/a.ts"))
+
     def test_split_sql_keeps_function_bodies(self):
         text = "create function f() returns void as $body$ begin; select 1; end; $body$ language plpgsql;\n" \
                "-- a comment; with a semicolon\nselect ';' ; /* block; */ select 2"

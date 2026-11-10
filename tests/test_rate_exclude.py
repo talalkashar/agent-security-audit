@@ -114,6 +114,15 @@ class StubCase(unittest.TestCase):
         return results[0], record
 
 
+class ParseRateTest(unittest.TestCase):
+    def test_rate_stays_between_a_tenth_and_twenty(self):
+        self.assertEqual(pacing.parse_rate(0.1), 0.1)
+        self.assertEqual(pacing.parse_rate("20"), 20.0)
+        for bad in (0.09, 20.01, "nan", "inf", "", None, "fast"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                pacing.parse_rate(bad)
+
+
 class PacingTest(StubCase):
     def test_rate_spaces_http_requests(self):
         c = Client(self.stub.url, delay=1 / 2)

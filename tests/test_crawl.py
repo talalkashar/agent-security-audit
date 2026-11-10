@@ -558,6 +558,15 @@ class HtmlTypeTest(unittest.TestCase):
         self.assertTrue(crawl_mod.is_html(sniffed))
 
 
+class ActiveContentTest(unittest.TestCase):
+    def test_media_is_not_active_content(self):
+        page = "http://h/"
+        self.assertTrue(crawl_mod.Resource(page, "script", "script", page + "a.js").active)
+        self.assertTrue(crawl_mod.Resource(page, "link", "style", page + "a.css").active)
+        self.assertTrue(crawl_mod.Resource(page, "iframe", "frame", page + "f").active)
+        self.assertFalse(crawl_mod.Resource(page, "video", "media", page + "a.mp4").active)
+
+
 class LabCrawlTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

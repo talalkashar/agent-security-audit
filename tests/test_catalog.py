@@ -75,6 +75,15 @@ class CatalogTest(unittest.TestCase):
         with self.assertRaises(catalog.CatalogError):
             catalog._parse("nextjs", raw)
 
+    def test_owasp_query_matches_a_listed_id(self):
+        self.assertTrue(catalog.owasp_query_valid("A03"))
+        self.assertTrue(catalog.owasp_query_valid(" api1 "))
+        self.assertTrue(catalog.owasp_query_valid("A03:2021"))
+        self.assertTrue(catalog.owasp_query_valid("API10:2023"))
+        self.assertFalse(catalog.owasp_query_valid("A99"))
+        self.assertFalse(catalog.owasp_query_valid("A03:1999"))
+        self.assertFalse(catalog.owasp_query_valid(""))
+
 
 if __name__ == "__main__":
     unittest.main()
