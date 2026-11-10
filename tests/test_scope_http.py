@@ -189,6 +189,23 @@ class PinnedAddressTest(unittest.TestCase):
                 c.external("GET", "https://resolver.example/dns-query")
         self.assertNotEqual(conn.return_value._create_connection, c._connect)
 
+    def test_empty_address_list_is_unresolved_once(self):
+        # An empty getaddrinfo answer used to return [] and then raise TypeError on connect, and a second
+        # lookup could answer with a different address after the scope check.
+        calls = []
+
+        def fake(host, *args, **kw):
+            calls.append(host)
+            return []
+
+        c = Client("http://empty.test:9", delay=0)
+        with mock.patch("socket.getaddrinfo", side_effect=fake):
+            with self.assertRaises(OSError):
+                c.addresses()
+            with self.assertRaises(OSError):
+                c._connect(("empty.test", 9), 1)
+        self.assertEqual(calls, ["empty.test"])
+
 
 class ResponseTest(unittest.TestCase):
     def test_charsets_no_browser_uses_decode_as_utf8(self):

@@ -248,11 +248,15 @@ class Client:
             raise
 
     def _addresses(self):
-        """Every address the target's host resolves to, in resolver order, looked up once per run."""
+        """Every address the target's host resolves to, in resolver order, looked up once per run.
+        An empty answer is cached and raised as OSError, so a later call cannot connect to a new address."""
         if not hasattr(self, "_all_addresses"):
             host = urlsplit(self.target).hostname
             self._all_addresses = list(dict.fromkeys(a[4][0] for a in socket.getaddrinfo(host, None,
                                                                                          type=socket.SOCK_STREAM)))
+        if not self._all_addresses:
+            host = urlsplit(self.target).hostname
+            raise OSError(f"{host} did not resolve to an address")
         return self._all_addresses
 
     def addresses(self):
@@ -270,7 +274,8 @@ class Client:
                 return socket.create_connection((ip, address[1]), timeout, source_address)
             except OSError as exc:
                 error = exc
-        raise error
+        # An empty address list leaves error as None; raise None is a TypeError, not a connection failure.
+        raise error or OSError("the host did not resolve to an address")
 
     def target_address(self):
         """The address port checks use: the first one, until a probe finds it unreachable from this machine (an IPv6
