@@ -1144,8 +1144,8 @@ class HostileInputTest(unittest.TestCase):
     def test_crlf_files_read_like_lf_files(self):
         # A project saved on Windows (or checked out with autocrlf) used to fail netlify.toml and misread _headers.
         pp, coop = "Permissions-Policy: camera=()", "Cross-Origin-Opener-Policy: same-origin"
-        cases = {"netlify.toml": ('[[headers]]\n  for = "/*"\n  [headers.values]\n    X-Content-Type-Options = '
-                                  '"nosniff"\n', "BROWSER-03"),
+        toml = '[[headers]]\n  for = "/*"\n  [headers.values]\n    X-Content-Type-Options = "nosniff"\n'
+        cases = {"netlify.toml": (toml, "BROWSER-03"),
                  "_headers": (f"/a\n  {pp}\n/b\n  {coop}\n", "BROWSER-08")}
         for rel, (text, cid) in cases.items():
             got = []
