@@ -235,7 +235,9 @@ def to_markdown(target, results, scope=None):
         "",
         f"**{count_line(results)}**",
         "",
-        status_legend(),
+        "| Status | Meaning |",
+        "|---|---|",
+        *[f"| `{status}` | {why} |" for status, why in STATUS_HELP],
         "",
         "## Fix these first",
         "",
@@ -333,35 +335,68 @@ def summary_text(target, results, hint="", width=100, next_step=""):
 
 
 HTML_CSS = """
-:root{--bg:#fff;--fg:#1b1f24;--muted:#57606a;--line:#d0d7de;--card:#f6f8fa;--fail:#cf222e;--warn:#9a6700;
---pass:#1a7f37;--manual:#0969da;--other:#6e7781}
-@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#8d96a0;--line:#30363d;--card:#161b22;
---fail:#ff7b72;--warn:#d29922;--pass:#3fb950;--manual:#58a6ff;--other:#8b949e}}
+:root{color-scheme:light dark;--bg:#f7f8fa;--fg:#17212f;--muted:#536171;--line:#d9dfe6;--card:#fff;
+--subtle:#eef1f5;--fail:#b42332;--warn:#855600;--pass:#15733b;--manual:#145fc0;--other:#536171}
+@media (prefers-color-scheme:dark){:root{--bg:#10151c;--fg:#edf2f7;--muted:#a6b3c3;--line:#343f4c;--card:#181f29;
+--subtle:#232d3a;--fail:#ff989d;--warn:#e8bd65;--pass:#73d69b;--manual:#89b9ff;--other:#a6b3c3}}
 *{box-sizing:border-box}
-body{margin:0 auto;max-width:72rem;padding:1.5rem 1rem 3rem;background:var(--bg);color:var(--fg);
-font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-h1{font-size:1.5rem;margin:0 0 .25rem;overflow-wrap:anywhere}h2{font-size:1.15rem;margin:2rem 0 .5rem}
-h3{font-size:1rem;margin:0 0 .25rem}.muted{color:var(--muted)}
-.counts{display:flex;flex-wrap:wrap;gap:.5rem;padding:0;margin:1rem 0;list-style:none}
-.counts li{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:.4rem .75rem}
-.counts b{font-size:1.2rem;margin-right:.25rem}
-table{border-collapse:collapse;width:100%;font-size:.9rem}
-th,td{border-bottom:1px solid var(--line);padding:.4rem .5rem;text-align:left;vertical-align:top}
-th{background:var(--card)}td.n{text-align:right;font-variant-numeric:tabular-nums}
-.wrap{overflow-x:auto}.cell{overflow-wrap:anywhere}
-.s{font-weight:600;text-transform:uppercase;font-size:.75rem;letter-spacing:.03em}
+body{margin:0 auto;max-width:72rem;padding:2.5rem 2rem 3rem;background:var(--bg);color:var(--fg);
+font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;overflow-wrap:anywhere}
+.masthead{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding-bottom:1.25rem;
+border-bottom:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+.brand{color:var(--fg);font-weight:650}.brand b{display:inline-block;background:var(--fg);color:var(--bg);
+padding:.1rem .45rem;border-radius:4px;margin-right:.5rem;font:600 1rem/1.5 ui-monospace,monospace}
+header{padding:2rem 0 .5rem}h1{font-size:2.5rem;line-height:1.15;letter-spacing:-.04em;margin:0 0 1rem}
+.target{margin:0 0 .5rem;font-size:.95rem}.target code{background:var(--subtle);padding:.25rem .5rem}
+header .muted{font-size:.8rem}h2{font-size:1.25rem;letter-spacing:-.02em;margin:2.5rem 0 .25rem}
+h3{font-size:1rem;line-height:1.5;margin:.65rem 0 .35rem}p{margin:.5rem 0 1rem}.muted{color:var(--muted)}
+.counts{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));padding:0;margin:1rem 0 0;list-style:none;
+background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.counts li{padding:1rem;border-right:1px solid var(--line)}.counts li:last-child{border:0}
+.counts b{display:block;font-size:2rem;line-height:1.2;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.count-label{font-weight:600;font-size:.85rem}.count-help{display:block;color:var(--muted);font-size:.7rem;
+line-height:1.5;margin-top:.4rem}
+table{border-collapse:collapse;width:100%;font-size:.85rem}
+th,td{border-bottom:1px solid var(--line);padding:.75rem;text-align:left;vertical-align:top}
+th{background:var(--subtle);font-weight:600}tbody tr:last-child td{border-bottom:0}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:8px;margin-top:1rem}
+.wrap:focus-visible,summary:focus-visible{outline:3px solid var(--manual);outline-offset:3px}
+.results td:nth-child(4){min-width:14rem}.results td:last-child{width:46%}.cell{overflow-wrap:anywhere}
+.s{font-weight:650;font-size:.75rem}
 .s-fail{color:var(--fail)}.s-warn{color:var(--warn)}.s-pass{color:var(--pass)}.s-manual{color:var(--manual)}
 .s-error,.s-skip{color:var(--other)}
-ol.first{padding-left:1.5rem}ol.first li{margin:.5rem 0}
-.item{border:1px solid var(--line);border-left:4px solid var(--other);border-radius:6px;padding:.75rem 1rem;
-margin:.75rem 0;break-inside:avoid}
+ol.first{list-style:none;padding:0;margin:1rem 0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;
+counter-reset:finding}ol.first>li{background:var(--card);border:1px solid var(--line);border-radius:8px;
+padding:1.25rem;counter-increment:finding}ol.first>li::before{content:counter(finding,decimal-leading-zero);
+float:right;color:var(--muted);font:12px/1.8 ui-monospace,monospace}
+.finding-meta{display:flex;align-items:center;gap:.5rem;font-size:.75rem}
+.severity{font-size:.7rem;font-weight:650;border:1px solid currentColor;border-radius:4px;padding:0 .4rem}
+.severity-critical,.severity-high{color:var(--fail)}.severity-medium{color:var(--warn)}
+.first p{font-size:.85rem;margin:.5rem 0 .75rem}.first details{border-top:1px solid var(--line);padding-top:.6rem}
+summary{cursor:pointer;font-size:.8rem;font-weight:600;padding:.35rem 0}details[open] summary{margin-bottom:.5rem}
+.item{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--other);border-radius:8px;
+padding:1rem 1.25rem;margin:.75rem 0;break-inside:avoid}
 .item.fail{border-left-color:var(--fail)}.item.warn{border-left-color:var(--warn)}
-pre{background:var(--card);border-radius:4px;padding:.5rem;margin:.25rem 0;white-space:pre-wrap;
-overflow-wrap:anywhere;font-size:.8rem}
-code{background:var(--card);border-radius:4px;padding:0 .25rem;font-size:.85em;overflow-wrap:anywhere}
-footer{margin-top:2rem;border-top:1px solid var(--line);padding-top:1rem}
-@media print{:root{--bg:#fff;--fg:#000;--muted:#444;--line:#bbb;--card:#f2f2f2}body{max-width:none;padding:0}
-h2{break-after:avoid}tr{break-inside:avoid}}
+pre{background:var(--subtle);border:1px solid var(--line);border-radius:4px;padding:.75rem;margin:.25rem 0;
+white-space:pre-wrap;overflow-wrap:anywhere;font-size:.8rem}
+code{background:var(--subtle);border-radius:3px;padding:.1rem .25rem;font:.85em/1.6 ui-monospace,SFMono-Regular,
+Consolas,monospace;overflow-wrap:anywhere}.scope{padding-left:1.25rem;font-size:.85rem}.scope li{margin:.5rem 0}
+footer{margin-top:2.5rem;border-top:1px solid var(--line);padding-top:1rem;font-size:.8rem;color:var(--muted)}
+@media(max-width:640px){body{padding:1.25rem 1rem 2rem}.masthead{font-size:.65rem}.brand b{font-size:.85rem}
+header{padding:1.5rem 0 .5rem}h1{font-size:2rem}.counts{grid-template-columns:repeat(3,minmax(0,1fr))}
+.counts li{padding:.75rem;border-bottom:1px solid var(--line)}.counts li:nth-child(3){border-right:0}
+.counts li:nth-child(n+4){border-bottom:0}.counts b{font-size:1.75rem}.count-help{font-size:.65rem}
+ol.first{grid-template-columns:1fr}.first>li{padding:1rem}h2{margin-top:2rem}
+.results thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.results,.results tbody,.results tr,.results td{display:block}.results tr{padding:.75rem;border-bottom:1px solid var(--line)}
+.results tr:last-child{border:0}.results td{display:grid;grid-template-columns:4.5rem minmax(0,1fr);gap:.5rem;
+border:0;padding:.2rem 0}.results td::before{content:attr(data-label);color:var(--muted);font-size:.75rem}
+.results td:nth-child(4){min-width:0}.results td:last-child{width:auto}}
+@media print{:root{color-scheme:light;--bg:#fff;--fg:#000;--muted:#444;--line:#bbb;--card:#fff;--subtle:#f2f2f2;
+--fail:#8e1620;--warn:#704900;--pass:#145c31;--manual:#164e94;--other:#444}body{max-width:none;padding:0;font-size:11px}
+h2{break-after:avoid}tr,ol.first>li{break-inside:avoid}ol.first{grid-template-columns:1fr}
+details>summary{display:none}details::details-content{content-visibility:visible}details>*{display:block!important}}
 """
 
 
@@ -390,32 +425,45 @@ def to_html(target, results, scope=None):
            "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'\">",
            '<meta name="referrer" content="no-referrer">',
            f"<title>Security proof report: {_h(target)}</title>", f"<style>{HTML_CSS}</style>", "</head>", "<body>",
-           f"<h1>Security proof report: {_h(target)}</h1>",
-           f'<p class="muted">Generated {_h(_now())} by agent-security-audit {_h(__version__)}.</p>',
-           '<ul class="counts">']
-    out += [f'<li class="s-{k}" title="{_h(why)}"><b>{c[k]}</b>{k}</li>' for k, why in STATUS_HELP]
-    out += ["</ul>", f'<p class="muted">{_h(status_legend())}</p>', "<h2>Fix these first</h2>"]
+           '<div class="masthead"><span class="brand"><b>asa</b> agent-security-audit</span>'
+           f'<span>Report / v{_h(__version__)}</span></div>',
+           '<main><header><h1>Security proof report</h1>',
+           f'<p class="target"><code>{_h(target)}</code></p>',
+           f'<p class="muted">Generated {_h(_now())} · Evidence from this run.</p></header>',
+           '<ul class="counts" aria-label="Results by status">']
+    out += [f'<li class="s-{k}"><b>{c[k]}</b><span class="count-label">{k}</span>'
+            f'<span class="count-help">{_h(why)}</span></li>' for k, why in STATUS_HELP]
+    out += ["</ul>", "<h2>Fix these first</h2>"]
     first = fix_first(results)
     if first:
+        out.append(f'<p class="muted">{len(first)} of {c["fail"]} failed checks · Most severe first. '
+                   'Expand a fix for the build rule.</p>')
         out.append('<ol class="first">')
         for r, chk, fix in first:
-            out.append(f"<li><b>{_h(chk.severity)}</b> {_h(r.check_id)} {_h(chk.title)}<br>"
-                       f'<span class="muted">{_h_inline(r.summary)}</span><br>Fix: {_h_inline(fix)}</li>')
+            out.append(f'<li><div class="finding-meta"><span class="severity severity-{_h(chk.severity)}">'
+                       f'{_h(chk.severity)}</span><code>{_h(r.check_id)}</code></div>'
+                       f'<h3>{_h(chk.title)}</h3><p>{_h_inline(r.summary)}</p>'
+                       f'<details><summary>How to fix {_h(r.check_id)}</summary>'
+                       f'<p>Fix: {_h_inline(fix)}</p></details></li>')
         out.append("</ol>")
     else:
         out.append("<p>Nothing failed.</p>")
-    out += ["<h2>Coverage by OSI layer</h2>", '<div class="wrap"><table>',
+    out += ["<h2>Coverage by OSI layer</h2>",
+            '<div class="wrap" role="region" aria-label="Coverage by OSI layer" tabindex="0"><table>',
             "<thead><tr><th>Layer</th><th>Pass</th><th>Fail</th><th>Warn</th><th>Manual</th></tr></thead><tbody>"]
     for n, row in layer_coverage(results).items():
         out.append(f"<tr><td>{n} {LAYERS[n]}</td>" + "".join(f'<td class="n">{row[k]}</td>' for k in LAYER_COLUMNS)
                    + "</tr>")
-    out += ["</tbody></table></div>", "<h2>All results</h2>", '<div class="wrap"><table>',
+    out += ["</tbody></table></div>", "<h2>All results</h2>",
+            '<div class="wrap"><table class="results">',
             "<thead><tr><th>Status</th><th>Severity</th><th>Layer</th><th>Check</th><th>Result</th></tr></thead>",
             "<tbody>"]
     for r in ordered:
         chk = checks[r.check_id]
-        out.append(f"<tr><td>{_status(r.status)}</td><td>{_h(chk.severity)}</td><td>{chk.layer}</td>"
-                   f'<td>{_h(r.check_id)} {_h(chk.title)}</td><td class="cell">{_h_inline(r.summary)}</td></tr>')
+        out.append(f'<tr><td data-label="Status">{_status(r.status)}</td>'
+                   f'<td data-label="Severity">{_h(chk.severity)}</td><td data-label="Layer">{chk.layer}</td>'
+                   f'<td data-label="Check">{_h(r.check_id)} {_h(chk.title)}</td>'
+                   f'<td data-label="Result" class="cell">{_h_inline(r.summary)}</td></tr>')
     out.append("</tbody></table></div>")
     details = [r for r in ordered if r.status in ("fail", "warn", "error")]
     if details:
@@ -429,10 +477,10 @@ def to_html(target, results, scope=None):
                 out += [f"<pre>{_h(e)}</pre>" for e in r.evidence[:20]]
             out += [f"<p>Fix: {_h_inline(r.fix or chk.build)}</p>", "</section>"]
     if scope:
-        out += ["<h2>Scope of this run</h2>", "<ul>"]
+        out += ["<h2>Scope of this run</h2>", '<ul class="scope">']
         out += [f"<li><b>{_h(label)}:</b> {_h(text)}</li>" for label, text in scope_lines(scope)]
         out.append("</ul>")
-    out += [f"<footer><p>{_h(DISCLAIMER)}</p></footer>", "</body>", "</html>"]
+    out += [f"<footer><p>{_h(DISCLAIMER)}</p></footer></main>", "</body>", "</html>"]
     return "\n".join(out) + "\n"
 
 
