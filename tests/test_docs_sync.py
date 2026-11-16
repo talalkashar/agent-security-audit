@@ -78,6 +78,7 @@ class DocsSyncTest(unittest.TestCase):
     def test_readme_screenshot_exists_and_is_small(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         images = re.findall(r"!\[[^\]]*\]\((docs/assets/[^)]+)\)", readme)
+        images += re.findall(r'(?:src|srcset)="(docs/assets/[^" ]+)"', readme)
         self.assertTrue(images, "README lost its report screenshot")
         for rel in images:
             path = ROOT / rel
