@@ -463,7 +463,7 @@ def to_html(target, results, scope=None):
         out.append(f'<tr><td data-label="Status">{_status(r.status)}</td>'
                    f'<td data-label="Severity">{_h(chk.severity)}</td><td data-label="Layer">{chk.layer}</td>'
                    f'<td data-label="Check">{_h(r.check_id)} {_h(chk.title)}</td>'
-                   f'<td data-label="Result" class="cell">{_h_inline(r.summary)}</td></tr>')
+                   f'<td data-label="Result" class="cell"><span>{_h_inline(r.summary)}</span></td></tr>')
     out.append("</tbody></table></div>")
     details = [r for r in ordered if r.status in ("fail", "warn", "error")]
     if details:
