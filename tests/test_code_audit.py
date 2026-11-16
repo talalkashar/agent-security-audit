@@ -345,6 +345,32 @@ class UnitTest(unittest.TestCase):
         self.assertNotIn(STRIPE, out)
         self.assertNotIn("correct-horse-battery", out)
 
+    def test_redact_generic_assigned_secret_keeps_no_characters(self):
+        # Synthetic values only, assembled at runtime. A generic value has no provider format, so none of it is kept.
+        short = "Qz" + "7kP1"  # 6 chars, the shortest value the pattern matches
+        mid = "Fk3Lw9" + "Rt2VbX8nM"  # 15 chars: mask() would keep the first 10
+        long = "zz-" + "synthetic-only-" * 4 + "end"
+        self.assertEqual((len(short), len(mid)), (6, 15))
+        cases = [
+            (f'const password = "{short}";', 'const password = "'),
+            (f"API_KEY='{mid}' # used by the worker", "API_KEY='"),
+            (f'  "authToken": "{long}",', '"authToken": "'),
+            (f"db_passwd: `{mid}`", "db_passwd: `"),
+        ]
+        for line, context in cases:
+            out = project.redact(line, limit=1000)
+            for value in (short, mid, long):  # no run of 4 characters from any value survives
+                for i in range(len(value) - 3):
+                    self.assertNotIn(value[i:i + 4], out, (line, out))
+            self.assertIn(context, out)
+            self.assertIn(project.REDACTED, out)
+        self.assertIn("# used by the worker", project.redact(f"API_KEY='{mid}' # used by the worker"))
+        # Unrelated context stays readable, and short or non-secret assignments are not touched.
+        plain = 'const label = "Checkout"; const tokenCount = 3; const pwd = "abc";'
+        self.assertEqual(project.redact(plain), plain)
+        # A provider-format secret is still masked by its own pattern outside an assignment.
+        self.assertIn(STRIPE[:10] + "...", project.redact(f'new Stripe("{STRIPE}")'))
+
     def test_lockfile_parsers(self):
         pnpm = ("lockfileVersion: '9.0'\n\npackages:\n\n  next@14.0.0:\n    resolution: {}\n\n"
                 "  '@supabase/ssr@0.5.1':\n    resolution: {}\n\nsnapshots:\n\n  react-dom@18.2.0(react@18.2.0):\n"

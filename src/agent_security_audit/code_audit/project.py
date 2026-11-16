@@ -256,14 +256,15 @@ def _clip(note, limit=300):
 
 ASSIGNED_SECRET = re.compile(r"""((?:secret|token|password|passwd|pwd|api[_-]?key|private[_-]?key|service[_-]?role)"""
                              r"""\w*["']?\s*[:=]\s*["'`])([^"'`\s]{6,})""", re.IGNORECASE)
+REDACTED = "[REDACTED]"  # a generic assigned value has no public prefix, so none of it is kept
 
 
 def redact(line, limit=160):
-    """One source line made safe to print: secret formats and quoted secret-looking values are masked."""
+    """One source line made safe to print: secret formats are masked, quoted secret-looking values are replaced."""
     for _, pattern in SECRET_PATTERNS:
         line = pattern.sub(lambda m: mask(m.group(0)), line)
     line = JWT.sub(lambda m: mask(m.group(0)), line)
-    line = ASSIGNED_SECRET.sub(lambda m: m.group(1) + mask(m.group(2)), line)
+    line = ASSIGNED_SECRET.sub(lambda m: m.group(1) + REDACTED, line)
     line = " ".join(line.split())
     return line if len(line) <= limit else line[:limit] + "..."
 
