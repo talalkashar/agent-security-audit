@@ -6,7 +6,7 @@ agent-security-audit has three parts you can use alone or together:
 - the agent skill (`skills/agent-security-audit/SKILL.md`) or the `AGENTS.md` guidance, which tell the agent when and how to use it;
 - the `asa-mcp` MCP server, for agents that prefer tools over shell commands.
 
-Every command on this page installs the published PyPI package. Commands an agent runs on its own (the MCP server through `uvx`) pin the release, `agent-security-audit==0.2.0`, so the agent never picks up a newer build you have not reviewed. Change the version in those lines when you upgrade.
+Install from the public Git repository. The package is not currently available on PyPI, so the registry-based `uvx --from agent-security-audit==0.2.0` examples below need a published package before they can run. After the source install, use `asa install <agent>` or configure the installed `asa-mcp` executable by its full path.
 
 Every path and command on this page comes from the agent's own documentation, linked in [Sources](#sources).
 
@@ -15,20 +15,22 @@ Every path and command on this page comes from the agent's own documentation, li
 Python 3.11 or newer. No dependencies.
 
 ```sh
-pipx install agent-security-audit
+pipx install git+https://github.com/talalkashar/agent-security-audit
 # or
-uv tool install agent-security-audit
+uv tool install git+https://github.com/talalkashar/agent-security-audit
 # or, without uv or pipx
-python3 -m pip install --user agent-security-audit
+python3 -m pip install --user git+https://github.com/talalkashar/agent-security-audit
 ```
 
-Add `==0.2.0` to any of them to pin the release. Check it: `asa --version`. The install also adds `agent-security-audit` (same as `asa`) and `asa-mcp`.
+Append `@<commit-sha>` to the Git URL to pin a reviewed revision. Check it: `asa --version`. The install also adds `agent-security-audit` (same as `asa`) and `asa-mcp`.
 
-Without installing anything, `uvx --from agent-security-audit==0.2.0 asa <command>` runs any command once.
+On macOS, `asa` can resolve to a system utility. If `asa --version` reports an illegal option, use `agent-security-audit --version` and put your uv or pipx executable directory first on `PATH`. The longer CLI name accepts the same commands.
+
+The registry-based one-off command, `uvx --from agent-security-audit==0.2.0 asa <command>`, is unavailable until the package is published. Use the installed CLI instead.
 
 Upgrade with `uv tool upgrade agent-security-audit` or `pipx upgrade agent-security-audit`.
 
-The latest code from source, unreleased and not pinned: `pipx install git+https://github.com/talalkashar/agent-security-audit`. Use a release for anything you rely on. How to verify a release file (checksums, provenance attestations, SBOM) is in [TRUST.md](TRUST.md#release-provenance).
+These commands install the latest source, which is not pinned. Use a reviewed commit for anything you rely on. How to verify a release file (checksums, provenance attestations, SBOM) is in [TRUST.md](TRUST.md#release-provenance).
 
 ## 2. The skill
 

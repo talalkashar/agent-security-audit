@@ -425,8 +425,8 @@ def to_html(target, results, scope=None):
            "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'\">",
            '<meta name="referrer" content="no-referrer">',
            f"<title>Security proof report: {_h(target)}</title>", f"<style>{HTML_CSS}</style>", "</head>", "<body>",
-           '<div class="masthead"><span class="brand"><b>asa</b> agent-security-audit</span>'
-           f'<span>Report / v{_h(__version__)}</span></div>',
+           ('<div class="masthead"><span class="brand"><b>asa</b> agent-security-audit</span>'
+            f'<span>Report / v{_h(__version__)}</span></div>'),
            '<main><header><h1>Security proof report</h1>',
            f'<p class="target"><code>{_h(target)}</code></p>',
            f'<p class="muted">Generated {_h(_now())} · Evidence from this run.</p></header>',
