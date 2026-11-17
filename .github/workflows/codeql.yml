@@ -3,8 +3,28 @@ name: codeql
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '**/*.png'
+      - '**/*.jpg'
+      - '**/*.jpeg'
+      - '**/*.gif'
+      - '**/*.webp'
+      - '**/*.avif'
+      - '**/*.ico'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '**/*.png'
+      - '**/*.jpg'
+      - '**/*.jpeg'
+      - '**/*.gif'
+      - '**/*.webp'
+      - '**/*.avif'
+      - '**/*.ico'
   schedule:
     - cron: "23 6 * * 1" # weekly, Monday 06:23 UTC
 
@@ -12,9 +32,8 @@ permissions:
   contents: read
 
 concurrency:
-  # One run per branch or PR; a new push cancels the stale run.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   analyze:
@@ -22,6 +41,7 @@ jobs:
     if: ${{ !github.event.repository.private }}
     name: CodeQL (python)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       security-events: write # upload the SARIF results to code scanning

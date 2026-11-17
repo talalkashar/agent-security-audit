@@ -3,8 +3,7 @@ name: scorecard
 # OpenSSF Scorecard grades the repo's supply-chain practices (pinned actions,
 # token permissions, branch protection, ...). It only publishes results and the
 # badge once the repository is public; on a private repo the run reports nothing.
-# publish_results only accepts a minimal workflow (no top-level env/defaults,
-# a fixed set of actions), so this file stays deliberately bare: no concurrency block.
+# publish_results requires no top-level env/defaults and an allow-listed set of actions.
 
 on:
   push:
@@ -15,12 +14,17 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analysis:
     # Public launch enables this job; private repositories need paid code-scanning access.
     if: ${{ !github.event.repository.private }}
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       security-events: write # upload SARIF to code scanning

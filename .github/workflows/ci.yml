@@ -5,14 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 3" # weekly, Wednesday 06:17 UTC
 
 permissions:
   contents: read
 
 concurrency:
-  # One run per branch or PR; a new push cancels the stale run.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   lint:
@@ -26,6 +28,8 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: .github/requirements/*.txt
       # ruff is pinned (with hashes) so a new release with different defaults cannot break CI on its own.
       - run: python -m pip install --require-hashes -r .github/requirements/lint.txt
       - run: ruff check .
@@ -33,13 +37,12 @@ jobs:
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
     timeout-minutes: 10
-    # Every supported Python on every GitHub-hosted OS. setup-python ships 3.11-3.14
-    # for ubuntu-latest, macos-latest (arm64) and windows-latest, so no combo is excluded.
+    # Push/PR checks use Linux; weekly and manual runs cover every supported OS and Python.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     defaults:
       run:
@@ -52,6 +55,8 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: .github/requirements/*.txt
       - name: Editable install
         run: |
           python -m pip install --require-hashes -r .github/requirements/setuptools.txt
@@ -72,7 +77,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
     defaults:
       run:
         shell: bash
@@ -83,6 +88,8 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: .github/requirements/*.txt
       - name: Version files agree
         run: python scripts/release_version.py
       # The build backend comes from the hash-pinned file too (--no-isolation), not a fresh unpinned setuptools.

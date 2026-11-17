@@ -4,13 +4,13 @@ Four workflows live in `.github/workflows/`. Every third-party action is pinned 
 
 ## ci.yml: lint and tests
 
-Runs on every push to `main` and on every pull request to `main`. A new push to the same PR cancels the run that is already going.
+Runs on every push to `main` and on every pull request to `main`, using ubuntu-latest only. Every Wednesday at 06:17 UTC, and on manual dispatch, it runs the full Linux, macOS and Windows matrix. A new run on the same ref cancels the earlier run. Pip downloads are cached using the hash-pinned requirements files. Documentation and Markdown changes still run CI because the tests validate them.
 
 | Job | What it guards |
 | --- | --- |
 | `Lint (ruff)` | `ruff check .` with ruff pinned at 0.17.4, so a new ruff release cannot break CI by itself. |
-| `Test (<os>, Python <ver>)` | 12 jobs: ubuntu-latest, macos-latest and windows-latest, each with Python 3.11, 3.12, 3.13 and 3.14. Each job runs `pip install -e .`, then `python -m unittest discover -s tests -v`, then smoke-tests the `asa` and `asa-mcp` entry points. |
-| `Wheel (<os>)` | 3 jobs, one per OS, Python 3.13. Builds the sdist and wheel (`build==1.6.1`), runs `twine check --strict`, installs the **wheel** (not an editable install) into a clean virtualenv, and runs `scripts/smoke_wheel.py` from a temporary folder: `asa --version` must match `pyproject.toml`, `asa list`, `asa show AUTH-01` and `asa-mcp` must work, and a scan of `asa lab` on 127.0.0.1 must fail checks in the vulnerable mode and none in the fixed mode. This catches package data missing from the wheel. |
+| `Test (<os>, Python <ver>)` | 4 jobs on push/PR: ubuntu-latest with Python 3.11, 3.12, 3.13 and 3.14. Weekly/manual runs expand to all 12 OS/Python combinations, including macos-latest and windows-latest. Each job runs `pip install -e .`, then `python -m unittest discover -s tests -v`, then smoke-tests the `asa` and `asa-mcp` entry points. |
+| `Wheel (<os>)` | 1 job on push/PR (ubuntu-latest), or 3 jobs on weekly/manual runs (one per OS), Python 3.13. Builds the sdist and wheel (`build==1.6.1`), runs `twine check --strict`, installs the **wheel** (not an editable install) into a clean virtualenv, and runs `scripts/smoke_wheel.py` from a temporary folder: `asa --version` must match `pyproject.toml`, `asa list`, `asa show AUTH-01` and `asa-mcp` must work, and a scan of `asa lab` on 127.0.0.1 must fail checks in the vulnerable mode and none in the fixed mode. This catches package data missing from the wheel. |
 
 The test steps run in `bash` on all three operating systems (Git Bash on Windows), so the same commands work everywhere. `fail-fast` is off, so one failing combination does not cancel the others.
 
@@ -36,7 +36,7 @@ Runs CodeQL for Python on push and pull request to `main`, and once a week (Mond
 
 Runs on push to `main`, once a week (Tuesday 07:41 UTC), and on manual dispatch. It grades supply-chain practices: pinned dependencies, token permissions, branch protection, code review, a security policy, and others. It uploads a SARIF file to code scanning and keeps it as a 5-day artifact. With `publish_results: true` (which needs `id-token: write`) it also publishes the score to the public Scorecard API and badge.
 
-`publish_results` only accepts a minimal workflow: no top-level `env` or `defaults`, and only an allow-listed set of actions. That is why this file has no `concurrency` block. Keep it bare.
+`publish_results` only accepts a minimal workflow: no top-level `env` or `defaults`, and only an allow-listed set of actions. A concurrency block cancels superseded runs without changing those restrictions.
 
 **Reading a failure**
 
