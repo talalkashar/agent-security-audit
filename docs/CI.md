@@ -75,7 +75,7 @@ git checkout --quiet -
 asa diff "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" --format md --out asa-diff.md
 ```
 
-The last step exits 1 when the pull request adds a new or regressed fail at `high` or above (`--fail-on-new` changes the level), and `asa-diff.md` is ready to post as a comment. Write the reports outside the project folder, as here, so the second audit does not read the first report. A finding that moved keeps its id; a renamed file shows as fixed plus new. See [Comparing two runs](../README.md#comparing-two-runs).
+The last step exits 1 when the pull request adds a new or regressed fail at `high` or above (`--fail-on-new` changes the level), and `asa-diff.md` is ready to post as a comment. Write the reports outside the project folder, as here, so the second audit does not read the first report. A finding that moves within a file keeps its ID. Renaming the file changes its identity, so the old finding can remain NOT PROVEN. See [Comparing two runs](../README.md#comparing-two-runs).
 
 ## JUnit and JSON Lines
 

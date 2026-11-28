@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-security-audit"
 version = "0.2.0"
-description = "Security checks a coding agent builds in and then proves on the running site."
+description = "Security checks for web projects with source locations, HTTP evidence and remediation steps. CLI, agent skill and MCP server."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

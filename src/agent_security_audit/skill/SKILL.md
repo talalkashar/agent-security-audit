@@ -15,15 +15,13 @@ Coverage: 126 checks (44 live proof tests, 31 read by the code audit (11 of them
 
 ## Setup
 
-Check the CLI is installed with `asa --version`. If it is not, install it:
+Check the CLI with `agent-security-audit --version`. From the root of a reviewed checkout of this tool, install it with Python 3.11+ and uv:
 
 ```sh
-pipx install agent-security-audit==0.2.0
-# or
-uv tool install agent-security-audit==0.2.0
+uv tool install .
 ```
 
-If neither `pipx` nor `uv` exists, use `python3 -m pip install --user agent-security-audit==0.2.0`; with only `uv`, `uvx --from agent-security-audit==0.2.0 asa <command>` runs a command without installing. It needs Python 3.11 or newer and has no dependencies.
+With pipx, use `pipx install .` in the same checkout. See the [source install guide](https://github.com/talalkashar/agent-security-audit/blob/main/docs/INSTALL.md) for installing from outside the checkout. The registry pin `agent-security-audit==0.2.0` requires a published release. Use the full CLI name if macOS resolves `asa` to its system utility.
 
 This skill works in any agent. Use whatever your agent offers to run a shell command (a terminal, shell or command tool). If you cannot run commands but the `agent-security-audit` MCP server is connected, use its tools instead; the rules below are the same:
 

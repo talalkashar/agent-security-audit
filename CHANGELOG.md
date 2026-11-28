@@ -4,6 +4,8 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 
 ## Unreleased
 
+- Added a source-only quickstart, report screenshots, and examples for reviewing a setting and verifying the fix.
+
 - MCP `run_scan` takes `max_depth` (0–20, default 3), `budget` (1–2000, default 300), `timeout` (1–60 seconds, default 10), `insecure` (local hosts only) and `rate_limit_content_type` (at most 128 characters, default `application/json`). Reports record `max_depth`. The budget cap is MCP-only: a scanned page can steer the agent; the CLI stays uncapped.
 - MCP tool `diff_reports` compares two in-memory asa JSON reports and does not read files. Different targets are refused unless `allow_different_target` is true. `gate.would_fail` follows `asa diff`'s exit rule. FIXED still needs an observed pass.
 - MCP string arguments are length-capped and reject control characters. `rate_limit_body` may contain newlines.
@@ -14,9 +16,9 @@ All notable changes to this project are listed here. Versions follow [Semantic V
 - NEXT-02 searches the whole saved source-map body for `"mappings"`. A key past the first 500 KB no longer passes, and a body cut off before the key is manual.
 - INFRA-06 fails an SPF record that matches every address with an `ip4` or `ip6` prefix of `/0` before `all`. `v=spf1 ip4:0.0.0.0/0 -all` no longer passes. A fail or softfail qualifier on that mechanism, and an `all` that comes first, still pass.
 
-## 0.2.0 - unreleased draft (set the date when the release is tagged)
+## 0.2.0 - unreleased
 
-The first release published to PyPI. 0.1.0 was never tagged or published; everything below is new since its changelog entry. Network behaviour that a reviewer should re-check is marked **(network)**.
+Planned first PyPI release. 0.1.0 was never tagged or published; everything below is new since its changelog entry. Network behaviour that a reviewer should re-check is marked **(network)**.
 
 ### Checks
 
