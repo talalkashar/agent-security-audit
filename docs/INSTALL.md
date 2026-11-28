@@ -59,12 +59,13 @@ that changed during installation. The scanner and MCP server still run on Window
 ```sh
 asa install cursor            # dry run: prints what it would add and where
 asa install cursor --yes      # writes it; a changed file is copied to <file>.bak first
-uvx --from agent-security-audit==0.2.0 asa install cursor --yes   # without installing
 ```
 
 Agents: `claude-code`, `claude-desktop`, `cursor`, `vscode`, `windsurf`, `codex`, `gemini`, `antigravity`. It merges one `agent-security-audit` entry into the agent's config and keeps every other server. A file that is not plain JSON (for example with comments) is never rewritten; it prints the entry to add by hand. An existing `agent-security-audit` entry with other settings is left as is. For Codex it appends one table to the end of `config.toml` and never rewrites the rest. It writes the installed `asa-mcp` by full path when it is a stable install (pipx, `uv tool`, a system or user install). When `asa-mcp` is not found, or sits in a temporary folder, a uv cache or a project virtualenv that may be deleted, or with `--uvx`, it writes `uvx --from agent-security-audit==0.2.0 asa-mcp` instead. The dry run prints the command it chose and why, and what it would write to each file is listed in [TRUST.md](TRUST.md#asa-install-only-with---yes).
 
-| Agent | File `asa install` writes | One-line alternative from the agent itself |
+The `uvx` alternatives and the Cursor link in this table require a published PyPI release. For the current source install, use the configuration below.
+
+| Agent | File `asa install` writes | Alternative after publication |
 |---|---|---|
 | Claude Code | `.mcp.json` in the current folder (project scope), plus the skill in `~/.claude/skills/` | `claude mcp add --scope user agent-security-audit -- uvx --from agent-security-audit==0.2.0 asa-mcp` |
 | Claude Desktop | macOS `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows `%APPDATA%\Claude\claude_desktop_config.json`; Linux `~/.config/Claude/claude_desktop_config.json` | none; restart Claude Desktop after the change |
@@ -83,42 +84,27 @@ cursor://anysphere.cursor-deeplink/mcp/install?name=agent-security-audit&config=
 
 ### Config shapes
 
-Claude Code (`.mcp.json`), Claude Desktop, Cursor, Gemini CLI, Antigravity and Windsurf:
+After the persistent CLI install, run `asa-mcp` from the client's PATH, or use the full executable path in place of `asa-mcp`. With a uv tool install on macOS or Linux, `echo "$(uv tool dir --bin)/asa-mcp"` prints that path. Merge the entry with any existing servers.
+
+Claude Code (`.mcp.json` in the project) and Cursor (`.cursor/mcp.json` in the project) use this JSON:
 
 ```json
 {
   "mcpServers": {
-    "agent-security-audit": {
-      "command": "uvx",
-      "args": ["--from", "agent-security-audit==0.2.0", "asa-mcp"]
-    }
+    "agent-security-audit": { "command": "asa-mcp", "args": [] }
   }
 }
 ```
 
-VS Code (`.vscode/mcp.json`):
-
-```json
-{
-  "servers": {
-    "agent-security-audit": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["--from", "agent-security-audit==0.2.0", "asa-mcp"]
-    }
-  }
-}
-```
-
-Codex (`~/.codex/config.toml`):
+Codex (`~/.codex/config.toml`) uses TOML:
 
 ```toml
 [mcp_servers.agent-security-audit]
-command = "uvx"
-args = ["--from", "agent-security-audit==0.2.0", "asa-mcp"]
+command = "asa-mcp"
+args = []
 ```
 
-With the CLI installed, `"command": "asa-mcp"` and no `args` works in each of them.
+VS Code uses the key `servers` and adds `"type": "stdio"` inside the server entry. Claude Desktop, Gemini CLI, Antigravity and Windsurf use the JSON shape above.
 
 The Claude Code plugin declares the server through the repository's `.mcp.json`, which runs `asa-mcp` from your `PATH`, so install the CLI first (step 1) when you use the plugin.
 
@@ -133,7 +119,7 @@ The Claude Code plugin declares the server through the repository's `.mcp.json`,
 | `run_code_audit` | Static audit of a project folder | `path` (required); `checks`, `areas`, `no_osv`, `format` |
 | `diff_reports` | Compare two asa JSON reports already in hand (no file read) | `old`, `new` (required); `allow_different_target`, `fail_on_new`, `format` |
 
-See the README's [Install as an MCP server](../README.md#install-as-an-mcp-server) for what each answer contains and what `allow_supabase` (ACCESS-01) sends.
+See [scope and safety](../README.md#scope-and-safety) for what the live scanner sends and the permissions its optional checks require.
 
 ## Publishing to PyPI (maintainer)
 

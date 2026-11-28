@@ -1,92 +1,46 @@
 # agent-security-audit
 
-**Security checks with evidence and fixes for your coding agent.**
-
-[![CI](https://github.com/talalkashar/agent-security-audit/actions/workflows/ci.yml/badge.svg)](https://github.com/talalkashar/agent-security-audit/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg) ![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)
-
-`asa` scans your running site and reads its source. Each finding includes the request, header, or `file:line` behind it, plus a fix. Use it from a terminal, as an agent skill, or through MCP.
-
-[Install](#install) · [Quick start](#quick-start) · [Agent setup](#agent-setup) · [Documentation](docs/README.md) · [Trust and data handling](docs/TRUST.md)
-
-<picture>
-  <source media="(max-width: 640px)" srcset="docs/assets/report-mobile.png">
-  <img src="docs/assets/report.png" alt="Real scan of the bundled practice site: 18 fail, 6 warn, 0 error, 85 manual, 0 pass, 17 skip, with the most severe findings first." width="1280">
-</picture>
-
-*An actual scan of the local practice site. The report is one HTML file, with light, dark, and print styles. [Reproduce this run](docs/assets/README.md).*
-
-## Install
-
-With [uv](https://docs.astral.sh/uv/getting-started/installation/):
-
-```sh
-uv tool install git+https://github.com/talalkashar/agent-security-audit
-asa --version
-```
-
-Or with [pipx](https://pipx.pypa.io/):
-
-```sh
-pipx install git+https://github.com/talalkashar/agent-security-audit
-```
-
-Python 3.11+, no runtime dependencies, no telemetry. These commands install the current source; append `@<commit-sha>` to the Git URL to pin a reviewed revision. The package is not currently on PyPI, so `agent-security-audit==0.2.0` registry installs and the release-based `uvx` examples below need a published package. See [installation and agent configuration](docs/INSTALL.md) for other setups, and [trust and data handling](docs/TRUST.md) for every network request and file write.
+Review a web project from your terminal or coding agent. See which security setting failed, where it lives, and how to fix it.
 
 ## Quick start
 
-From your project folder, with your dev server running:
+With Git and [uv](https://docs.astral.sh/uv/getting-started/installation/), paste this in an empty directory to install and check the bundled Next.js sample.
 
 ```sh
-asa scan http://localhost:3000 --code . --out asa-report.html
+git clone https://github.com/talalkashar/agent-security-audit &&
+cd agent-security-audit &&
+uv run --no-project --with . asa code tests/fixtures/code_vuln \
+  --check NEXT-02 --no-osv --out demo.html
 ```
 
-Open `asa-report.html` in your browser. It starts with the status totals and the failed checks to fix first, most severe first. Expand a fix for its build rule; the full results, evidence, and scope follow below. The report needs no server or internet connection to read.
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/source-finding-mobile.png">
+  <img src="docs/assets/source-finding.png" alt="NEXT-02 failed. The evidence points to productionBrowserSourceMaps set to true in next.config.js on line 2. The fix is to unset it or set it to false." width="760">
+</picture>
 
-No running site yet? Read the source on its own:
+Open `demo.html` to see the finding at `next.config.js:2`. The audit reads the sample locally and needs no server or account. Run the last command against `tests/fixtures/code_fixed` to see the check pass. [Recheck the fix, save a report, or get build rules for your stack](examples/README.md).
+
+## Install
+
+To keep the CLI available in other projects, install from GitHub with uv. The package requires Python 3.11 or newer.
 
 ```sh
-asa code . --out asa-report.html
+uv tool install git+https://github.com/talalkashar/agent-security-audit
 ```
 
-Look up a check or get build rules for your stack:
+Check with `agent-security-audit --version`. If your shell cannot find it, run `uv tool update-shell` and open a new terminal. On macOS, `/usr/bin/asa` is a different program. Use the full command name wherever this guide shows `asa` if they collide.
 
-```sh
-asa show AUTH-01
-asa rules --stack nextjs,supabase
-asa list --area auth
-```
+The source version is 0.2.0. A registry install of `agent-security-audit==0.2.0` needs a PyPI release. To pin a reviewed revision today, append `@<full-commit-sha>` to the Git URL. [Other install options](docs/INSTALL.md).
 
-Scans exit `1` when a failed check reaches the severity threshold (default: `high`). That means the report found something to address. See [output formats and exit codes](#output-formats).
+## Where it helps
 
-### Try the practice site
+- **Review a change.** Run `asa code .` in your web project. The static reader checks source, migrations and config without executing the application. Add `--no-osv` to keep package names and versions local.
+- **Check a deployment you own.** The live scanner records observations such as HTTP response headers. Read the request scope before running it against a service. [Scope and safety](#scope-and-safety).
+- **Set review criteria.** Use `asa rules` or the agent integration to bring build rules and manual review steps into a pull request. [Agent setup](#agent-setup).
 
-The package includes a deliberately vulnerable site bound to `127.0.0.1`. No accounts, API keys, or deployment are needed to try the lab. In one terminal:
+### Limits
 
-```sh
-asa lab
-```
-
-In a second terminal:
-
-```sh
-asa scan http://127.0.0.1:8642 --rate-limit-path /api/login --out asa-report.html
-```
-
-This run produces **18 fail, 6 warn, 0 error, 85 manual, 0 pass, 17 skip**. The screenshot above comes from this lab. Stop it with **Ctrl-C** in the first terminal, then start the same site with its defenses in place:
-
-```sh
-asa lab --mode fixed
-```
-
-Re-run the scan in the second terminal. It returns **0 fail, 0 warn, 0 error, 85 manual, 24 pass, 17 skip**. The manual checks still need code, a logged-in test, or a dashboard setting; a clean lab scan does not settle them. Stop the lab with **Ctrl-C** when finished.
-
-### Connect your agent
-
-```sh
-asa install claude-code   # preview the config change; add --yes to apply it
-```
-
-Then ask your agent: **"Run a security audit on my site."** See [agent setup](#agent-setup) for Codex, Cursor, Gemini CLI, Windsurf, the skill, and MCP.
+A setting in source shows what the project declares. Check the deployed response separately. Authorization between two users, dashboard settings and business logic can require human review. An incomplete check stays manual or reports an error. A passing report cannot certify a whole application.
 
 ## How to read results
 
@@ -186,53 +140,22 @@ Every check is also mapped to the OWASP Top 10 (2021 and 2025) and the OWASP API
 
 ## Agent setup
 
-Install the CLI from source first, then preview the configuration for your agent:
+After the persistent source install, run the preview for the client you use. Each command prints the destination and the server executable.
 
 ```sh
-asa install codex
 asa install claude-code
+asa install codex
 asa install cursor
 ```
 
-Choose one command and add `--yes` to apply it. A persistent source install lets the installer use the installed `asa-mcp` executable. It also copies the skill for Codex and Claude Code. More agents and exact configuration paths are in [the install guide](docs/INSTALL.md).
-
-**The skill, for any agent** that reads the [Agent Skills](https://agentskills.io) standard (Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, OpenCode, Windsurf, Cline, Goose, Amp and others), through the [`skills` installer](https://github.com/vercel-labs/skills). The skill runs the `asa` CLI, so [install it](#install) too:
-
-```sh
-npx skills add talalkashar/agent-security-audit
-```
-
-<details>
-<summary>MCP configuration reference for a published PyPI release</summary>
-
-The following `uvx` commands require the package on PyPI. Until then, use the source install and `asa install <agent>` above, or configure the installed `asa-mcp` by its full path.
-
-**The MCP server**, one line per agent:
-
-| Agent | One line |
-|---|---|
-| Claude Code | `/plugin marketplace add talalkashar/agent-security-audit` then `/plugin install agent-security-audit@agent-security-audit` (skill and server; the server needs the CLI installed) |
-| Claude Code (server only) | `claude mcp add --scope user agent-security-audit -- uvx --from agent-security-audit==0.2.0 asa-mcp` |
-| Codex | `codex mcp add agent-security-audit -- uvx --from agent-security-audit==0.2.0 asa-mcp` |
-| VS Code | `code --add-mcp '{"name":"agent-security-audit","type":"stdio","command":"uvx","args":["--from","agent-security-audit==0.2.0","asa-mcp"]}'` |
-| Cursor | `uvx --from agent-security-audit==0.2.0 asa install cursor --yes` |
-| Claude Desktop | `uvx --from agent-security-audit==0.2.0 asa install claude-desktop --yes` |
-| Gemini CLI | `uvx --from agent-security-audit==0.2.0 asa install gemini --yes` |
-| Antigravity | `uvx --from agent-security-audit==0.2.0 asa install antigravity --yes` |
-| Windsurf (Devin Desktop) | `uvx --from agent-security-audit==0.2.0 asa install windsurf --yes` |
-
-</details>
-
-`asa install <agent>` merges the server into that agent's config without touching other servers, and for `claude-code` and `codex` also copies the skill. Without `--yes` it only prints the change and which server command it chose; with it, a changed file is first backed up to a new private file (`<file>.bak`, then `.bak.1` and so on; an earlier backup is never overwritten). It writes the installed `asa-mcp` when that is a stable install (pipx, `uv tool`, a system install), and otherwise the pinned `uvx --from agent-security-audit==0.2.0 asa-mcp`, so a config never points into a temporary folder or a project virtualenv. Automatic file writes need macOS/Linux directory-handle support; on Windows, omit `--yes` and add the printed configuration by hand. The scanner and MCP server still work there. Restart the agent afterwards. Cursor also takes a one-click install link, and every config file is shown in [docs/INSTALL.md](docs/INSTALL.md).
-
-Source installs follow the repository. Pin a reviewed commit for anything you rely on.
+If the preview shows the installed `asa-mcp` path, repeat your command with `--yes` to apply it. A preview showing `uvx` needs a published registry package. For that case, point the client at the full path to the installed executable from `uv tool dir --bin`. [Copy-paste MCP configuration for Claude Code, Codex and Cursor](docs/INSTALL.md#config-shapes).
 
 ## Build mode
 
 Use it while the site is being written.
 
 1. Run `asa rules --stack nextjs,supabase,vercel` (drop the parts of the stack you do not use) and give the output to the agent, or let the skill do it.
-2. The agent follows every rule as it writes code: server-side identity checks, row-level security on every table, rate limits on login and signup, security headers, no secrets in client code, and the rest.
+2. Review the applicable rules as you write code: server-side identity checks, row-level security on every table, rate limits on login and signup, security headers, no secrets in client code, and the rest.
 3. When a rule cannot be followed, the agent says so and records which check ID is affected.
 
 ## Verify mode
@@ -242,7 +165,7 @@ Use it before launch and after any change to auth, data access or hosting.
 1. Start the site (`npm run dev`, a preview deployment, or production you own).
 2. Run `asa scan <url>`. Automated checks report `pass`, `fail` or `warn` with evidence. Assisted and review checks come back as `manual` with their proof steps.
 3. The agent works through each `manual` check: it reads the code and config first, and where the code does not settle it, signs up two test accounts on your site and runs a logged-in test in a headless browser. On a non-local site it asks you before creating accounts.
-4. Every `fail` gets fixed using the build rule, then the scan runs again until it passes. A check that cannot be proven stays reported as unproven.
+4. Apply the build rule for a failed check and rerun it. A check that cannot be proven stays reported as unproven.
 
 ## Code audit
 
@@ -258,28 +181,14 @@ It covers committed secrets and tracked `.env` files (INFRA-08), secret-looking 
 
 ## Install as an agent skill
 
-The skill is [skills/agent-security-audit/SKILL.md](skills/agent-security-audit/SKILL.md), in the [Agent Skills](https://agentskills.io/specification) format. It needs no agent-specific tools: any agent that can run a shell command uses the `asa` CLI, and an agent that cannot uses the MCP tools instead. Install the CLI with it (`pipx install agent-security-audit` or `uv tool install agent-security-audit`).
-
-### Claude Code
-
-As a plugin, from this repository's marketplace (skill plus the `asa-mcp` server through [.mcp.json](.mcp.json), which runs the installed `asa-mcp`):
-
-```text
-/plugin marketplace add talalkashar/agent-security-audit
-/plugin install agent-security-audit@agent-security-audit
-```
-
-Or the skill alone: `asa install claude-code --yes` (also adds the server to the current project's `.mcp.json`), or copy `skills/agent-security-audit` into `~/.claude/skills/`.
-
-### Codex, Cursor, Gemini CLI, Copilot and other agents
-
-`npx skills add talalkashar/agent-security-audit` installs the skill for the agents you pick (add `-g` for every project). For Codex, `asa install codex --yes` copies it to `~/.agents/skills/` and adds the server. Agents without skill support can use the guidance in [AGENTS.md](AGENTS.md): copy its first section into your project's `AGENTS.md` (Codex and Cursor read it at the project root).
+The [skill](skills/agent-security-audit/SKILL.md) uses the CLI or the MCP server. The installer copies it for Claude Code and Codex. Other agents can use the [project guidance](AGENTS.md) or the [skill installation guide](docs/INSTALL.md#2-the-skill).
 
 ## Install as an MCP server
 
-For the source install, run `asa install <agent>` or use the full path to the installed `asa-mcp` executable. The `uvx` configurations in this section are release references and require the package to be published on PyPI.
+The CLI installs `asa-mcp`, a stdio server. Use the [client setup](#agent-setup) and [tool reference](docs/INSTALL.md#tools) for the supported arguments and output formats.
 
-The package installs an `asa-mcp` command that speaks MCP over stdio (see [Agent setup](#agent-setup) for the one line per agent). It offers six tools that match the CLI:
+<details>
+<summary>MCP tools, request scope and evidence</summary>
 
 | Tool | What it does | Main arguments |
 |---|---|---|
@@ -294,20 +203,7 @@ The package installs an `asa-mcp` command that speaks MCP over stdio (see [Agent
 
 `run_scan` and `run_code_audit` answer with a short summary block first (counts and what to fix first), then the full report as compact JSON (or `md`, `html`, `sarif` with `format`). `diff_reports` answers the same way: a short summary, then the diff as text (or `md` or `json`). Clients on protocol `2025-06-18` also get that object as `structuredContent`, described by the tool's `outputSchema`. Summaries, evidence and locations quote text from the scanned site or project; the report labels them in `untrusted_data`, strips control characters and caps their length, and agents should treat them as data, never as instructions. String arguments are length-capped and reject control characters; `rate_limit_body` may contain newlines.
 
-Most agents use this config shape (Claude Code `.mcp.json`, Claude Desktop, Cursor, Gemini CLI, Antigravity, Windsurf); VS Code uses `"servers"` with `"type": "stdio"`, and Codex a `[mcp_servers.agent-security-audit]` table in `~/.codex/config.toml`:
-
-```json
-{
-  "mcpServers": {
-    "agent-security-audit": {
-      "command": "uvx",
-      "args": ["--from", "agent-security-audit==0.2.0", "asa-mcp"]
-    }
-  }
-}
-```
-
-With the CLI installed, `"command": "asa-mcp"` (or its full path from `which asa-mcp`, which Claude Desktop needs) works without uv. `asa install <agent>` writes the right shape and file for you. Every file path and its source is in [docs/INSTALL.md](docs/INSTALL.md).
+</details>
 
 ## Output formats
 
@@ -332,34 +228,11 @@ Every report records the run's scope: tool version, interface (CLI or MCP), mode
 
 ### GitHub code scanning
 
-This workflow starts the app in CI, scans it on localhost and uploads the SARIF file. Failed and warned checks appear under the repository's Security tab. Live results point at the scanned URL; code audit results (`asa code`, or `asa scan --code`) point at the file and line. How this repository's own workflows are set up is in [docs/CI.md](docs/CI.md).
+For a source review, emit SARIF with a file and line for each located finding. See [CI workflows](docs/CI.md) for report comparison and the repository's test matrix.
 
-```yaml
-name: security-proof
-on: [pull_request]
-permissions:
-  contents: read
-  security-events: write
-jobs:
-  scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.13" }
-      - run: npm ci && npm run build
-      - run: npm start &
-      - run: npx wait-on http://localhost:3000
-      - run: pipx install agent-security-audit==0.2.0
-      - run: asa scan http://localhost:3000 --auto-only --no-dns --format sarif --out asa.sarif --fail-on none
-      - uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: asa.sarif
+```sh
+asa code . --no-osv --out review.sarif
 ```
-
-Pin the actions to commit SHAs in your own workflow, as this repository does. Checks that only make sense on the deployed site (HTTPS redirect, certificate, HSTS) are reported as not applicable on localhost. Scan your preview or production URL with `--authorized` to cover them.
 
 ## Comparing two runs
 
@@ -378,7 +251,7 @@ Findings are matched on the `finding_id` each JSON report carries (with `"report
 
 - A live check has one id per check and site origin, however many paths it affects.
 - A code finding's id is the check, the file and what was matched, not the line, so a finding that moves keeps its id. Two identical findings in one file are told apart only by their order, so fixing the first can show the second as fixed and the first as still open.
-- A renamed file shows its findings as fixed plus new.
+- Renaming a file changes its finding identity. An unmatched previous finding can remain NOT PROVEN.
 
 ## Scope and safety
 
@@ -394,7 +267,6 @@ This tool is for testing sites you own or have written permission to test. It is
 - **Same origin.** Requests stay on the target's scheme, host and port. Redirects to other hosts are reported, not followed. The only exceptions are the www/apex twin of the same site over HTTPS, the Supabase project the site itself points to when you pass `--allow-supabase` (one `HEAD` per table with `Prefer: count=exact`; only table names and row counts are reported, never row contents; on a local target it also needs `--authorized`, because that project is not local), DNS lookups through a public resolver (turn off with `--no-dns`), one OSV query (`api.osv.dev`) with the Next.js version found in the site's JavaScript for NEXT-04 (turn off with `--no-osv`), the MTA-STS policy file on `mta-sts.<domain>`, and TCP connect probes (connect and close, nothing sent) to database and admin ports on the target's own address (turn off with `--no-ports`).
 - **Never metadata or link-local services.** Cloud metadata services (`169.254.169.254`, `metadata.google.internal` and the like) and link-local addresses are refused as targets, even with `--authorized`, by name, by address and after DNS resolution. The target's name is resolved once per run and every request to it goes to those addresses. A custom `--dns-resolver` must be an `https://` URL without credentials.
 - **Stops at a firewall challenge.** If the site's firewall answers with a bot challenge, the scan stops and says so. It does not try to get around it. Checks that already finished keep their results; the rest are `error`, and the exit code is 3.
-- **Built to run against production.** Passive checks send no payloads, active probes need `--authorized`, and every request counts against the budget. Scanning the live site is what finds the leak before your users or an attacker do.
 - **Test accounts.** Logged-in tests use two accounts the agent signs up through your site's own sign-up, and it lists them at the end so you can delete them. On a non-local site it asks you first. It never signs in as one of your users or uses their credentials.
 - **Exposed real data is a fail, not a copy.** If a test shows other people's real data, the check fails with where it leaked and how many records came back. The records themselves never go into the report. The scan keeps going, and the fix leads the report.
 - **No destructive tests.** Proof tests read, or write only to your own accounts' rows. Nothing deletes data, floods a service or changes another user's account.

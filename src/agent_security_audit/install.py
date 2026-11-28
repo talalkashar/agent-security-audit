@@ -95,8 +95,7 @@ def server_choice(uvx=False):
     if venv is not None:
         return "uvx", list(UVX_ARGS), (f"the asa-mcp found ({found}) is inside the virtual environment {venv}, "
                                        f"which may be deleted, so uvx runs the pinned PyPI release {PINNED} instead "
-                                       "(install the CLI with `pipx install agent-security-audit` or "
-                                       "`uv tool install agent-security-audit` to use a stable asa-mcp)")
+                                       "(run `uv tool install .` from the tool's source checkout for a stable asa-mcp)")
     return found, [], f"the installed asa-mcp at {found}, outside any temporary or project environment"
 
 
@@ -521,6 +520,9 @@ def run(agent, yes=False, uvx=False, home=None, cwd=None, out=None):
         print(f"Done. Restart {agent} so it loads the server.", file=out)
     else:
         print("Nothing to change.", file=out)
+    if command == "uvx":
+        print("This command needs a published package on PyPI. For a source install, use the full path "
+              "to the installed asa-mcp executable in your client config.", file=out)
     if command == "uvx" and not shutil.which("uvx"):
         print("Note: the server runs through uvx, which is not on PATH; install uv (https://docs.astral.sh/uv/).",
               file=out)

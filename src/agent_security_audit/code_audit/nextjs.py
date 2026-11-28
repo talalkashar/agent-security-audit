@@ -581,8 +581,8 @@ def _judge_config(project, rel):
         if m := next((m for m in mentions if m.start() not in known), None):
             odd[name] = m
     if m := next((x for x in sorted(literal) if x[1:] == ("productionBrowserSourceMaps", "true")), None):
-        out.append(make("NEXT-02", "fail", "next.config turns on productionBrowserSourceMaps, so the original "
-                        "source is public.", [_at(project, rel, code, m[0], "source maps on in production")]))
+        out.append(make("NEXT-02", "fail", f"{rel} enables browser source maps in production builds.",
+                        [_at(project, rel, code, m[0], "source maps on in production")]))
     elif m := odd.get("productionBrowserSourceMaps"):
         out.append(make("NEXT-02", "manual", f"Not proven: {rel} sets productionBrowserSourceMaps from a value only "
                         "known at build time.", [_at(project, rel, code, m.start(), "source maps set at build time")]))

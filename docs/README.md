@@ -7,7 +7,7 @@ Run an audit, understand the evidence, and work through what remains unproven.
 ## Start here
 
 1. **[Install the CLI](INSTALL.md#1-the-cli).** Python 3.11+, with no runtime dependencies. Install from Git while the package is unavailable on PyPI.
-2. **[Scan your project](../README.md#quick-start).** Test the dev server and read its source in one run, or start with the bundled local practice site.
+2. **[Run the sample](../README.md#quick-start).** Check the bundled Next.js config, then [compare it with the corrected version](../examples/README.md).
 3. **[Connect your agent](../README.md#agent-setup).** Preview the config with `asa install <agent>`, then add `--yes` to apply it.
 4. **[Read the trust notes](TRUST.md).** See exactly which hosts can be contacted, what is written to disk, and how authorization works.
 
@@ -33,7 +33,7 @@ The HTML report starts with six status totals and up to ten failed checks, most 
 - **Pass:** the defense was observed working within the scope of the check.
 - **Skip:** the check did not apply or an active probe was not allowed. Read its reason.
 
-Use `asa show <ID>` for the risk, build rule, proof steps, and sources behind a check. [Reproduce the README screenshots](assets/README.md) against the bundled lab.
+Use `asa show <ID>` for the risk, build rule, proof steps, and sources behind a check. [Reproduce the source finding and lab screenshots](assets/README.md).
 
 ## Look up a check
 
